@@ -104,6 +104,8 @@ pub struct CollectionWarning {
 pub struct TodayStats {
     pub reviewed: u32,
     pub new_studied: u32,
+    /// New cards still available today across the collection, capped by the daily limit.
+    pub new_available: u32,
 }
 
 struct Card {
@@ -353,9 +355,15 @@ impl Inner {
 
     fn today(&self, now: i64) -> Result<TodayStats> {
         let since = self.day_start(now);
+        let unseen = self
+            .cards
+            .iter()
+            .filter(|c| !self.states.contains_key(&c.parsed.id))
+            .count() as u32;
         Ok(TodayStats {
             reviewed: self.store.reviews_since(since)?,
             new_studied: self.store.new_cards_since(since)?,
+            new_available: unseen.min(self.new_remaining(now)?),
         })
     }
 }
@@ -465,7 +473,8 @@ mod tests {
         // Two days later the first card is due.
         let decks = inner.decks(T0 + 2 * DAY_SECS).unwrap();
         assert_eq!((decks[0].due, decks[0].new), (2, 0));
-        assert_eq!(inner.today(T0).unwrap().new_studied, 2);
+        let today = inner.today(T0).unwrap();
+        assert_eq!((today.new_studied, today.new_available), (2, 2));
         assert!(matches!(
             inner.answer("nope", Rating::Good, T0),
             Err(AmgiError::UnknownCard { .. })

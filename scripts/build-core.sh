@@ -8,7 +8,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
 # Match the app's minimum macOS version (app/Package.swift).
-export MACOSX_DEPLOYMENT_TARGET=14.0
+export MACOSX_DEPLOYMENT_TARGET=26.0
 
 flag=()
 [[ "$profile" == "release" ]] && flag=(--release)

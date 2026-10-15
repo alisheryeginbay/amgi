@@ -10,7 +10,7 @@ final class AppModel {
     private(set) var folder: URL?
     private(set) var decks: [DeckInfo] = []
     private(set) var warnings: [CollectionWarning] = []
-    private(set) var today = TodayStats(reviewed: 0, newStudied: 0)
+    private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
     private(set) var current: StudyCard?
     var revealed = false
     var errorMessage: String?

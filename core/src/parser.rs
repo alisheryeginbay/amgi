@@ -232,7 +232,7 @@ fn parse_cloze(text: &str, line: u32, out: &mut ParseResult) {
                 }
                 Segment::Deletion { answer, hint } => {
                     if n == target {
-                        let _ = write!(front, "**[{}]**", hint.unwrap_or("..."));
+                        let _ = write!(front, "**[{}]**", hint.unwrap_or("…"));
                         let _ = write!(back, "**{answer}**");
                     } else {
                         front.push_str(answer);
@@ -300,7 +300,7 @@ mod tests {
     fn cloze_expands_per_deletion() {
         let r = parse("C: The capital of [France] is [Paris|city].");
         assert_eq!(r.cards.len(), 2);
-        assert_eq!(r.cards[0].front, "The capital of **[...]** is Paris.");
+        assert_eq!(r.cards[0].front, "The capital of **[…]** is Paris.");
         assert_eq!(r.cards[0].back, "The capital of **France** is Paris.");
         assert_eq!(r.cards[1].front, "The capital of France is **[city]**.");
         assert_ne!(r.cards[0].id, r.cards[1].id);
@@ -313,7 +313,7 @@ mod tests {
         assert_eq!(r.cards.len(), 2);
         assert_eq!(r.cards[0].front, r"\[1\] `v[0]` is **[\[i\]]** and `m[k]`.");
         assert_eq!(r.cards[0].back, r"\[1\] `v[0]` is **first** and `m[k]`.");
-        assert_eq!(r.cards[1].front, r"\[1\] `v[0]` is first and **[...]**.");
+        assert_eq!(r.cards[1].front, r"\[1\] `v[0]` is first and **[…]**.");
     }
 
     #[test]

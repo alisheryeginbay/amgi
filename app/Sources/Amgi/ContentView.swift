@@ -3,39 +3,17 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
-    @State private var showingWarnings = false
 
     var body: some View {
-        @Bindable var model = model
         Group {
             if model.folder == nil {
-                ContentUnavailableView {
-                    Label("No Collection", systemImage: "rectangle.stack")
-                } description: {
-                    Text("Open a folder of Markdown files with `Q:` / `A:` and `C:` cards.")
-                } actions: {
-                    Button("Open Folder…") { model.chooseFolder() }
-                        .buttonStyle(.borderedProminent)
-                }
+                WelcomeView()
             } else {
                 NavigationSplitView {
-                    DeckList()
-                        .navigationSplitViewColumnWidth(min: 200, ideal: 240)
+                    Sidebar()
+                        .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
                 } detail: {
                     StudyView()
-                }
-            }
-        }
-        .toolbar {
-            if !model.warnings.isEmpty {
-                ToolbarItem {
-                    Button {
-                        showingWarnings.toggle()
-                    } label: {
-                        Label("\(model.warnings.count) Warnings", systemImage: "exclamationmark.triangle")
-                    }
-                    .help("Problems found while parsing cards")
-                    .popover(isPresented: $showingWarnings) { WarningList() }
                 }
             }
         }
@@ -50,56 +28,83 @@ struct ContentView: View {
     }
 }
 
-private struct DeckList: View {
+private struct WelcomeView: View {
     @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 20) {
+            VStack(spacing: 6) {
+                Text("Amgi")
+                    .font(.largeTitle.weight(.semibold))
+                Text("Open a folder of Markdown flash cards.")
+                    .foregroundStyle(.secondary)
+            }
+            Button("Open Folder…") { model.chooseFolder() }
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
+                .keyboardShortcut("o")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct Sidebar: View {
+    @Environment(AppModel.self) private var model
+    @State private var showingWarnings = false
+
+    /// Decks grouped by folder; top-level decks first.
+    private var groups: [(folder: String, decks: [DeckInfo])] {
+        let grouped = Dictionary(grouping: model.decks) { deck in
+            deck.name.split(separator: "/").dropLast().joined(separator: "/")
+        }
+        return grouped.keys.sorted().map { ($0, grouped[$0]!) }
+    }
 
     var body: some View {
         @Bindable var model = model
         List(selection: $model.selectedDeck) {
-            Section {
-                DeckRow(
-                    title: "All Cards",
-                    systemImage: "tray.full",
-                    due: model.totalDue,
-                    new: model.decks.map(\.new).max() ?? 0
-                )
-                .tag(String?.none)
+            HStack {
+                Label("All Cards", systemImage: "rectangle.stack")
+                Spacer()
+                DeckCounts(due: model.totalDue, new: model.today.newAvailable)
             }
-            Section(model.folder?.lastPathComponent ?? "Decks") {
-                ForEach(model.decks, id: \.name) { deck in
-                    DeckRow(title: deck.name, systemImage: "doc.text", due: deck.due, new: deck.new)
+            .tag(String?.none)
+
+            ForEach(groups, id: \.folder) { group in
+                Section(group.folder.isEmpty ? (model.folder?.lastPathComponent ?? "Decks") : group.folder) {
+                    ForEach(group.decks, id: \.name) { deck in
+                        HStack {
+                            Text(deckTitle(deck.name))
+                                .lineLimit(1)
+                            Spacer()
+                            DeckCounts(due: deck.due, new: deck.new)
+                        }
                         .tag(String?.some(deck.name))
+                    }
                 }
             }
         }
         .safeAreaInset(edge: .bottom) {
-            Text("Today: \(model.today.reviewed) reviews, \(model.today.newStudied) new")
+            Text("\(model.today.reviewed) reviewed today")
                 .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(8)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
         }
-    }
-}
-
-private struct DeckRow: View {
-    let title: String
-    let systemImage: String
-    let due: UInt32
-    let new: UInt32
-
-    var body: some View {
-        HStack {
-            Label(title, systemImage: systemImage)
-            Spacer()
-            if new > 0 {
-                Text("\(new)").foregroundStyle(.blue)
-            }
-            if due > 0 {
-                Text("\(due)").foregroundStyle(.green)
+        .toolbar {
+            if !model.warnings.isEmpty {
+                ToolbarItem {
+                    Button {
+                        showingWarnings.toggle()
+                    } label: {
+                        Label("Warnings", systemImage: "exclamationmark.triangle")
+                    }
+                    .help("\(model.warnings.count) problems found while reading cards")
+                    .popover(isPresented: $showingWarnings, arrowEdge: .bottom) { WarningList() }
+                }
             }
         }
-        .monospacedDigit()
     }
 }
 
@@ -108,13 +113,14 @@ private struct WarningList: View {
 
     var body: some View {
         List(Array(model.warnings.enumerated()), id: \.offset) { _, warning in
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(warning.message)
                 Text("\(warning.path):\(warning.line)")
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: 360, height: 240)
+        .scrollContentBackground(.hidden)
+        .frame(width: 360, height: 220)
     }
 }

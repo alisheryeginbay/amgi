@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import Foundation
 import PackageDescription
 
@@ -10,7 +10,7 @@ let coreLibrary = URL(fileURLWithPath: #filePath)
 
 let package = Package(
     name: "Amgi",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     targets: [
         // C module exposing the UniFFI header; the generated Swift imports it as `amgi_coreFFI`.
         .target(name: "amgi_coreFFI"),
