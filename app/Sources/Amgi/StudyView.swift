@@ -27,7 +27,7 @@ struct StudyView: View {
                 )
             }
         }
-        .navigationTitle(model.selectedDeck.map(deckTitle) ?? model.folder?.lastPathComponent ?? "All Cards")
+        .navigationTitle(title)
         .navigationSubtitle(subtitle)
         .toolbar {
             if let card = model.current {
@@ -48,7 +48,17 @@ struct StudyView: View {
         model.folder?.appending(path: card.path).deletingLastPathComponent()
     }
 
+    private var title: String {
+        switch model.selection {
+        case .tag(let tag): "#\(tag)"
+        case .deck(let name?): selected?.title ?? deckTitle(name)
+        default: model.folder?.lastPathComponent ?? "All Cards"
+        }
+    }
+
     private var subtitle: String {
+        // Counts are kept per deck, not per tag.
+        if case .tag = model.selection { return "" }
         let due = selected?.due ?? model.totalDue
         let new = selected?.new ?? model.today.newAvailable
         return "\(due) due · \(new) new"
@@ -63,7 +73,7 @@ private struct CardContent: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text(card.deck)
+                Text(([card.deck] + card.tags.map { "#\($0)" }).joined(separator: "  "))
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
                     .padding(.bottom, 20)

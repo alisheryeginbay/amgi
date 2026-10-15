@@ -275,13 +275,14 @@ fn needs_escape(c: char, before: Option<&char>, after: Option<&char>) -> bool {
 }
 
 /// Trim lines, drop blank ones (a blank line ends an amgi card) and escape lines
-/// that would otherwise start a new card.
+/// that would otherwise start a new card or read as tags.
 fn tidy(s: &str) -> String {
     s.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(|l| match l.get(..2) {
             Some("Q:" | "A:" | "C:") => format!("{}\\{}", &l[..1], &l[1..]),
+            _ if crate::parser::tag_line(l).is_some() => format!("\\{l}"),
             _ => l.to_string(),
         })
         .collect::<Vec<_>>()
@@ -476,6 +477,7 @@ mod tests {
         assert_eq!(md("2*3 [x] snake_case _x_ <code>v[0]*2</code>"), r"2\*3 \[x\] snake_case \_x\_ `v[0]*2`");
         assert_eq!(md("<style>.x{}</style>Q: real<!-- c -->"), r"Q\: real");
         assert_eq!(md("x < y &bogus; z"), "x < y &bogus; z");
+        assert_eq!(md("text<br>#hashtag"), "text\n\\#hashtag");
         let mut media = Media { prefix: "../media/".into(), ..Media::default() };
         let html = r#"<img src="a.png">hi [sound:a.mp3]<IMG class=x SRC='b &amp; c.jpg'/><img src=../x.png><img data-src=no>"#;
         assert_eq!(html_to_markdown(html, &mut media), "![](../media/a.png)hi ![](<../media/b & c.jpg>)");

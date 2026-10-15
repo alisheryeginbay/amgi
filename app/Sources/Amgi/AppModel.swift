@@ -8,6 +8,8 @@ enum SidebarItem: Hashable {
     case dashboard
     /// A deck and its subdecks; `nil` is the whole collection.
     case deck(String?)
+    /// Cards with this tag, across all decks.
+    case tag(String)
 }
 
 @Observable
@@ -17,6 +19,7 @@ final class AppModel {
 
     private(set) var folder: URL?
     private(set) var decks: [DeckInfo] = []
+    private(set) var tags: [String] = []
     private(set) var warnings: [CollectionWarning] = []
     private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
     private(set) var current: StudyCard?
@@ -33,9 +36,17 @@ final class AppModel {
         }
     }
 
-    /// The deck to study; `nil` studies the whole collection.
+    /// The deck to study; `nil` for the whole collection or a tag.
     var selectedDeck: String? {
         if case .deck(let name) = selection { name } else { nil }
+    }
+
+    var scope: StudyScope {
+        switch selection {
+        case .dashboard, .deck(nil): .all
+        case .deck(let name?): .deck(name: name)
+        case .tag(let name): .tag(name: name)
+        }
     }
 
     private var collection: CardCollection?
@@ -105,6 +116,7 @@ final class AppModel {
         guard let collection else { return }
         perform {
             decks = try collection.decks()
+            tags = collection.tags()
             today = try collection.today()
             warnings = collection.warnings()
         }
@@ -121,7 +133,7 @@ final class AppModel {
     func loadNext() {
         guard let collection else { return }
         perform {
-            current = try collection.nextCard(deck: selectedDeck)
+            current = try collection.nextCard(scope: scope)
             revealed = false
         }
     }

@@ -66,6 +66,7 @@ private struct Sidebar: View {
     @State private var showingWarnings = false
     /// Expanded decks; the collection itself starts open.
     @State private var expanded: Set<String> = [DeckNode.rootID]
+    @AppStorage("tagsExpanded") private var tagsExpanded = true
 
     var body: some View {
         @Bindable var model = model
@@ -73,6 +74,16 @@ private struct Sidebar: View {
             Label("Dashboard", systemImage: "chart.bar.xaxis")
                 .tag(SidebarItem.dashboard)
             DeckTree(node: DeckNode.tree(model: model), expanded: $expanded)
+            if !model.tags.isEmpty {
+                // Collapses from the chevron shown when hovering the header.
+                Section("Tags", isExpanded: $tagsExpanded) {
+                    ForEach(model.tags, id: \.self) { tag in
+                        Label(tag, systemImage: "number")
+                            .lineLimit(1)
+                            .tag(SidebarItem.tag(tag))
+                    }
+                }
+            }
         }
         .safeAreaInset(edge: .bottom) {
             Text("\(model.today.reviewed) reviewed today")
@@ -118,7 +129,7 @@ private struct DeckNode: Identifiable {
         }
         func children(of parent: String) -> [DeckNode] {
             (byParent[parent] ?? []).map { deck in
-                DeckNode(id: deck.name, title: deckTitle(deck.name), children: children(of: deck.name))
+                DeckNode(id: deck.name, title: deck.title, children: children(of: deck.name))
             }
         }
         return DeckNode(

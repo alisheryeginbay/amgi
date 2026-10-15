@@ -26,14 +26,35 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
 - A card ends at a blank line or the next `Q:` / `C:`. Every other line is ignored.
 
 A card's identity comes from its text (the question for basic cards, the whole text
-for clozes). You can move or reorder cards and fix answers without losing history.
-Editing a question starts the card over.
+for clozes). You can move or reorder cards, fix answers and change tags without losing
+history. Editing a question starts the card over.
+
+### Tags and deck settings
+
+End a card with a line of tags. A file can start with TOML front matter between `+++`
+lines: `name` is the deck's display name and `tags` are added to every card in it.
+
+```markdown
++++
+name = "Korean verbs"
+tags = ["korean"]
++++
+
+Q: 가다
+A: to go
+#verbs #motion
+```
+
+Tags go on the card's last lines, after its first one, and only a line made entirely
+of `#tag` words counts, so a `# Heading` stays text. Pick a tag in the sidebar to study
+it across decks.
 
 ## Importing from Anki
 
 **File ▸ Import Anki Deck…** (<kbd>⇧⌘I</kbd>) converts an `.apkg` or `.colpkg` into Markdown
 files in the open folder, one per deck (`Languages::Korean` becomes `Languages/Korean.md`).
-Existing files are never overwritten. Images are copied to a `media` folder at the root.
+Existing files are never overwritten. Images are copied to a `media` folder at the root,
+and note tags become `#tag` lines.
 
 - Basic note types become `Q:`/`A:` cards rendered from their templates. Cloze notes become
   `C:` cards, with `Back Extra` kept as a note under the card. Anki can test several

@@ -15,8 +15,13 @@
 //! Brackets escaped with a backslash, inside `code` spans or in an image
 //! `![alt](path)` are literal. Escapes are kept in the output, where Markdown
 //! renders them as plain brackets.
+//!
+//! A card's last lines may hold tags: `#korean #verbs`. A file may start with TOML
+//! front matter between `+++` lines, giving the deck a `name` and default `tags`.
 
 use std::fmt::Write;
+
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum CardKind {
@@ -33,6 +38,8 @@ pub struct ParsedCard {
     pub back: String,
     /// 1-based line where the card starts.
     pub line: u32,
+    /// The deck's default tags, then the card's own, without `#`.
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -43,9 +50,22 @@ pub struct ParseWarning {
 
 #[derive(Debug, Default)]
 pub struct ParseResult {
+    /// Deck name from the front matter.
+    pub name: Option<String>,
     pub cards: Vec<ParsedCard>,
     pub warnings: Vec<ParseWarning>,
+    /// Default tags from the front matter.
+    deck_tags: Vec<String>,
 }
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct FrontMatter {
+    name: Option<String>,
+    tags: Vec<String>,
+}
+
+const FRONT_MATTER: &str = "+++";
 
 enum Field {
     Question,
@@ -64,8 +84,9 @@ struct Pending {
 pub fn parse(source: &str) -> ParseResult {
     let mut out = ParseResult::default();
     let mut pending: Option<Pending> = None;
+    let body_start = front_matter(source, &mut out);
 
-    for (idx, raw) in source.lines().enumerate() {
+    for (idx, raw) in source.lines().enumerate().skip(body_start) {
         let line_no = idx as u32 + 1;
         let line = raw.trim_end();
 
@@ -99,6 +120,63 @@ pub fn parse(source: &str) -> ParseResult {
     out
 }
 
+/// Read TOML front matter between `+++` lines at the top of the file. Returns the
+/// number of lines it takes up.
+fn front_matter(source: &str, out: &mut ParseResult) -> usize {
+    let mut lines = source.lines();
+    if lines.next().map(str::trim_end) != Some(FRONT_MATTER) {
+        return 0;
+    }
+    let Some(len) = lines.position(|l| l.trim_end() == FRONT_MATTER) else {
+        out.warnings.push(ParseWarning {
+            line: 1,
+            message: "front matter has no closing `+++`".into(),
+        });
+        return 0;
+    };
+    let toml: Vec<&str> = source.lines().skip(1).take(len).collect();
+    match toml::from_str::<FrontMatter>(&toml.join("\n")) {
+        Ok(fm) => {
+            out.name = fm.name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+            out.deck_tags = fm.tags.iter().filter_map(|t| clean_tag(t)).collect();
+        }
+        Err(e) => out.warnings.push(ParseWarning {
+            line: 1,
+            message: format!("invalid front matter: {}", e.message()),
+        }),
+    }
+    len + 2
+}
+
+/// A tag without its `#`, or `None` if empty or containing whitespace.
+fn clean_tag(tag: &str) -> Option<String> {
+    let tag = tag.trim().trim_start_matches('#');
+    (!tag.is_empty() && !tag.contains(char::is_whitespace)).then(|| tag.to_string())
+}
+
+/// Tags on a line made only of `#tag` words, such as `#korean #verbs`.
+pub fn tag_line(line: &str) -> Option<Vec<String>> {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    if words.is_empty() {
+        return None;
+    }
+    words
+        .iter()
+        .map(|w| w.strip_prefix('#').filter(|t| !t.is_empty() && !t.contains('#')).map(String::from))
+        .collect()
+}
+
+/// Remove trailing tag lines from a field, keeping its first (marker) line.
+fn take_tags(lines: &mut Vec<String>) -> Vec<String> {
+    let mut tags = Vec::new();
+    while lines.len() > 1 {
+        let Some(line_tags) = lines.last().and_then(|l| tag_line(l)) else { break };
+        lines.pop();
+        tags.splice(0..0, line_tags);
+    }
+    tags
+}
+
 fn marker<'a>(line: &'a str, tag: &str) -> Option<&'a str> {
     line.strip_prefix(tag).map(str::trim_start)
 }
@@ -130,7 +208,13 @@ fn join(lines: &[String]) -> String {
 }
 
 fn finish(pending: Option<Pending>, out: &mut ParseResult) {
-    let Some(p) = pending else { return };
+    let Some(mut p) = pending else { return };
+    let mut tags = out.deck_tags.clone();
+    for tag in take_tags(p.current()) {
+        if !tags.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
+            tags.push(tag);
+        }
+    }
     match p.field {
         Field::Question => out.warnings.push(ParseWarning {
             line: p.line,
@@ -152,9 +236,10 @@ fn finish(pending: Option<Pending>, out: &mut ParseResult) {
                 front,
                 back,
                 line: p.line,
+                tags,
             });
         }
-        Field::Cloze => parse_cloze(&join(&p.cloze), p.line, out),
+        Field::Cloze => parse_cloze(&join(&p.cloze), p.line, tags, out),
     }
 }
 
@@ -229,7 +314,7 @@ fn segments(text: &str) -> Option<Vec<Segment<'_>>> {
     Some(segs)
 }
 
-fn parse_cloze(text: &str, line: u32, out: &mut ParseResult) {
+fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) {
     let Some(segs) = segments(text) else {
         out.warnings.push(ParseWarning {
             line,
@@ -277,6 +362,7 @@ fn parse_cloze(text: &str, line: u32, out: &mut ParseResult) {
             front,
             back,
             line,
+            tags: tags.clone(),
         });
     }
 }
@@ -356,6 +442,32 @@ mod tests {
         assert_eq!(image_len("![](<a b>) rest"), Some(10));
         assert_eq!(image_len("![x] (a)"), None);
         assert_eq!(image_len("!["), None);
+    }
+
+    #[test]
+    fn tags() {
+        let source = "+++\nname = \"Korean verbs\"\ntags = [\"korean\", \"#lang\"]\n+++\n\nQ: 가다\nA: to go\n#verbs #Korean\n\nC: [x]\n#a\n#b\n\nQ: q\nA: #1\n";
+        let r = parse(source);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.name.as_deref(), Some("Korean verbs"));
+        assert_eq!(r.cards[0].tags, ["korean", "lang", "verbs"]);
+        assert_eq!((r.cards[0].back.as_str(), r.cards[0].line), ("to go", 6));
+        assert_eq!(r.cards[1].tags, ["korean", "lang", "a", "b"]);
+        // A marker line is never tags, and tags don't change a card's id.
+        assert_eq!(r.cards[2].back, "#1");
+        assert_eq!(r.cards[0].id, parse("Q: 가다\nA: to go").cards[0].id);
+        assert_eq!(tag_line("# Heading"), None);
+        assert_eq!(tag_line("#a b"), None);
+    }
+
+    #[test]
+    fn front_matter_problems() {
+        let r = parse("+++\nname = \n+++\nQ: a\nA: b");
+        assert_eq!(r.warnings.len(), 1);
+        assert!(r.warnings[0].message.starts_with("invalid front matter"));
+        assert_eq!(r.cards.len(), 1);
+        let r = parse("+++\nQ: a\nA: b");
+        assert_eq!((r.warnings.len(), r.cards.len()), (1, 1));
     }
 
     #[test]

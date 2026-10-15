@@ -84,6 +84,8 @@ pub struct DeckInfo {
     /// File path relative to the collection root, without the `.md` extension, or a
     /// folder. A deck contains the decks below it: `lang` holds `lang.md` and the `lang` folder.
     pub name: String,
+    /// The `name` from the deck's front matter, or the last part of `name`.
+    pub title: String,
     pub total: u32,
     pub due: u32,
     /// New cards available today, capped by the daily new-card limit.
@@ -94,6 +96,8 @@ pub struct DeckInfo {
 pub struct StudyCard {
     pub id: String,
     pub deck: String,
+    /// Without `#`.
+    pub tags: Vec<String>,
     /// Source file relative to the collection root.
     pub path: String,
     pub line: u32,
@@ -164,6 +168,26 @@ pub struct Dashboard {
 const MATURE_SECS: i64 = 21 * DAY_SECS;
 const FORECAST_DAYS: usize = 14;
 
+/// Which cards to study.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum StudyScope {
+    All,
+    /// A deck and its subdecks.
+    Deck { name: String },
+    /// Cards with a tag, compared case-insensitively.
+    Tag { name: String },
+}
+
+impl StudyScope {
+    fn contains(&self, card: &Card) -> bool {
+        match self {
+            StudyScope::All => true,
+            StudyScope::Deck { name } => contains(name, &card.deck),
+            StudyScope::Tag { name } => card.parsed.tags.iter().any(|t| t.eq_ignore_ascii_case(name)),
+        }
+    }
+}
+
 struct Card {
     parsed: ParsedCard,
     deck: String,
@@ -176,6 +200,8 @@ struct Inner {
     scheduler: Scheduler,
     cards: Vec<Card>,
     index: HashMap<String, usize>,
+    /// Deck → name from its front matter.
+    deck_titles: HashMap<String, String>,
     states: HashMap<String, CardState>,
     warnings: Vec<CollectionWarning>,
     new_per_day: u32,
@@ -221,9 +247,13 @@ impl CardCollection {
         self.lock().decks(unix_now())
     }
 
-    /// The next card to study from a deck and its subdecks, or (with `None`) the whole collection.
-    pub fn next_card(&self, deck: Option<String>) -> Result<Option<StudyCard>> {
-        self.lock().next_card(deck.as_deref(), unix_now())
+    pub fn next_card(&self, scope: StudyScope) -> Result<Option<StudyCard>> {
+        self.lock().next_card(&scope, unix_now())
+    }
+
+    /// Every tag in the collection, sorted, in the spelling first seen.
+    pub fn tags(&self) -> Vec<String> {
+        self.lock().tags()
     }
 
     pub fn answer(&self, card_id: String, rating: Rating) -> Result<()> {
@@ -267,6 +297,7 @@ impl CardCollection {
             scheduler: Scheduler::default(),
             cards: Vec::new(),
             index: HashMap::new(),
+            deck_titles: HashMap::new(),
             states,
             warnings: Vec::new(),
             new_per_day: 20,
@@ -293,11 +324,15 @@ impl Inner {
 
         self.cards.clear();
         self.index.clear();
+        self.deck_titles.clear();
         self.warnings.clear();
         for file in files {
             let rel = relative(&self.root, &file);
             let deck = rel.strip_suffix(".md").unwrap_or(&rel).to_string();
             let result = parser::parse(&fs::read_to_string(&file)?);
+            if let Some(name) = result.name {
+                self.deck_titles.insert(deck.clone(), name);
+            }
             for w in result.warnings {
                 self.warnings.push(CollectionWarning {
                     path: rel.clone(),
@@ -336,10 +371,20 @@ impl Inner {
         Ok(self.new_per_day.saturating_sub(studied))
     }
 
-    fn in_deck<'a>(&'a self, deck: Option<&'a str>) -> impl Iterator<Item = &'a Card> + 'a {
-        self.cards
-            .iter()
-            .filter(move |c| deck.is_none_or(|d| contains(d, &c.deck)))
+    fn in_scope<'a, 's>(&'a self, scope: &'s StudyScope) -> impl Iterator<Item = &'a Card> + use<'a, 's> {
+        self.cards.iter().filter(move |c| scope.contains(c))
+    }
+
+    fn tags(&self) -> Vec<String> {
+        let mut tags: Vec<&String> = Vec::new();
+        let mut seen = HashSet::new();
+        for tag in self.cards.iter().flat_map(|c| &c.parsed.tags) {
+            if seen.insert(tag.to_lowercase()) {
+                tags.push(tag);
+            }
+        }
+        tags.sort_by_key(|t| t.to_lowercase());
+        tags.into_iter().cloned().collect()
     }
 
     fn decks(&self, now: i64) -> Result<Vec<DeckInfo>> {
@@ -351,6 +396,7 @@ impl Inner {
             for depth in 1..=parts.len() {
                 let deck = decks.entry(parts[..depth].to_vec()).or_insert_with(|| DeckInfo {
                     name: parts[..depth].join("/"),
+                    title: String::new(),
                     total: 0,
                     due: 0,
                     new: 0,
@@ -366,15 +412,18 @@ impl Inner {
         Ok(decks
             .into_values()
             .map(|d| DeckInfo {
+                title: self.deck_titles.get(&d.name).cloned().unwrap_or_else(|| {
+                    d.name.rsplit('/').next().unwrap_or_default().to_string()
+                }),
                 new: d.new.min(remaining),
                 ..d
             })
             .collect())
     }
 
-    fn next_card(&self, deck: Option<&str>, now: i64) -> Result<Option<StudyCard>> {
+    fn next_card(&self, scope: &StudyScope, now: i64) -> Result<Option<StudyCard>> {
         let earliest_due_before = |limit: i64| {
-            self.in_deck(deck)
+            self.in_scope(scope)
                 .filter_map(|c| self.states.get(&c.parsed.id).map(|s| (s.due, c)))
                 .filter(|(due, _)| *due <= limit)
                 .min_by_key(|(due, _)| *due)
@@ -384,7 +433,7 @@ impl Inner {
         let card = match earliest_due_before(now) {
             Some(c) => Some(c),
             None if self.new_remaining(now)? > 0 => self
-                .in_deck(deck)
+                .in_scope(scope)
                 .find(|c| !self.states.contains_key(&c.parsed.id))
                 .or_else(|| earliest_due_before(now + LEARN_AHEAD_SECS)),
             None => earliest_due_before(now + LEARN_AHEAD_SECS),
@@ -410,6 +459,7 @@ impl Inner {
         Ok(StudyCard {
             id: card.parsed.id.clone(),
             deck: card.deck.clone(),
+            tags: card.parsed.tags.clone(),
             path: card.path.clone(),
             line: card.parsed.line,
             kind: card.parsed.kind,
@@ -661,6 +711,10 @@ mod tests {
 
     const T0: i64 = 1_760_000_000;
 
+    fn deck(name: &str) -> StudyScope {
+        StudyScope::Deck { name: name.into() }
+    }
+
     fn collection(files: &[(&str, &str)]) -> (PathBuf, CardCollection) {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -694,18 +748,18 @@ mod tests {
         assert_eq!((decks[0].total, decks[0].new, decks[0].due), (2, 2, 0));
 
         // New cards come in file order.
-        let card = inner.next_card(Some("a"), T0).unwrap().unwrap();
+        let card = inner.next_card(&deck("a"), T0).unwrap().unwrap();
         assert_eq!(card.front, "1");
         assert!(card.is_new);
         assert_eq!(card.intervals.len(), 4);
         inner.answer(&card.id, Rating::Good, T0).unwrap();
 
-        let card2 = inner.next_card(Some("a"), T0).unwrap().unwrap();
+        let card2 = inner.next_card(&deck("a"), T0).unwrap().unwrap();
         assert_eq!(card2.front, "2");
         inner.answer(&card2.id, Rating::Again, T0).unwrap();
 
         // The failed card is shown again within the learn-ahead window.
-        let again = inner.next_card(Some("a"), T0 + 60).unwrap().unwrap();
+        let again = inner.next_card(&deck("a"), T0 + 60).unwrap().unwrap();
         assert_eq!(again.id, card2.id);
         assert!(!again.is_new);
 
@@ -734,9 +788,9 @@ mod tests {
         let decks = inner.decks(T0).unwrap();
         let summary: Vec<_> = decks.iter().map(|d| (d.name.as_str(), d.total)).collect();
         assert_eq!(summary, [("lang", 3), ("lang/ko", 2), ("lang/ko/verbs", 1), ("language", 1)]);
-        let fronts: Vec<_> = inner.in_deck(Some("lang/ko")).map(|c| c.parsed.front.as_str()).collect();
+        let fronts: Vec<_> = inner.in_scope(&deck("lang/ko")).map(|c| c.parsed.front.as_str()).collect();
         assert_eq!(fronts, ["k", "v"]);
-        assert_eq!(inner.in_deck(Some("lang")).count(), 3);
+        assert_eq!(inner.in_scope(&deck("lang")).count(), 3);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -771,16 +825,35 @@ mod tests {
     }
 
     #[test]
+    fn tags_and_titles() {
+        let (dir, c) = collection(&[
+            ("ko.md", "+++\nname = \"Korean\"\ntags = [\"lang\"]\n+++\nQ: 가다\nA: go\n#verbs\n\nQ: 집\nA: house\n"),
+            ("en.md", "Q: run\nA: бегать\n#Verbs #lang\n"),
+        ]);
+        let inner = c.lock();
+        assert_eq!(inner.tags(), ["lang", "Verbs"]);
+        let titles: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.title).collect();
+        assert_eq!(titles, ["en", "Korean"]);
+        let verbs = StudyScope::Tag { name: "VERBS".into() };
+        let fronts: Vec<_> = inner.in_scope(&verbs).map(|c| c.parsed.front.as_str()).collect();
+        assert_eq!(fronts, ["run", "가다"]);
+        let card = inner.next_card(&verbs, T0).unwrap().unwrap();
+        assert_eq!(card.tags, ["Verbs", "lang"]);
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn new_card_limit() {
         let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n\nQ: 3\nA: 3\n")]);
         c.set_new_cards_per_day(1);
         let mut inner = c.lock();
-        let card = inner.next_card(None, T0).unwrap().unwrap();
+        let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
         inner.answer(&card.id, Rating::Easy, T0).unwrap();
-        assert!(inner.next_card(None, T0).unwrap().is_none());
+        assert!(inner.next_card(&StudyScope::All, T0).unwrap().is_none());
         assert_eq!(inner.decks(T0).unwrap()[0].new, 0);
         // Tomorrow the limit resets.
-        assert!(inner.next_card(None, T0 + DAY_SECS).unwrap().is_some());
+        assert!(inner.next_card(&StudyScope::All, T0 + DAY_SECS).unwrap().is_some());
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -813,6 +886,8 @@ mod tests {
         assert_eq!(fs::read_to_string(dir.join("Default.md")).unwrap(), "Q: mine\nA: kept\n");
         let names: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.name).collect();
         assert_eq!(names, ["Default", "Default 2", "Lang", "Lang/Kazakh-Verbs"]);
+        assert_eq!(inner.decks(T0).unwrap()[3].title, "Kazakh/Verbs");
+        assert_eq!(inner.tags(), ["geo"]);
         let card = inner.cards.iter().find(|c| c.parsed.front == "сәлем").unwrap();
         let state = inner.states[&card.parsed.id];
         assert_eq!((state.reps, state.last_review, state.due), (2, 1_700_086_400, 1_700_086_400 + 3 * DAY_SECS));

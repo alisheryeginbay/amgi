@@ -8,8 +8,10 @@ version = "0.1.0"
 dependencies = [
  "fsrs",
  "rusqlite",
+ "serde",
  "serde_json",
  "thiserror",
+ "toml",
  "uniffi",
  "zip",
  "zstd",

@@ -429,6 +429,7 @@ impl Package {
             if notetype.cloze {
                 out.media.prefix = self.media_prefix(first.deck);
                 if let Some((block, ids)) = cloze_block(notetype, &fields, &mut out.media) {
+                    let block = with_tags(&block, &note.tags);
                     self.add_histories(&active, |ord| ids_for_cloze(&ids, ord), &mut out);
                     out.cards += ids.len() as u32;
                     push_block(&mut decks, first.deck, &block);
@@ -442,6 +443,7 @@ impl Package {
                     fields.insert("Deck", &deck);
                     out.media.prefix = self.media_prefix(card.deck);
                     let Some((block, id)) = basic_block(qfmt, afmt, &fields, &mut out.media) else { continue };
+                    let block = with_tags(&block, &note.tags);
                     self.add_histories(&[card], |_| vec![id.clone()], &mut out);
                     out.cards += 1;
                     push_block(&mut decks, card.deck, &block);
@@ -456,7 +458,16 @@ impl Package {
         order.sort_by_key(|id| self.decks.get(id));
         out.decks = order
             .into_iter()
-            .map(|id| (self.deck_path(id), decks.remove(&id).unwrap_or_default()))
+            .map(|id| {
+                let path = self.deck_path(id);
+                let mut markdown = decks.remove(&id).unwrap_or_default();
+                // Keep the Anki name when the file name had to change.
+                let name = self.decks.get(&id).and_then(|parts| parts.last());
+                if let Some(name) = name.filter(|n| Some(n.as_str()) != path.rsplit('/').next()) {
+                    markdown = format!("+++\nname = {}\n+++\n\n{markdown}", toml_string(name));
+                }
+                (path, markdown)
+            })
             .collect();
         out
     }
@@ -496,6 +507,36 @@ impl Package {
             .collect::<Vec<_>>()
             .join("/")
     }
+}
+
+/// Add Anki's space-separated note tags as a `#tag` line at the end of the card,
+/// before any note that follows it.
+fn with_tags(block: &str, tags: &str) -> String {
+    // A tag holding `#` would not read back as a tag.
+    let line: Vec<String> = tags.split_whitespace().filter(|t| !t.contains('#')).map(|t| format!("#{t}")).collect();
+    if line.is_empty() {
+        return block.to_string();
+    }
+    let line = line.join(" ");
+    match block.split_once("\n\n") {
+        Some((card, note)) => format!("{card}\n{line}\n\n{note}"),
+        None => format!("{block}\n{line}"),
+    }
+}
+
+/// A TOML basic string.
+fn toml_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn push_block(decks: &mut HashMap<i64, String>, deck: i64, block: &str) {
@@ -670,10 +711,10 @@ pub(crate) mod tests {
         let out = pkg.convert();
         let paths: Vec<_> = out.decks.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(paths, ["Default", "Lang/Kazakh-Verbs"]);
-        assert_eq!(out.decks[0].1, "C: The [capital] of \\[x\\] is [Paris]\n\nextra\n");
+        assert_eq!(out.decks[0].1, "C: The [capital] of \\[x\\] is [Paris]\n#geo\n\nextra\n");
         assert_eq!(
             out.decks[1].1,
-            "Q: сәлем\nA: hello![](../media/hi.png)\n\nQ: hello![](../media/hi.png)\nA: сәлем\n"
+            "+++\nname = \"Kazakh/Verbs\"\n+++\n\nQ: сәлем\nA: hello![](../media/hi.png)\n\nQ: hello![](../media/hi.png)\nA: сәлем\n"
         );
         assert_eq!(out.media.images.iter().collect::<Vec<_>>(), ["hi.png"]);
         assert_eq!((out.notes, out.cards, out.skipped_notes, out.suspended_cards), (3, 4, 1, 1));
