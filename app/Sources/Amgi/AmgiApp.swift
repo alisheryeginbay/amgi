@@ -7,7 +7,8 @@ struct AmgiApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup("Amgi") {
+        // One window: a collection is studied in a single place, so no extra windows or tabs.
+        Window("Amgi", id: "main") {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 720, minHeight: 460)
@@ -34,6 +35,11 @@ struct AmgiApp: App {
 
 /// Lets the app take focus and show in the Dock when launched as a bare executable (`swift run`).
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Removes the tab bar and its menu items (Show Tab Bar, Merge All Windows).
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()

@@ -3,6 +3,13 @@ import AppKit
 import Observation
 import UniformTypeIdentifiers
 
+/// What the sidebar shows in the detail pane.
+enum SidebarItem: Hashable {
+    case dashboard
+    /// A deck and its subdecks; `nil` is the whole collection.
+    case deck(String?)
+}
+
 @Observable
 @MainActor
 final class AppModel {
@@ -14,15 +21,21 @@ final class AppModel {
     private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
     private(set) var current: StudyCard?
     private(set) var importing = false
+    private(set) var dashboard: Dashboard?
     var revealed = false
     var errorMessage: String?
     var importSummary: ImportSummary?
 
-    /// `nil` studies the whole collection.
-    var selectedDeck: String? {
+    var selection: SidebarItem = .deck(nil) {
         didSet {
-            if oldValue != selectedDeck { loadNext() }
+            guard oldValue != selection else { return }
+            if selection == .dashboard { loadDashboard() } else { loadNext() }
         }
+    }
+
+    /// The deck to study; `nil` studies the whole collection.
+    var selectedDeck: String? {
+        if case .deck(let name) = selection { name } else { nil }
     }
 
     private var collection: CardCollection?
@@ -53,7 +66,7 @@ final class AppModel {
             collection.setUtcOffset(seconds: Int32(TimeZone.current.secondsFromGMT()))
             self.collection = collection
             self.folder = url
-            self.selectedDeck = nil
+            self.selection = .deck(nil)
             UserDefaults.standard.set(url.path, forKey: Self.folderKey)
         }
         refresh()
@@ -95,7 +108,14 @@ final class AppModel {
             today = try collection.today()
             warnings = collection.warnings()
         }
+        if selection == .dashboard { loadDashboard() }
         if current == nil || !revealed { loadNext() }
+    }
+
+    /// Statistics are only gathered while the dashboard is showing.
+    func loadDashboard() {
+        guard let collection else { return }
+        perform { dashboard = try collection.dashboard(activityDays: ActivityHeatmap.dayCount()) }
     }
 
     func loadNext() {

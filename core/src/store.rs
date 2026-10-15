@@ -184,6 +184,27 @@ impl Store {
         )
     }
 
+    /// Review counts per day at or after `since`, where day `n` starts at
+    /// `n * 86400 - shift` seconds. Days without reviews are absent.
+    pub fn reviews_per_day(&self, since: i64, shift: i64) -> rusqlite::Result<Vec<(i64, u32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT (reviewed_at + ?2) / 86400 AS day, COUNT(*) FROM review_log
+             WHERE reviewed_at >= ?1 GROUP BY day ORDER BY day",
+        )?;
+        stmt.query_map([since, shift], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
+    }
+
+    /// Reviews of already-seen cards at least a day after the previous review, at or
+    /// after `since`, and how many of them were not rated Again.
+    pub fn recall_since(&self, since: i64) -> rusqlite::Result<(u32, u32)> {
+        self.conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(rating > 1), 0) FROM review_log
+             WHERE NOT was_new AND elapsed_days >= 1 AND reviewed_at >= ?1",
+            [since],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+    }
+
     pub fn reviews_since(&self, since: i64) -> rusqlite::Result<u32> {
         self.conn.query_row(
             "SELECT COUNT(*) FROM review_log WHERE reviewed_at >= ?1",

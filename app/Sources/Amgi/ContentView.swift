@@ -13,7 +13,11 @@ struct ContentView: View {
                     Sidebar()
                         .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
                 } detail: {
-                    StudyView()
+                    if model.selection == .dashboard {
+                        DashboardView()
+                    } else {
+                        StudyView()
+                    }
                 }
             }
         }
@@ -65,7 +69,9 @@ private struct Sidebar: View {
 
     var body: some View {
         @Bindable var model = model
-        List(selection: $model.selectedDeck) {
+        List(selection: $model.selection) {
+            Label("Dashboard", systemImage: "chart.bar.xaxis")
+                .tag(SidebarItem.dashboard)
             DeckTree(node: DeckNode.tree(model: model), expanded: $expanded)
         }
         .safeAreaInset(edge: .bottom) {
@@ -145,15 +151,15 @@ private struct DeckTree: View {
     private var row: some View {
         if node.id == DeckNode.rootID {
             Label(node.title, systemImage: "rectangle.stack")
-                .tag(node.selection)
+                .tag(SidebarItem.deck(node.selection))
         } else if !node.children.isEmpty {
             Label(node.title, systemImage: "folder")
                 .lineLimit(1)
-                .tag(node.selection)
+                .tag(SidebarItem.deck(node.selection))
         } else {
             Label(node.title, systemImage: "rectangle.portrait.on.rectangle.portrait")
                 .lineLimit(1)
-                .tag(node.selection)
+                .tag(SidebarItem.deck(node.selection))
         }
     }
 

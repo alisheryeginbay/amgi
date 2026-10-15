@@ -142,6 +142,28 @@ pub struct ImportSummary {
     pub sounds_removed: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Dashboard {
+    /// Reviews per study day, oldest first, ending today.
+    pub activity: Vec<u32>,
+    /// Unix seconds at which the first day of `activity` starts.
+    pub activity_start: i64,
+    /// Cards due per day from today on; today includes overdue cards.
+    pub forecast: Vec<u32>,
+    /// Consecutive study days up to today, or up to yesterday if today has no reviews yet.
+    pub streak: u32,
+    pub new_cards: u32,
+    /// Seen cards scheduled less than 21 days after their last review.
+    pub young_cards: u32,
+    pub mature_cards: u32,
+    /// Share of reviews in the last 30 days, of cards last seen a day or more before,
+    /// that were not rated Again. `None` without such reviews.
+    pub retention: Option<f64>,
+}
+
+const MATURE_SECS: i64 = 21 * DAY_SECS;
+const FORECAST_DAYS: usize = 14;
+
 struct Card {
     parsed: ParsedCard,
     deck: String,
@@ -210,6 +232,11 @@ impl CardCollection {
 
     pub fn today(&self) -> Result<TodayStats> {
         self.lock().today(unix_now())
+    }
+
+    /// Collection-wide statistics, with `activity_days` days of review history.
+    pub fn dashboard(&self, activity_days: u32) -> Result<Dashboard> {
+        self.lock().dashboard(activity_days, unix_now())
     }
 
     pub fn warnings(&self) -> Vec<CollectionWarning> {
@@ -405,6 +432,54 @@ impl Inner {
             .record_review(card_id, now, rating, elapsed.into(), prev, outcome)?;
         self.states.insert(card_id.to_string(), state);
         Ok(())
+    }
+
+    fn dashboard(&self, activity_days: u32, now: i64) -> Result<Dashboard> {
+        // Day `n` starts at `n * DAY_SECS - shift`, matching `day_start`.
+        let shift = self.utc_offset_secs - DAY_ROLLOVER_SECS;
+        let today = (now + shift).div_euclid(DAY_SECS);
+        let first = today - i64::from(activity_days.max(1)) + 1;
+
+        let mut activity = vec![0; activity_days.max(1) as usize];
+        for (day, count) in self.store.reviews_per_day(first * DAY_SECS - shift, shift)? {
+            if let Some(slot) = usize::try_from(day - first).ok().and_then(|i| activity.get_mut(i)) {
+                *slot = count;
+            }
+        }
+
+        let studied: HashSet<i64> = self.store.reviews_per_day(0, shift)?.into_iter().map(|(d, _)| d).collect();
+        let from = if studied.contains(&today) { today } else { today - 1 };
+        let streak = (0..).take_while(|n| studied.contains(&(from - n))).count() as u32;
+
+        let mut forecast = vec![0; FORECAST_DAYS];
+        let (mut new_cards, mut young_cards, mut mature_cards) = (0, 0, 0);
+        for card in &self.cards {
+            let Some(state) = self.states.get(&card.parsed.id) else {
+                new_cards += 1;
+                continue;
+            };
+            if state.due - state.last_review >= MATURE_SECS {
+                mature_cards += 1;
+            } else {
+                young_cards += 1;
+            }
+            let day = ((state.due + shift).div_euclid(DAY_SECS) - today).max(0);
+            if let Some(slot) = forecast.get_mut(day as usize) {
+                *slot += 1;
+            }
+        }
+
+        let (recalled_of, recalled) = self.store.recall_since(self.day_start(now) - 29 * DAY_SECS)?;
+        Ok(Dashboard {
+            activity,
+            activity_start: first * DAY_SECS - shift,
+            forecast,
+            streak,
+            new_cards,
+            young_cards,
+            mature_cards,
+            retention: (recalled_of > 0).then(|| f64::from(recalled) / f64::from(recalled_of)),
+        })
     }
 
     fn import_anki(&mut self, conversion: anki::Conversion) -> Result<ImportSummary> {
@@ -662,6 +737,35 @@ mod tests {
         let fronts: Vec<_> = inner.in_deck(Some("lang/ko")).map(|c| c.parsed.front.as_str()).collect();
         assert_eq!(fronts, ["k", "v"]);
         assert_eq!(inner.in_deck(Some("lang")).count(), 3);
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn dashboard_stats() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n\nQ: 3\nA: 3\n")]);
+        let mut inner = c.lock();
+        let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
+        // Study on three consecutive days, ending yesterday.
+        inner.answer(&ids[0], Rating::Good, T0 - 2 * DAY_SECS).unwrap();
+        inner.answer(&ids[1], Rating::Easy, T0 - DAY_SECS).unwrap();
+        inner.answer(&ids[0], Rating::Again, T0 - DAY_SECS + 60).unwrap();
+
+        let d = inner.dashboard(5, T0).unwrap();
+        assert_eq!(d.activity, [0, 0, 1, 2, 0]);
+        assert_eq!(inner.day_start(T0) - d.activity_start, 4 * DAY_SECS);
+        assert_eq!(d.streak, 2);
+        assert_eq!((d.new_cards, d.young_cards, d.mature_cards), (1, 2, 0));
+        assert_eq!(d.forecast.len(), FORECAST_DAYS);
+        // The failed card is due today; the Easy one later.
+        assert_eq!(d.forecast[0], 1);
+        assert_eq!(d.forecast.iter().sum::<u32>(), 2);
+        // The Again was a review a day after the first one.
+        assert_eq!(d.retention, Some(0.0));
+
+        inner.answer(&ids[2], Rating::Good, T0).unwrap();
+        let d = inner.dashboard(5, T0).unwrap();
+        assert_eq!((d.activity[4], d.streak), (1, 3));
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
