@@ -11,11 +11,14 @@ stored in `.amgi.sqlite` at the root of the folder.
 Q: What does **FSRS** stand for?
 A: Free Spaced Repetition Scheduler
 
-C: The capital of {{France}} is {{Paris::city}}.
+C: The capital of [France] is [Paris|city].
+
+C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?] element.
 ```
 
 - `Q:` / `A:`: basic card. Either field can continue onto later lines.
-- `C:`: cloze. Each `{{answer}}` becomes its own card; `{{answer::hint}}` shows the hint.
+- `C:`: cloze. Each `[answer]` becomes its own card; `[answer|hint]` shows the hint.
+  Write `\[` and `\]` for literal brackets. Brackets inside `` `code` `` are always literal.
 - A card ends at a blank line or the next `Q:` / `C:`. Every other line is ignored.
 
 A card's identity comes from its text (the question for basic cards, the whole text

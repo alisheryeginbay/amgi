@@ -9,4 +9,4 @@ Q: Which three variables does the FSRS memory model track?
 A: Difficulty, Stability and Retrievability
 (the DSR model)
 
-C: FSRS schedules a card when its {{retrievability}} drops to the {{desired retention::target}}.
+C: FSRS schedules a card when its [retrievability] drops to the [desired retention|target].

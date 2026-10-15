@@ -4,13 +4,16 @@
 //! Q: What does FSRS stand for?
 //! A: Free Spaced Repetition Scheduler
 //!
-//! C: The capital of {{France}} is {{Paris::city}}.
+//! C: The capital of [France] is [Paris|city].
+//! C: Indexing uses `v[0]`; write \[ and \] for literal brackets.
 //! ```
 //!
 //! A card starts at a line beginning with `Q:` or `C:` and ends at the next blank
 //! line or the next card marker. Continuation lines are appended to the current
-//! field. Every other line (headings, notes) is ignored. Each `{{...}}` deletion
-//! in a cloze produces its own card; `{{answer::hint}}` shows the hint when hidden.
+//! field. Every other line (headings, notes) is ignored. Each `[...]` deletion
+//! in a cloze produces its own card; `[answer|hint]` shows the hint when hidden.
+//! Brackets escaped with a backslash or inside `code` spans are literal. Escapes
+//! are kept in the output, where Markdown renders them as plain brackets.
 
 use std::fmt::Write;
 
@@ -159,21 +162,37 @@ enum Segment<'a> {
     Deletion { answer: &'a str, hint: Option<&'a str> },
 }
 
+/// Byte offset of the first `target` that is neither backslash-escaped nor inside a code span.
+fn find_markup(s: &str, target: char) -> Option<usize> {
+    let (mut escaped, mut in_code) = (false, false);
+    for (i, c) in s.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if !in_code => escaped = true,
+            '`' => in_code = !in_code,
+            c if c == target && !in_code => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn segments(text: &str) -> Option<Vec<Segment<'_>>> {
     let mut segs = Vec::new();
     let mut rest = text;
-    while let Some(start) = rest.find("{{") {
-        let end = rest[start + 2..].find("}}")? + start + 2;
+    while let Some(start) = find_markup(rest, '[') {
+        let end = find_markup(&rest[start + 1..], ']')? + start + 1;
         if start > 0 {
             segs.push(Segment::Text(&rest[..start]));
         }
-        let inner = &rest[start + 2..end];
-        let (answer, hint) = match inner.split_once("::") {
-            Some((a, h)) => (a.trim(), Some(h.trim())),
+        let inner = &rest[start + 1..end];
+        let (answer, hint) = match find_markup(inner, '|') {
+            Some(bar) => (inner[..bar].trim(), Some(inner[bar + 1..].trim())),
             None => (inner.trim(), None),
         };
+        let hint = hint.filter(|h| !h.is_empty());
         segs.push(Segment::Deletion { answer, hint });
-        rest = &rest[end + 2..];
+        rest = &rest[end + 1..];
     }
     if !rest.is_empty() {
         segs.push(Segment::Text(rest));
@@ -185,7 +204,7 @@ fn parse_cloze(text: &str, line: u32, out: &mut ParseResult) {
     let Some(segs) = segments(text) else {
         out.warnings.push(ParseWarning {
             line,
-            message: "unclosed `{{` in cloze".into(),
+            message: "unclosed `[` in cloze".into(),
         });
         return;
     };
@@ -196,7 +215,7 @@ fn parse_cloze(text: &str, line: u32, out: &mut ParseResult) {
     if deletions == 0 {
         out.warnings.push(ParseWarning {
             line,
-            message: "cloze has no `{{...}}` deletions".into(),
+            message: "cloze has no `[...]` deletions".into(),
         });
         return;
     }
@@ -273,18 +292,35 @@ mod tests {
 
     #[test]
     fn next_marker_ends_card_without_blank_line() {
-        let r = parse("Q: a\nA: b\nQ: c\nA: d\nC: {{e}}");
+        let r = parse("Q: a\nA: b\nQ: c\nA: d\nC: [e]");
         assert_eq!(r.cards.len(), 3);
     }
 
     #[test]
     fn cloze_expands_per_deletion() {
-        let r = parse("C: The capital of {{France}} is {{Paris::city}}.");
+        let r = parse("C: The capital of [France] is [Paris|city].");
         assert_eq!(r.cards.len(), 2);
         assert_eq!(r.cards[0].front, "The capital of **[...]** is Paris.");
         assert_eq!(r.cards[0].back, "The capital of **France** is Paris.");
         assert_eq!(r.cards[1].front, "The capital of France is **[city]**.");
         assert_ne!(r.cards[0].id, r.cards[1].id);
+    }
+
+    #[test]
+    fn literal_brackets() {
+        let r = parse(r"C: \[1\] `v[0]` is [first|\[i\]] and [`m[k]`].");
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.cards.len(), 2);
+        assert_eq!(r.cards[0].front, r"\[1\] `v[0]` is **[\[i\]]** and `m[k]`.");
+        assert_eq!(r.cards[0].back, r"\[1\] `v[0]` is **first** and `m[k]`.");
+        assert_eq!(r.cards[1].front, r"\[1\] `v[0]` is first and **[...]**.");
+    }
+
+    #[test]
+    fn only_escaped_brackets_is_not_a_cloze() {
+        let r = parse(r"C: \[not a deletion\]");
+        assert!(r.cards.is_empty());
+        assert_eq!(r.warnings.len(), 1);
     }
 
     #[test]
@@ -298,7 +334,7 @@ mod tests {
 
     #[test]
     fn warnings() {
-        let r = parse("A: orphan\n\nQ: no answer\n\nC: nothing\n\nC: {{open");
+        let r = parse("A: orphan\n\nQ: no answer\n\nC: nothing\n\nC: [open");
         assert!(r.cards.is_empty());
         let lines: Vec<u32> = r.warnings.iter().map(|w| w.line).collect();
         assert_eq!(lines, vec![1, 3, 5, 7]);

@@ -422,7 +422,7 @@ mod tests {
     fn study_flow() {
         let (dir, c) = collection(&[
             ("a.md", "Q: 1\nA: one\n\nQ: 2\nA: two\n"),
-            ("sub/b.md", "C: {{x}} and {{y}}\n\nQ: 1\nA: dup\n"),
+            ("sub/b.md", "C: [x] and [y]\n\nQ: 1\nA: dup\n"),
             (".hidden/c.md", "Q: hidden\nA: no\n"),
         ]);
         let mut inner = c.lock();
