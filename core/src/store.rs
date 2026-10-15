@@ -57,7 +57,10 @@ impl Store {
     }
 
     fn init(conn: Connection) -> rusqlite::Result<Self> {
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        // Rollback journal instead of WAL: the database stays a single file, which is
+        // safer in synced folders, and one small write per review needs no concurrency.
+        // Also converts databases created in WAL mode by earlier versions.
+        conn.pragma_update(None, "journal_mode", "DELETE")?;
         let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
             let tx = conn.unchecked_transaction()?;
