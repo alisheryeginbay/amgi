@@ -3,7 +3,7 @@
 Plain-text flash cards, scheduled with [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm).
 
 A collection is a folder of Markdown files. Each file is a deck, and folders nest
-decks: studying `lang` covers `lang.md` and everything in `lang/`. Review history is
+decks: the `lang` deck holds `lang.md` and everything in `lang/`. Review history is
 stored in `.amgi.sqlite` at the root of the folder.
 
 ## Card format
@@ -46,8 +46,8 @@ A: to go
 ```
 
 Tags go on the card's last lines, after its first one, and only a line made entirely
-of `#tag` words counts, so a `# Heading` stays text. Pick a tag in the sidebar to study
-it across decks.
+of `#tag` words counts, so a `# Heading` stays text. Pick a tag in the sidebar to browse
+its cards across decks.
 
 ## Importing from Anki
 
@@ -82,3 +82,6 @@ Re-run `scripts/build-core.sh` after any change to `core/`.
 Keys while studying: <kbd>Space</kbd> shows the answer, <kbd>1</kbd>–<kbd>4</kbd> rate
 Again/Hard/Good/Easy, <kbd>⌘O</kbd> opens a folder, <kbd>⌘R</kbd> reloads. Files also reload
 whenever the app comes to the front.
+
+**Review** in the sidebar studies the whole collection. Pick a deck or tag to browse its
+cards in a table: search, sort by any column, and double-click a card to open its file.

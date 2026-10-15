@@ -13,10 +13,10 @@ struct ContentView: View {
                     Sidebar()
                         .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
                 } detail: {
-                    if model.selection == .dashboard {
-                        DashboardView()
-                    } else {
-                        StudyView()
+                    switch model.selection {
+                    case .dashboard: DashboardView()
+                    case .review: StudyView()
+                    case .deck, .tag: BrowseView()
                     }
                 }
             }
@@ -64,8 +64,8 @@ private struct WelcomeView: View {
 private struct Sidebar: View {
     @Environment(AppModel.self) private var model
     @State private var showingWarnings = false
-    /// Expanded decks; the collection itself starts open.
-    @State private var expanded: Set<String> = [DeckNode.rootID]
+    @State private var expanded: Set<String> = []
+    @AppStorage("decksExpanded") private var decksExpanded = true
     @AppStorage("tagsExpanded") private var tagsExpanded = true
 
     var body: some View {
@@ -73,9 +73,21 @@ private struct Sidebar: View {
         List(selection: $model.selection) {
             Label("Dashboard", systemImage: "chart.bar.xaxis")
                 .tag(SidebarItem.dashboard)
-            DeckTree(node: DeckNode.tree(model: model), expanded: $expanded)
+            Section("Review") {
+                Label(model.folder?.lastPathComponent ?? "All Cards", systemImage: "rectangle.stack")
+                    .lineLimit(1)
+                    .badge(Int(model.totalDue))
+                    .tag(SidebarItem.review)
+            }
+            // Sections collapse from the chevron shown when hovering the header.
+            if !model.decks.isEmpty {
+                Section("Decks", isExpanded: $decksExpanded) {
+                    ForEach(DeckNode.tree(decks: model.decks)) { node in
+                        DeckTree(node: node, expanded: $expanded)
+                    }
+                }
+            }
             if !model.tags.isEmpty {
-                // Collapses from the chevron shown when hovering the header.
                 Section("Tags", isExpanded: $tagsExpanded) {
                     ForEach(model.tags, id: \.self) { tag in
                         Label(tag, systemImage: "number")
@@ -112,22 +124,16 @@ private struct Sidebar: View {
     }
 }
 
-/// A deck in the sidebar. The root is the whole collection; every other node is a
-/// deck file, a folder, or both (`lang.md` and `lang/`).
+/// A deck in the sidebar: a deck file, a folder, or both (`lang.md` and `lang/`).
 private struct DeckNode: Identifiable {
-    static let rootID = ""
-
     let id: String
     let title: String
     let children: [DeckNode]
 
-    /// Selection value: `nil` studies the whole collection.
-    var selection: String? { id == Self.rootID ? nil : id }
-
-    @MainActor
-    static func tree(model: AppModel) -> DeckNode {
+    /// The top-level decks.
+    static func tree(decks: [DeckInfo]) -> [DeckNode] {
         // `decks` lists parents before children, so grouping keeps file order.
-        let byParent = Dictionary(grouping: model.decks) { deck in
+        let byParent = Dictionary(grouping: decks) { deck in
             deck.name.split(separator: "/").dropLast().joined(separator: "/")
         }
         func children(of parent: String) -> [DeckNode] {
@@ -135,11 +141,7 @@ private struct DeckNode: Identifiable {
                 DeckNode(id: deck.name, title: deck.title, children: children(of: deck.name))
             }
         }
-        return DeckNode(
-            id: rootID,
-            title: model.folder?.lastPathComponent ?? "All Cards",
-            children: children(of: "")
-        )
+        return children(of: "")
     }
 }
 
@@ -161,20 +163,10 @@ private struct DeckTree: View {
         }
     }
 
-    @ViewBuilder
     private var row: some View {
-        if node.id == DeckNode.rootID {
-            Label(node.title, systemImage: "rectangle.stack")
-                .tag(SidebarItem.deck(node.selection))
-        } else if !node.children.isEmpty {
-            Label(node.title, systemImage: "folder")
-                .lineLimit(1)
-                .tag(SidebarItem.deck(node.selection))
-        } else {
-            Label(node.title, systemImage: "rectangle.portrait.on.rectangle.portrait")
-                .lineLimit(1)
-                .tag(SidebarItem.deck(node.selection))
-        }
+        Label(node.title, systemImage: node.children.isEmpty ? "rectangle.portrait.on.rectangle.portrait" : "folder")
+            .lineLimit(1)
+            .tag(SidebarItem.deck(node.id))
     }
 
     private var isExpanded: Binding<Bool> {

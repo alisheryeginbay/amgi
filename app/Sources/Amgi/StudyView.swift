@@ -4,10 +4,6 @@ import SwiftUI
 struct StudyView: View {
     @Environment(AppModel.self) private var model
 
-    private var selected: DeckInfo? {
-        model.decks.first { $0.name == model.selectedDeck }
-    }
-
     var body: some View {
         Group {
             if let card = model.current {
@@ -27,13 +23,13 @@ struct StudyView: View {
                 )
             }
         }
-        .navigationTitle(title)
-        .navigationSubtitle(subtitle)
+        .navigationTitle(model.folder?.lastPathComponent ?? "All Cards")
+        .navigationSubtitle("\(model.totalDue) due · \(model.today.newAvailable) new")
         .toolbar {
             if let card = model.current {
                 ToolbarItem {
                     Button {
-                        model.revealInEditor(card)
+                        model.revealInEditor(path: card.path)
                     } label: {
                         Label("Edit Card", systemImage: "pencil")
                     }
@@ -46,22 +42,6 @@ struct StudyView: View {
     /// Image paths in a card are relative to its deck file.
     private func deckDirectory(_ card: StudyCard) -> URL? {
         model.folder?.appending(path: card.path).deletingLastPathComponent()
-    }
-
-    private var title: String {
-        switch model.selection {
-        case .tag(let tag): "#\(tag)"
-        case .deck(let name?): selected?.title ?? deckTitle(name)
-        default: model.folder?.lastPathComponent ?? "All Cards"
-        }
-    }
-
-    private var subtitle: String {
-        // Counts are kept per deck, not per tag.
-        if case .tag = model.selection { return "" }
-        let due = selected?.due ?? model.totalDue
-        let new = selected?.new ?? model.today.newAvailable
-        return "\(due) due · \(new) new"
     }
 }
 

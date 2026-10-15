@@ -6,9 +6,11 @@ import UniformTypeIdentifiers
 /// What the sidebar shows in the detail pane.
 enum SidebarItem: Hashable {
     case dashboard
-    /// A deck and its subdecks; `nil` is the whole collection.
-    case deck(String?)
-    /// Cards with this tag, across all decks.
+    /// Study the whole collection.
+    case review
+    /// Browse a deck and its subdecks.
+    case deck(String)
+    /// Browse cards with this tag, across all decks.
     case tag(String)
 }
 
@@ -25,26 +27,28 @@ final class AppModel {
     private(set) var current: StudyCard?
     private(set) var importing = false
     private(set) var dashboard: Dashboard?
+    /// Cards of the deck or tag being browsed.
+    private(set) var browsed: [BrowseCard] = []
     var revealed = false
     var errorMessage: String?
     var importSummary: ImportSummary?
 
-    var selection: SidebarItem = .deck(nil) {
+    var selection: SidebarItem = .review {
         didSet {
             guard oldValue != selection else { return }
-            if selection == .dashboard { loadDashboard() } else { loadNext() }
+            switch selection {
+            case .dashboard: loadDashboard()
+            case .review: loadNext()
+            case .deck, .tag: loadBrowsed()
+            }
         }
     }
 
-    /// The deck to study; `nil` for the whole collection or a tag.
-    var selectedDeck: String? {
-        if case .deck(let name) = selection { name } else { nil }
-    }
-
-    var scope: StudyScope {
+    /// The cards being browsed, if any.
+    var browseScope: StudyScope? {
         switch selection {
-        case .dashboard, .deck(nil): .all
-        case .deck(let name?): .deck(name: name)
+        case .dashboard, .review: nil
+        case .deck(let name): .deck(name: name)
         case .tag(let name): .tag(name: name)
         }
     }
@@ -77,7 +81,7 @@ final class AppModel {
             collection.setUtcOffset(seconds: Int32(TimeZone.current.secondsFromGMT()))
             self.collection = collection
             self.folder = url
-            self.selection = .deck(nil)
+            self.selection = .review
             UserDefaults.standard.set(url.path, forKey: Self.folderKey)
         }
         refresh()
@@ -121,6 +125,7 @@ final class AppModel {
             warnings = collection.warnings()
         }
         if selection == .dashboard { loadDashboard() }
+        if browseScope != nil { loadBrowsed() }
         if current == nil || !revealed { loadNext() }
     }
 
@@ -130,10 +135,16 @@ final class AppModel {
         perform { dashboard = try collection.dashboard(activityDays: ActivityHeatmap.dayCount()) }
     }
 
+    /// Card lists are only read while a deck or tag is showing.
+    func loadBrowsed() {
+        guard let collection, let scope = browseScope else { return }
+        browsed = collection.cards(scope: scope)
+    }
+
     func loadNext() {
         guard let collection else { return }
         perform {
-            current = try collection.nextCard(scope: scope)
+            current = try collection.nextCard(scope: .all)
             revealed = false
         }
     }
@@ -145,9 +156,10 @@ final class AppModel {
         refresh()
     }
 
-    func revealInEditor(_ card: StudyCard) {
+    /// Open a deck file, given relative to the collection root.
+    func revealInEditor(path: String) {
         guard let folder else { return }
-        NSWorkspace.shared.open(folder.appendingPathComponent(card.path))
+        NSWorkspace.shared.open(folder.appendingPathComponent(path))
     }
 
     private func perform(_ body: () throws -> Void) {

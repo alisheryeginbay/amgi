@@ -111,6 +111,27 @@ pub struct StudyCard {
     pub intervals: Vec<i64>,
 }
 
+/// A card as listed when browsing a deck.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BrowseCard {
+    pub id: String,
+    pub deck: String,
+    /// Without `#`.
+    pub tags: Vec<String>,
+    /// Source file relative to the collection root.
+    pub path: String,
+    pub line: u32,
+    pub kind: CardKind,
+    /// Markdown.
+    pub front: String,
+    /// Markdown.
+    pub back: String,
+    /// Unix seconds; `None` for a new card.
+    pub due: Option<i64>,
+    pub reps: u32,
+    pub lapses: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct CollectionWarning {
     pub path: String,
@@ -249,6 +270,11 @@ impl CardCollection {
 
     pub fn next_card(&self, scope: StudyScope) -> Result<Option<StudyCard>> {
         self.lock().next_card(&scope, unix_now())
+    }
+
+    /// Every card in `scope`, in file order.
+    pub fn cards(&self, scope: StudyScope) -> Vec<BrowseCard> {
+        self.lock().browse(&scope)
     }
 
     /// Every tag in the collection, sorted, in the spelling first seen.
@@ -419,6 +445,27 @@ impl Inner {
                 ..d
             })
             .collect())
+    }
+
+    fn browse(&self, scope: &StudyScope) -> Vec<BrowseCard> {
+        self.in_scope(scope)
+            .map(|card| {
+                let state = self.states.get(&card.parsed.id);
+                BrowseCard {
+                    id: card.parsed.id.clone(),
+                    deck: card.deck.clone(),
+                    tags: card.parsed.tags.clone(),
+                    path: card.path.clone(),
+                    line: card.parsed.line,
+                    kind: card.parsed.kind,
+                    front: card.parsed.front.clone(),
+                    back: card.parsed.back.clone(),
+                    due: state.map(|s| s.due),
+                    reps: state.map_or(0, |s| s.reps),
+                    lapses: state.map_or(0, |s| s.lapses),
+                }
+            })
+            .collect()
     }
 
     fn next_card(&self, scope: &StudyScope, now: i64) -> Result<Option<StudyCard>> {
@@ -772,6 +819,24 @@ mod tests {
             inner.answer("nope", Rating::Good, T0),
             Err(AmgiError::UnknownCard { .. })
         ));
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn browse_lists_cards_with_state() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: one\n#x\n\nQ: 2\nA: two\n"), ("b.md", "Q: 3\nA: three\n")]);
+        let mut inner = c.lock();
+        let first = inner.next_card(&deck("a"), T0).unwrap().unwrap();
+        inner.answer(&first.id, Rating::Again, T0).unwrap();
+
+        let cards = inner.browse(&deck("a"));
+        let fronts: Vec<_> = cards.iter().map(|c| c.front.as_str()).collect();
+        assert_eq!(fronts, ["1", "2"]);
+        assert_eq!(cards[0].tags, ["x"]);
+        assert_eq!((cards[0].reps, cards[0].due.is_some()), (1, true));
+        assert_eq!((cards[1].reps, cards[1].due), (0, None));
+        assert_eq!(inner.browse(&StudyScope::All).len(), 3);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
