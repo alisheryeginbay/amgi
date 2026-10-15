@@ -74,15 +74,13 @@ private struct Sidebar: View {
             Label("Dashboard", systemImage: "chart.bar.xaxis")
                 .tag(SidebarItem.dashboard)
             Section("Review") {
-                Label(model.folder?.lastPathComponent ?? "All Cards", systemImage: "rectangle.stack")
-                    .lineLimit(1)
-                    .badge(Int(model.totalDue))
+                ReviewRow()
                     .tag(SidebarItem.review)
             }
             // Sections collapse from the chevron shown when hovering the header.
-            if !model.decks.isEmpty {
+            if !model.deckNames.isEmpty {
                 Section("Decks", isExpanded: $decksExpanded) {
-                    ForEach(DeckNode.tree(decks: model.decks)) { node in
+                    ForEach(DeckNode.tree(decks: model.deckNames)) { node in
                         DeckTree(node: node, expanded: $expanded)
                     }
                 }
@@ -99,12 +97,7 @@ private struct Sidebar: View {
         // animations, so the sidebar scrolls without one.
         .scrollIndicators(.never)
         .safeAreaInset(edge: .bottom) {
-            Text("\(model.today.reviewed) reviewed today")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
+            ReviewedToday()
         }
         .toolbar {
             if !model.warnings.isEmpty {
@@ -122,6 +115,32 @@ private struct Sidebar: View {
     }
 }
 
+// Rows that show counts read them in views of their own, so an answer re-renders those
+// rows rather than the whole list.
+
+private struct ReviewRow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Label(model.folder?.lastPathComponent ?? "All Cards", systemImage: "rectangle.stack")
+            .lineLimit(1)
+            .badge(Int(model.totalDue))
+    }
+}
+
+private struct ReviewedToday: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Text("\(model.today.reviewed) reviewed today")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+    }
+}
+
 /// A deck in the sidebar: a deck file, a folder, or both (`lang.md` and `lang/`).
 private struct DeckNode: Identifiable {
     let id: String
@@ -129,7 +148,7 @@ private struct DeckNode: Identifiable {
     let children: [DeckNode]
 
     /// The top-level decks.
-    static func tree(decks: [DeckInfo]) -> [DeckNode] {
+    static func tree(decks: [DeckName]) -> [DeckNode] {
         // `decks` lists parents before children, so grouping keeps file order.
         let byParent = Dictionary(grouping: decks) { deck in
             deck.name.split(separator: "/").dropLast().joined(separator: "/")

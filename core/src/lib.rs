@@ -426,10 +426,22 @@ impl Inner {
 
     fn decks(&self, now: i64) -> Result<Vec<DeckInfo>> {
         let remaining = self.new_remaining(now)?;
+        // Count each deck's own cards, then add them to the deck and its parents:
+        // there are far fewer decks than cards.
+        let mut own: HashMap<&str, (u32, u32, u32)> = HashMap::new();
+        for card in &self.cards {
+            let counts = own.entry(&card.deck).or_default();
+            counts.0 += 1;
+            match self.states.get(&card.parsed.id) {
+                Some(s) if s.due <= now => counts.1 += 1,
+                Some(_) => {}
+                None => counts.2 += 1,
+            }
+        }
         // Keyed by path components, so parents sort before their children.
         let mut decks: BTreeMap<Vec<&str>, DeckInfo> = BTreeMap::new();
-        for card in &self.cards {
-            let parts: Vec<&str> = card.deck.split('/').collect();
+        for (name, (total, due, new)) in own {
+            let parts: Vec<&str> = name.split('/').collect();
             for depth in 1..=parts.len() {
                 let deck = decks.entry(parts[..depth].to_vec()).or_insert_with(|| DeckInfo {
                     name: parts[..depth].join("/"),
@@ -438,12 +450,9 @@ impl Inner {
                     due: 0,
                     new: 0,
                 });
-                deck.total += 1;
-                match self.states.get(&card.parsed.id) {
-                    Some(s) if s.due <= now => deck.due += 1,
-                    Some(_) => {}
-                    None => deck.new += 1,
-                }
+                deck.total += total;
+                deck.due += due;
+                deck.new += new;
             }
         }
         Ok(decks

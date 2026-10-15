@@ -14,6 +14,11 @@ enum SidebarItem: Hashable {
     case tag(String)
 }
 
+struct DeckName: Equatable {
+    let name: String
+    let title: String
+}
+
 @Observable
 @MainActor
 final class AppModel {
@@ -21,6 +26,9 @@ final class AppModel {
 
     private(set) var folder: URL?
     private(set) var decks: [DeckInfo] = []
+    /// Deck names and titles without counts, for views that only show the decks:
+    /// counts change with every answer, these only when files do.
+    private(set) var deckNames: [DeckName] = []
     private(set) var tags: [String] = []
     /// Lowercased tag → icon, such as an emoji.
     private(set) var tagIcons: [String: String] = [:]
@@ -120,12 +128,16 @@ final class AppModel {
 
     func refresh() {
         guard let collection else { return }
+        // Only changed values are assigned, so views that read the rest are left alone:
+        // a reload when the app comes to the front usually changes nothing.
         perform {
-            decks = try collection.decks()
-            tags = collection.tags()
-            tagIcons = try collection.tagIcons()
-            today = try collection.today()
-            warnings = collection.warnings()
+            let decks = try collection.decks()
+            update(\.decks, decks)
+            update(\.deckNames, decks.map { DeckName(name: $0.name, title: $0.title) })
+            update(\.tags, collection.tags())
+            update(\.tagIcons, try collection.tagIcons())
+            update(\.today, try collection.today())
+            update(\.warnings, collection.warnings())
         }
         if selection == .dashboard { loadDashboard() }
         if browseScope != nil { loadBrowsed() }
@@ -135,20 +147,20 @@ final class AppModel {
     /// Statistics are only gathered while the dashboard is showing.
     func loadDashboard() {
         guard let collection else { return }
-        perform { dashboard = try collection.dashboard(activityDays: ActivityHeatmap.dayCount()) }
+        perform { update(\.dashboard, try collection.dashboard(activityDays: ActivityHeatmap.dayCount())) }
     }
 
     /// Card lists are only read while a deck or tag is showing.
     func loadBrowsed() {
         guard let collection, let scope = browseScope else { return }
-        browsed = collection.cards(scope: scope)
+        update(\.browsed, collection.cards(scope: scope))
     }
 
     func loadNext() {
         guard let collection else { return }
         perform {
-            current = try collection.nextCard(scope: .all)
-            revealed = false
+            update(\.current, try collection.nextCard(scope: .all))
+            update(\.revealed, false)
         }
     }
 
@@ -168,7 +180,7 @@ final class AppModel {
         guard let collection else { return }
         perform {
             try collection.setTagIcon(tag: tag, icon: icon)
-            tagIcons = try collection.tagIcons()
+            update(\.tagIcons, try collection.tagIcons())
         }
     }
 
@@ -176,6 +188,13 @@ final class AppModel {
     func revealInEditor(path: String) {
         guard let folder else { return }
         NSWorkspace.shared.open(folder.appendingPathComponent(path))
+    }
+
+    /// Assign only if the value changed; every assignment re-renders the views that read it.
+    private func update<Value: Equatable>(_ property: ReferenceWritableKeyPath<AppModel, Value>, _ value: Value) {
+        if self[keyPath: property] != value {
+            self[keyPath: property] = value
+        }
     }
 
     private func perform(_ body: () throws -> Void) {
