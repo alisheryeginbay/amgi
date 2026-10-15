@@ -108,13 +108,18 @@ struct ActivityHeatmap: View {
     }
 
     private struct Day {
+        let index: Int
         let date: Date
         let count: UInt32
     }
 
+    /// Index of the day under the pointer.
+    @State private var hovered: Int?
+    private static let tooltipWidth: CGFloat = 220
+
     var body: some View {
         let days = activity.enumerated().map { i, count in
-            Day(date: Date(timeIntervalSince1970: TimeInterval(start) + TimeInterval(i) * 86_400), count: count)
+            Day(index: i, date: Date(timeIntervalSince1970: TimeInterval(start) + TimeInterval(i) * 86_400), count: count)
         }
         let weeks = columns(days)
         let levels = Levels(activity)
@@ -151,6 +156,21 @@ struct ActivityHeatmap: View {
             }
             .font(.caption)
         }
+        // Drawn over the whole heatmap, so the scroll view around the grid can't clip it.
+        .overlayPreferenceValue(HoveredCell.self) { anchor in
+            GeometryReader { proxy in
+                if let anchor, let hovered, days.indices.contains(hovered) {
+                    let cell = proxy[anchor]
+                    let half = Self.tooltipWidth / 2
+                    // Keep the bubble inside the heatmap; the arrow still points at the cell.
+                    let x = min(max(cell.midX, half), max(proxy.size.width - half, half))
+                    DayTooltip(count: days[hovered].count, date: days[hovered].date, arrowOffset: cell.midX - x)
+                        .frame(width: Self.tooltipWidth, height: 0, alignment: .bottom)
+                        .position(x: x, y: cell.minY - 3)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Activity")
         .accessibilityValue(summary)
@@ -172,21 +192,24 @@ struct ActivityHeatmap: View {
             if let day {
                 shape
                     .fill(HeatmapColor.fill(level: levels.level(day.count)))
-                    .help(tooltip(day))
+                    .overlay {
+                        if hovered == day.index {
+                            shape.strokeBorder(.primary, lineWidth: 1.5)
+                        }
+                    }
+                    .anchorPreference(key: HoveredCell.self, value: .bounds) { hovered == day.index ? $0 : nil }
+                    .onHover { inside in
+                        if inside {
+                            hovered = day.index
+                        } else if hovered == day.index {
+                            hovered = nil
+                        }
+                    }
             } else {
                 shape.fill(.clear)
             }
         }
         .frame(width: Self.cell, height: Self.cell)
-    }
-
-    private func tooltip(_ day: Day) -> String {
-        let date = day.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year())
-        switch day.count {
-        case 0: return "No reviews on \(date)"
-        case 1: return "1 review on \(date)"
-        default: return "\(day.count) reviews on \(date)"
-        }
     }
 
     /// Short month names above the first column of each month.
@@ -249,6 +272,57 @@ struct ActivityHeatmap: View {
         let total = activity.reduce(0, +)
         let studied = activity.filter { $0 > 0 }.count
         return "\(total.formatted()) reviews on \(studied.formatted()) days in the last year"
+    }
+}
+
+/// Frame of the hovered heatmap cell.
+private struct HoveredCell: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
+/// Dark bubble with an arrow pointing down at a heatmap day.
+private struct DayTooltip: View {
+    let count: UInt32
+    let date: Date
+    /// Horizontal distance from the bubble's center to the cell.
+    let arrowOffset: CGFloat
+
+    private static let fill = Color(light: 0x2B2B2B, dark: 0x4A4A4A)
+
+    var body: some View {
+        let amount = Text(count == 0 ? "No" : count.formatted()).bold()
+        let noun = count == 1 ? "card" : "cards"
+        let day = date.formatted(.dateTime.weekday(.wide).month(.wide).day().year())
+        VStack(spacing: 0) {
+            Text("\(amount) \(noun) reviewed on \(day)")
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Self.fill, in: .rect(cornerRadius: 6))
+            Arrow()
+                .fill(Self.fill)
+                .frame(width: 12, height: 6)
+                .offset(x: arrowOffset)
+        }
+        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+    }
+
+    private struct Arrow: Shape {
+        func path(in rect: CGRect) -> Path {
+            Path { p in
+                p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+                p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+                p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+                p.closeSubpath()
+            }
+        }
     }
 }
 
