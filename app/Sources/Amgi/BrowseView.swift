@@ -31,10 +31,9 @@ struct BrowseView: View {
             }
             .width(ideal: 100)
             TableColumn("Tags") { card in
-                Text(card.tags.map { "#\($0)" }.joined(separator: " "))
-                    .foregroundStyle(.secondary)
+                TagPills(tags: card.tags)
             }
-            .width(ideal: 80)
+            .width(ideal: 100)
             TableColumn("Due", value: \.dueOrder) { card in
                 if let due = card.due {
                     Text(Date(timeIntervalSince1970: TimeInterval(due)), format: .dateTime.day().month().year())

@@ -53,10 +53,13 @@ private struct CardContent: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text(([card.deck] + card.tags.map { "#\($0)" }).joined(separator: "  "))
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-                    .padding(.bottom, 20)
+                HStack(spacing: 10) {
+                    Text(card.deck)
+                        .foregroundStyle(.tertiary)
+                    TagPills(tags: card.tags)
+                }
+                .font(.subheadline)
+                .padding(.bottom, 20)
 
                 switch card.kind {
                 case .basic:
