@@ -85,6 +85,9 @@ private struct Sidebar: View {
                 }
             }
         }
+        // The scroll bar appearing re-tiles the list and cancels its expand and collapse
+        // animations, so the sidebar scrolls without one.
+        .scrollIndicators(.never)
         .safeAreaInset(edge: .bottom) {
             Text("\(model.today.reviewed) reviewed today")
                 .font(.caption)
