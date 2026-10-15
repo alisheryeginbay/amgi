@@ -25,6 +25,15 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .alert(
+            "Anki Import Finished",
+            isPresented: Binding(get: { model.importSummary != nil }, set: { if !$0 { model.importSummary = nil } }),
+            presenting: model.importSummary
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { summary in
+            Text(summary.message)
+        }
     }
 }
 

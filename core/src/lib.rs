@@ -3,11 +3,12 @@
 //! A collection is a directory of Markdown files; each file is a deck. Review
 //! state lives in `.amgi.sqlite` at the collection root.
 
+pub mod anki;
 pub mod parser;
 pub mod scheduler;
 pub mod store;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -17,7 +18,7 @@ pub use parser::CardKind;
 pub use scheduler::Rating;
 use parser::ParsedCard;
 use scheduler::{Memory, Scheduler};
-use store::{CardState, Store};
+use store::{CardState, LoggedReview, Store};
 
 uniffi::setup_scaffolding!();
 
@@ -38,6 +39,16 @@ pub enum AmgiError {
     UnknownCard { id: String },
     #[error("scheduler error: {message}")]
     Scheduler { message: String },
+    #[error("import failed: {message}")]
+    Import { message: String },
+}
+
+impl From<anki::Error> for AmgiError {
+    fn from(e: anki::Error) -> Self {
+        AmgiError::Import {
+            message: e.to_string(),
+        }
+    }
 }
 
 impl From<std::io::Error> for AmgiError {
@@ -106,6 +117,22 @@ pub struct TodayStats {
     pub new_studied: u32,
     /// New cards still available today across the collection, capped by the daily limit.
     pub new_available: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ImportSummary {
+    /// Deck files written, relative to the collection root.
+    pub files: Vec<String>,
+    pub notes: u32,
+    pub cards: u32,
+    /// Cards that kept their Anki review history.
+    pub reviewed_cards: u32,
+    /// Notes that produced no card, such as image occlusion notes.
+    pub skipped_notes: u32,
+    /// Suspended Anki cards, which are left out.
+    pub suspended_cards: u32,
+    /// Images and sounds removed from cards.
+    pub media_removed: u32,
 }
 
 struct Card {
@@ -179,6 +206,13 @@ impl CardCollection {
 
     pub fn warnings(&self) -> Vec<CollectionWarning> {
         self.lock().warnings.clone()
+    }
+
+    /// Import an Anki package (`.apkg` or `.colpkg`) as Markdown decks in this
+    /// collection, keeping review history. Existing files are never overwritten.
+    pub fn import_anki(&self, path: String) -> Result<ImportSummary> {
+        let conversion = anki::Package::read(Path::new(&path))?.convert();
+        self.lock().import_anki(conversion)
     }
 }
 
@@ -353,6 +387,97 @@ impl Inner {
         Ok(())
     }
 
+    fn import_anki(&mut self, conversion: anki::Conversion) -> Result<ImportSummary> {
+        let mut files = Vec::new();
+        for (deck, markdown) in &conversion.decks {
+            let path = unused_path(&self.root, deck);
+            if let Some(dir) = path.parent() {
+                fs::create_dir_all(dir)?;
+            }
+            fs::write(&path, markdown)?;
+            files.push(relative(&self.root, &path));
+        }
+
+        // History never replaces what was already studied in amgi.
+        let mut seen = HashSet::new();
+        let mut imported = Vec::new();
+        for (id, log) in &conversion.histories {
+            if self.states.contains_key(id) || !seen.insert(id) {
+                continue;
+            }
+            if let Some((reviews, state)) = self.replay(log)? {
+                imported.push((id.clone(), reviews, state));
+            }
+        }
+        self.store.import(&imported)?;
+        let reviewed_cards = imported.len() as u32;
+        self.states.extend(imported.into_iter().map(|(id, _, state)| (id, state)));
+        self.reload()?;
+
+        Ok(ImportSummary {
+            files,
+            notes: conversion.notes,
+            cards: conversion.cards,
+            reviewed_cards,
+            skipped_notes: conversion.skipped_notes,
+            suspended_cards: conversion.suspended_cards,
+            media_removed: conversion.losses.images + conversion.losses.sounds,
+        })
+    }
+
+    /// Rebuild a card's memory state by replaying its Anki reviews through the
+    /// scheduler. Due dates follow Anki's intervals so the existing schedule is kept.
+    /// `None` if the card ends up new.
+    fn replay(&self, log: &[anki::Revlog]) -> Result<Option<(Vec<LoggedReview>, CardState)>> {
+        let mut reviews = Vec::new();
+        let mut state: Option<CardState> = None;
+        for entry in log {
+            let rating = match entry.ease {
+                1 => Some(Rating::Again),
+                2 => Some(Rating::Hard),
+                3 => Some(Rating::Good),
+                4 => Some(Rating::Easy),
+                _ => None,
+            };
+            match (rating, entry.kind) {
+                (Some(rating), 0..=3) => {
+                    let (memory, elapsed) = self.elapsed(state.as_ref(), entry.time);
+                    let outcome = self.scheduler.schedule(memory, elapsed, rating)?;
+                    let interval_secs = match entry.interval {
+                        0 => outcome.interval_secs,
+                        _ => entry.interval_secs(),
+                    };
+                    reviews.push(LoggedReview {
+                        reviewed_at: entry.time,
+                        rating,
+                        elapsed_days: elapsed.into(),
+                        memory: outcome.memory,
+                        interval_secs,
+                        was_new: state.is_none(),
+                    });
+                    let lapse = u32::from(state.is_some() && rating == Rating::Again);
+                    state = Some(CardState {
+                        memory: outcome.memory,
+                        due: entry.time + interval_secs,
+                        last_review: entry.time,
+                        reps: state.map_or(0, |s| s.reps) + 1,
+                        lapses: state.map_or(0, |s| s.lapses) + lapse,
+                    });
+                }
+                // Manual entries: "Forget" resets the card, "Set Due Date" and FSRS
+                // rescheduling move the due date.
+                (None, 4) if entry.interval == 0 => state = None,
+                (None, 4 | 5) => {
+                    if let Some(s) = state.as_mut() {
+                        s.due = entry.time + entry.interval_secs();
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(state.map(|s| (reviews, s)))
+    }
+
     fn today(&self, now: i64) -> Result<TodayStats> {
         let since = self.day_start(now);
         let unseen = self
@@ -401,6 +526,17 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `root/deck.md`, or `root/deck 2.md` and so on if that file exists.
+fn unused_path(root: &Path, deck: &str) -> PathBuf {
+    (1..)
+        .map(|n| match n {
+            1 => root.join(format!("{deck}.md")),
+            n => root.join(format!("{deck} {n}.md")),
+        })
+        .find(|p| !p.exists())
+        .expect("unbounded range")
 }
 
 fn relative(root: &Path, path: &Path) -> String {
@@ -507,6 +643,48 @@ mod tests {
         let start = inner.day_start(1_759_960_800);
         assert_eq!((start + 5 * 3600 - DAY_ROLLOVER_SECS).rem_euclid(DAY_SECS), 0);
         assert!(start <= 1_759_960_800 && 1_759_960_800 - start < DAY_SECS);
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn import_anki_package() {
+        let (dir, c) = collection(&[("Default.md", "Q: mine\nA: kept\n")]);
+        let package = dir.join("deck.apkg");
+        anki::tests::write_package(&package);
+        let summary = c.import_anki(package.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(summary.files, ["Default 2.md", "Lang/Kazakh-Verbs.md"]);
+        assert_eq!((summary.cards, summary.reviewed_cards, summary.skipped_notes), (4, 2, 1));
+
+        let inner = c.lock();
+        assert_eq!(fs::read_to_string(dir.join("Default.md")).unwrap(), "Q: mine\nA: kept\n");
+        let names: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.name).collect();
+        assert_eq!(names, ["Default 2", "Default", "Lang/Kazakh-Verbs"]);
+        let card = inner.cards.iter().find(|c| c.parsed.front == "сәлем").unwrap();
+        let state = inner.states[&card.parsed.id];
+        assert_eq!((state.reps, state.last_review, state.due), (2, 1_700_086_400, 1_700_086_400 + 3 * DAY_SECS));
+        assert_eq!(inner.store.state(&card.parsed.id).unwrap(), Some(state));
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn replay_follows_anki_schedule() {
+        let (dir, c) = collection(&[("a.md", "")]);
+        let inner = c.lock();
+        let entry = |day: i64, ease, kind, interval| anki::Revlog { time: T0 + day * DAY_SECS, ease, kind, interval };
+        let log = [entry(0, 1, 0, -600), entry(0, 3, 0, 1), entry(1, 3, 1, 4), entry(5, 1, 1, -600), entry(5, 3, 2, 2)];
+        let (reviews, state) = inner.replay(&log).unwrap().unwrap();
+        assert_eq!(reviews.len(), 5);
+        assert!(reviews[0].was_new && !reviews[1].was_new);
+        assert_eq!(reviews.iter().map(|r| r.elapsed_days).collect::<Vec<_>>(), [0.0, 0.0, 1.0, 4.0, 0.0]);
+        assert_eq!((state.reps, state.lapses, state.due), (5, 1, T0 + 7 * DAY_SECS));
+        assert!(state.memory.stability > 0.0);
+
+        // Set Due Date moves the card; Forget makes it new again.
+        let (_, moved) = inner.replay(&[log[1], entry(1, 0, 4, 10)]).unwrap().unwrap();
+        assert_eq!(moved.due, T0 + 11 * DAY_SECS);
+        assert!(inner.replay(&[log[1], entry(1, 0, 4, 0)]).unwrap().is_none());
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }

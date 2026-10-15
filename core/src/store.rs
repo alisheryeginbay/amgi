@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::scheduler::{Memory, Outcome, Rating};
 
@@ -41,6 +41,18 @@ pub struct CardState {
     pub last_review: i64,
     pub reps: u32,
     pub lapses: u32,
+}
+
+/// One row of the review log.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LoggedReview {
+    pub reviewed_at: i64,
+    pub rating: Rating,
+    pub elapsed_days: f64,
+    /// Memory state after the review.
+    pub memory: Memory,
+    pub interval_secs: i64,
+    pub was_new: bool,
 }
 
 pub struct Store {
@@ -134,40 +146,33 @@ impl Store {
             lapses: prev.map_or(0, |p| p.lapses) + lapse,
         };
         let tx = self.conn.transaction()?;
-        tx.execute(
-            "INSERT INTO review_log
-               (card_id, reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                card_id,
-                now,
-                rating as i64,
+        insert_review(
+            &tx,
+            card_id,
+            &LoggedReview {
+                reviewed_at: now,
+                rating,
                 elapsed_days,
-                state.memory.stability,
-                state.memory.difficulty,
-                outcome.interval_secs,
-                prev.is_none(),
-            ],
+                memory: state.memory,
+                interval_secs: outcome.interval_secs,
+                was_new: prev.is_none(),
+            },
         )?;
-        tx.execute(
-            "INSERT INTO card_state (card_id, stability, difficulty, due, last_review, reps, lapses)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT (card_id) DO UPDATE SET
-               stability = excluded.stability, difficulty = excluded.difficulty,
-               due = excluded.due, last_review = excluded.last_review,
-               reps = excluded.reps, lapses = excluded.lapses",
-            params![
-                card_id,
-                state.memory.stability,
-                state.memory.difficulty,
-                state.due,
-                state.last_review,
-                state.reps,
-                state.lapses,
-            ],
-        )?;
+        upsert_state(&tx, card_id, &state)?;
         tx.commit()?;
         Ok(state)
+    }
+
+    /// Persist the history and resulting state of many cards in one transaction.
+    pub fn import(&mut self, cards: &[(String, Vec<LoggedReview>, CardState)]) -> rusqlite::Result<()> {
+        let tx = self.conn.transaction()?;
+        for (card_id, reviews, state) in cards {
+            for review in reviews {
+                insert_review(&tx, card_id, review)?;
+            }
+            upsert_state(&tx, card_id, state)?;
+        }
+        tx.commit()
     }
 
     /// Number of new cards first reviewed at or after `since`.
@@ -186,6 +191,46 @@ impl Store {
             |r| r.get(0),
         )
     }
+}
+
+fn insert_review(tx: &Transaction, card_id: &str, r: &LoggedReview) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT INTO review_log
+           (card_id, reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            card_id,
+            r.reviewed_at,
+            r.rating as i64,
+            r.elapsed_days,
+            r.memory.stability,
+            r.memory.difficulty,
+            r.interval_secs,
+            r.was_new,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_state(tx: &Transaction, card_id: &str, state: &CardState) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT INTO card_state (card_id, stability, difficulty, due, last_review, reps, lapses)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT (card_id) DO UPDATE SET
+           stability = excluded.stability, difficulty = excluded.difficulty,
+           due = excluded.due, last_review = excluded.last_review,
+           reps = excluded.reps, lapses = excluded.lapses",
+        params![
+            card_id,
+            state.memory.stability,
+            state.memory.difficulty,
+            state.due,
+            state.last_review,
+            state.reps,
+            state.lapses,
+        ],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -23,6 +23,10 @@ struct AmgiApp: App {
                 Button("Reload Cards") { model.reload() }
                     .keyboardShortcut("r")
                     .disabled(model.folder == nil)
+                Divider()
+                Button("Import Anki Deck…") { model.chooseAnkiPackage() }
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
+                    .disabled(model.folder == nil || model.importing)
             }
         }
     }

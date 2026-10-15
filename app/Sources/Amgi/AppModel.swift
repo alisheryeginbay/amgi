@@ -1,6 +1,7 @@
 import AmgiCore
 import AppKit
 import Observation
+import UniformTypeIdentifiers
 
 @Observable
 @MainActor
@@ -12,8 +13,10 @@ final class AppModel {
     private(set) var warnings: [CollectionWarning] = []
     private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
     private(set) var current: StudyCard?
+    private(set) var importing = false
     var revealed = false
     var errorMessage: String?
+    var importSummary: ImportSummary?
 
     /// `nil` studies the whole collection.
     var selectedDeck: String? {
@@ -53,6 +56,29 @@ final class AppModel {
             UserDefaults.standard.set(url.path, forKey: Self.folderKey)
         }
         refresh()
+    }
+
+    /// Convert an Anki package into Markdown decks inside the open folder.
+    func chooseAnkiPackage() {
+        guard let collection else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = ["apkg", "colpkg"].compactMap { UTType(filenameExtension: $0) }
+        panel.prompt = "Import"
+        panel.message = "Choose an Anki deck (.apkg) or collection (.colpkg) to import"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        importing = true
+        Task {
+            let result = await Task.detached {
+                Result { try collection.importAnki(path: url.path) }
+            }.value
+            importing = false
+            switch result {
+            case .success(let summary): importSummary = summary
+            case .failure(let error): errorMessage = error.localizedDescription
+            }
+            refresh()
+        }
     }
 
     /// Re-read the Markdown files and update counts. Keeps the current card if it still exists.
@@ -97,6 +123,17 @@ final class AppModel {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+extension ImportSummary {
+    var message: String {
+        let decks = files.count == 1 ? "1 deck" : "\(files.count) decks"
+        var lines = ["\(cards) cards from \(notes) notes were written to \(decks). \(reviewedCards) kept their review history."]
+        if suspendedCards > 0 { lines.append("\(suspendedCards) suspended cards were left out.") }
+        if skippedNotes > 0 { lines.append("\(skippedNotes) notes could not be converted, such as image occlusions.") }
+        if mediaRemoved > 0 { lines.append("\(mediaRemoved) images and sounds were removed.") }
+        return lines.joined(separator: "\n\n")
     }
 }
 

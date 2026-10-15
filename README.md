@@ -25,6 +25,18 @@ A card's identity comes from its text (the question for basic cards, the whole t
 for clozes). You can move or reorder cards and fix answers without losing history.
 Editing a question starts the card over.
 
+## Importing from Anki
+
+**File ▸ Import Anki Deck…** (<kbd>⇧⌘I</kbd>) converts an `.apkg` or `.colpkg` into Markdown
+files in the open folder, one per deck (`Languages::Korean` becomes `Languages/Korean.md`).
+Existing files are never overwritten.
+
+- Basic note types become `Q:`/`A:` cards rendered from their templates. Cloze notes become
+  `C:` cards, with `Back Extra` kept as a note under the card. Anki can test several
+  deletions together (`c1` used twice); amgi gives each its own card.
+- Review history is replayed through amgi's FSRS scheduler, and due dates follow Anki's.
+- Suspended cards, images, sounds and image occlusion notes are left out.
+
 ## Layout
 
 - `core/`: Rust library containing the parser, FSRS-6 scheduler, SQLite store and the
