@@ -187,6 +187,8 @@ pub struct Dashboard {
 }
 
 const MATURE_SECS: i64 = 21 * DAY_SECS;
+/// Cards forgotten this many times are leeches, as in Anki.
+pub const LEECH_LAPSES: u32 = 8;
 const FORECAST_DAYS: usize = 14;
 
 /// Which cards to study.
@@ -197,14 +199,17 @@ pub enum StudyScope {
     Deck { name: String },
     /// Cards with a tag, compared case-insensitively.
     Tag { name: String },
+    /// Cards forgotten at least `LEECH_LAPSES` times.
+    Leeches,
 }
 
 impl StudyScope {
-    fn contains(&self, card: &Card) -> bool {
+    fn contains(&self, card: &Card, state: Option<&CardState>) -> bool {
         match self {
             StudyScope::All => true,
             StudyScope::Deck { name } => contains(name, &card.deck),
             StudyScope::Tag { name } => card.parsed.tags.iter().any(|t| t.eq_ignore_ascii_case(name)),
+            StudyScope::Leeches => state.is_some_and(|s| s.lapses >= LEECH_LAPSES),
         }
     }
 }
@@ -409,7 +414,9 @@ impl Inner {
     }
 
     fn in_scope<'a, 's>(&'a self, scope: &'s StudyScope) -> impl Iterator<Item = &'a Card> + use<'a, 's> {
-        self.cards.iter().filter(move |c| scope.contains(c))
+        self.cards
+            .iter()
+            .filter(move |c| scope.contains(c, self.states.get(&c.parsed.id)))
     }
 
     fn tags(&self) -> Vec<String> {
@@ -857,6 +864,22 @@ mod tests {
         assert_eq!((cards[0].reps, cards[0].due.is_some()), (1, true));
         assert_eq!((cards[1].reps, cards[1].due), (0, None));
         assert_eq!(inner.browse(&StudyScope::All).len(), 3);
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn leeches_have_many_lapses() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: one\n\nQ: 2\nA: two\n")]);
+        let mut inner = c.lock();
+        let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
+        inner.answer(&ids[1], Rating::Again, T0).unwrap();
+        // The first answer of a new card is not a lapse.
+        for i in 0..=LEECH_LAPSES {
+            inner.answer(&ids[0], Rating::Again, T0 + i64::from(i) * 60).unwrap();
+            let leeches = inner.browse(&StudyScope::Leeches).len();
+            assert_eq!(leeches, usize::from(i == LEECH_LAPSES));
+        }
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }

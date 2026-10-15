@@ -16,7 +16,7 @@ struct ContentView: View {
                     switch model.selection {
                     case .dashboard: DashboardView()
                     case .review: StudyView()
-                    case .deck, .tag: BrowseView()
+                    case .deck, .tag, .leeches: BrowseView()
                     }
                 }
             }
@@ -76,6 +76,10 @@ private struct Sidebar: View {
             Section("Review") {
                 ReviewRow()
                     .tag(SidebarItem.review)
+            }
+            Section("Saved Views") {
+                Label("Leeches", systemImage: "ladybug")
+                    .tag(SidebarItem.leeches)
             }
             // Sections collapse from the chevron shown when hovering the header.
             if !model.deckNames.isEmpty {

@@ -12,6 +12,8 @@ enum SidebarItem: Hashable {
     case deck(String)
     /// Browse cards with this tag, across all decks.
     case tag(String)
+    /// Browse cards forgotten many times.
+    case leeches
 }
 
 struct DeckName: Equatable {
@@ -49,7 +51,7 @@ final class AppModel {
             switch selection {
             case .dashboard: loadDashboard()
             case .review: loadNext()
-            case .deck, .tag: loadBrowsed()
+            case .deck, .tag, .leeches: loadBrowsed()
             }
         }
     }
@@ -60,6 +62,7 @@ final class AppModel {
         case .dashboard, .review: nil
         case .deck(let name): .deck(name: name)
         case .tag(let name): .tag(name: name)
+        case .leeches: .leeches
         }
     }
 

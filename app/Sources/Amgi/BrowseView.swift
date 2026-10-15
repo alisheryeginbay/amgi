@@ -37,6 +37,7 @@ struct BrowseView: View {
         switch model.selection {
         case .tag(let tag): model.icon(forTag: tag).map { "\($0) \(tag)" } ?? "#\(tag)"
         case .deck(let name): model.deckNames.first { $0.name == name }?.title ?? deckTitle(name)
+        case .leeches: "Leeches"
         default: ""
         }
     }

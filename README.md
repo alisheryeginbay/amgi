@@ -86,3 +86,6 @@ whenever the app comes to the front.
 
 **Review** in the sidebar studies the whole collection. Pick a deck or tag to browse its
 cards in a table: search, sort by any column, and double-click a card to open its file.
+
+**Saved Views ▸ Leeches** lists cards you have forgotten 8 or more times, across all decks:
+they usually need rewording or splitting.
