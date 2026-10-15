@@ -8,7 +8,7 @@ pub mod parser;
 pub mod scheduler;
 pub mod store;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -81,7 +81,8 @@ type Result<T, E = AmgiError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct DeckInfo {
-    /// File path relative to the collection root, without the `.md` extension.
+    /// File path relative to the collection root, without the `.md` extension, or a
+    /// folder. A deck contains the decks below it: `lang` holds `lang.md` and the `lang` folder.
     pub name: String,
     pub total: u32,
     pub due: u32,
@@ -193,11 +194,12 @@ impl CardCollection {
         self.lock().scheduler.desired_retention = retention.clamp(0.7, 0.99);
     }
 
+    /// Every deck and folder, parents before children. Counts include subdecks.
     pub fn decks(&self) -> Result<Vec<DeckInfo>> {
         self.lock().decks(unix_now())
     }
 
-    /// The next card to study, from one deck or (with `None`) the whole collection.
+    /// The next card to study from a deck and its subdecks, or (with `None`) the whole collection.
     pub fn next_card(&self, deck: Option<String>) -> Result<Option<StudyCard>> {
         self.lock().next_card(deck.as_deref(), unix_now())
     }
@@ -259,7 +261,8 @@ impl Inner {
     fn reload(&mut self) -> Result<()> {
         let mut files = Vec::new();
         collect_markdown(&self.root, &mut files)?;
-        files.sort();
+        // By deck name, so a deck's own cards come before its subdecks'.
+        files.sort_by_key(|f| f.with_extension(""));
 
         self.cards.clear();
         self.index.clear();
@@ -309,33 +312,37 @@ impl Inner {
     fn in_deck<'a>(&'a self, deck: Option<&'a str>) -> impl Iterator<Item = &'a Card> + 'a {
         self.cards
             .iter()
-            .filter(move |c| deck.is_none_or(|d| c.deck == d))
+            .filter(move |c| deck.is_none_or(|d| contains(d, &c.deck)))
     }
 
     fn decks(&self, now: i64) -> Result<Vec<DeckInfo>> {
         let remaining = self.new_remaining(now)?;
-        let mut decks: Vec<DeckInfo> = Vec::new();
+        // Keyed by path components, so parents sort before their children.
+        let mut decks: BTreeMap<Vec<&str>, DeckInfo> = BTreeMap::new();
         for card in &self.cards {
-            if decks.last().is_none_or(|d| d.name != card.deck) {
-                decks.push(DeckInfo {
-                    name: card.deck.clone(),
+            let parts: Vec<&str> = card.deck.split('/').collect();
+            for depth in 1..=parts.len() {
+                let deck = decks.entry(parts[..depth].to_vec()).or_insert_with(|| DeckInfo {
+                    name: parts[..depth].join("/"),
                     total: 0,
                     due: 0,
                     new: 0,
                 });
-            }
-            let deck = decks.last_mut().expect("pushed above");
-            deck.total += 1;
-            match self.states.get(&card.parsed.id) {
-                Some(s) if s.due <= now => deck.due += 1,
-                Some(_) => {}
-                None => deck.new += 1,
+                deck.total += 1;
+                match self.states.get(&card.parsed.id) {
+                    Some(s) if s.due <= now => deck.due += 1,
+                    Some(_) => {}
+                    None => deck.new += 1,
+                }
             }
         }
-        for deck in &mut decks {
-            deck.new = deck.new.min(remaining);
-        }
-        Ok(decks)
+        Ok(decks
+            .into_values()
+            .map(|d| DeckInfo {
+                new: d.new.min(remaining),
+                ..d
+            })
+            .collect())
     }
 
     fn next_card(&self, deck: Option<&str>, now: i64) -> Result<Option<StudyCard>> {
@@ -543,6 +550,11 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Whether `deck` is `parent` or one of its subdecks.
+fn contains(parent: &str, deck: &str) -> bool {
+    deck.strip_prefix(parent).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
 /// `root/deck.md`, or `root/deck 2.md` and so on if that file exists.
 fn unused_path(root: &Path, deck: &str) -> PathBuf {
     (1..)
@@ -602,7 +614,8 @@ mod tests {
 
         let decks = inner.decks(T0).unwrap();
         let names: Vec<_> = decks.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, ["a", "sub/b"]);
+        assert_eq!(names, ["a", "sub", "sub/b"]);
+        assert_eq!((decks[1].total, decks[1].new), (2, 2));
         assert_eq!((decks[0].total, decks[0].new, decks[0].due), (2, 2, 0));
 
         // New cards come in file order.
@@ -630,6 +643,25 @@ mod tests {
             inner.answer("nope", Rating::Good, T0),
             Err(AmgiError::UnknownCard { .. })
         ));
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn decks_contain_subdecks() {
+        let (dir, c) = collection(&[
+            ("lang.md", "Q: l\nA: 1\n"),
+            ("lang/ko.md", "Q: k\nA: 2\n"),
+            ("lang/ko/verbs.md", "Q: v\nA: 3\n"),
+            ("language.md", "Q: x\nA: 4\n"),
+        ]);
+        let inner = c.lock();
+        let decks = inner.decks(T0).unwrap();
+        let summary: Vec<_> = decks.iter().map(|d| (d.name.as_str(), d.total)).collect();
+        assert_eq!(summary, [("lang", 3), ("lang/ko", 2), ("lang/ko/verbs", 1), ("language", 1)]);
+        let fronts: Vec<_> = inner.in_deck(Some("lang/ko")).map(|c| c.parsed.front.as_str()).collect();
+        assert_eq!(fronts, ["k", "v"]);
+        assert_eq!(inner.in_deck(Some("lang")).count(), 3);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -676,7 +708,7 @@ mod tests {
         let inner = c.lock();
         assert_eq!(fs::read_to_string(dir.join("Default.md")).unwrap(), "Q: mine\nA: kept\n");
         let names: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.name).collect();
-        assert_eq!(names, ["Default 2", "Default", "Lang/Kazakh-Verbs"]);
+        assert_eq!(names, ["Default", "Default 2", "Lang", "Lang/Kazakh-Verbs"]);
         let card = inner.cards.iter().find(|c| c.parsed.front == "сәлем").unwrap();
         let state = inner.states[&card.parsed.id];
         assert_eq!((state.reps, state.last_review, state.due), (2, 1_700_086_400, 1_700_086_400 + 3 * DAY_SECS));

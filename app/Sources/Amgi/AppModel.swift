@@ -33,7 +33,8 @@ final class AppModel {
         }
     }
 
-    var totalDue: UInt32 { decks.reduce(0) { $0 + $1.due } }
+    /// Top-level decks already include their subdecks.
+    var totalDue: UInt32 { decks.filter { !$0.name.contains("/") }.reduce(0) { $0 + $1.due } }
 
     func chooseFolder() {
         let panel = NSOpenPanel()

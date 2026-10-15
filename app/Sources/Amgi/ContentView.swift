@@ -60,38 +60,13 @@ private struct WelcomeView: View {
 private struct Sidebar: View {
     @Environment(AppModel.self) private var model
     @State private var showingWarnings = false
-
-    /// Decks grouped by folder; top-level decks first.
-    private var groups: [(folder: String, decks: [DeckInfo])] {
-        let grouped = Dictionary(grouping: model.decks) { deck in
-            deck.name.split(separator: "/").dropLast().joined(separator: "/")
-        }
-        return grouped.keys.sorted().map { ($0, grouped[$0]!) }
-    }
+    /// Expanded decks; the collection itself starts open.
+    @State private var expanded: Set<String> = [DeckNode.rootID]
 
     var body: some View {
         @Bindable var model = model
         List(selection: $model.selectedDeck) {
-            HStack {
-                Label("All Cards", systemImage: "rectangle.stack")
-                Spacer()
-                DeckCounts(due: model.totalDue, new: model.today.newAvailable)
-            }
-            .tag(String?.none)
-
-            ForEach(groups, id: \.folder) { group in
-                Section(group.folder.isEmpty ? (model.folder?.lastPathComponent ?? "Decks") : group.folder) {
-                    ForEach(group.decks, id: \.name) { deck in
-                        HStack {
-                            Text(deckTitle(deck.name))
-                                .lineLimit(1)
-                            Spacer()
-                            DeckCounts(due: deck.due, new: deck.new)
-                        }
-                        .tag(String?.some(deck.name))
-                    }
-                }
-            }
+            DeckTree(node: DeckNode.tree(model: model), expanded: $expanded)
         }
         .safeAreaInset(edge: .bottom) {
             Text("\(model.today.reviewed) reviewed today")
@@ -114,6 +89,81 @@ private struct Sidebar: View {
                 }
             }
         }
+    }
+}
+
+/// A deck in the sidebar. The root is the whole collection; every other node is a
+/// deck file, a folder, or both (`lang.md` and `lang/`).
+private struct DeckNode: Identifiable {
+    static let rootID = ""
+
+    let id: String
+    let title: String
+    let children: [DeckNode]
+
+    /// Selection value: `nil` studies the whole collection.
+    var selection: String? { id == Self.rootID ? nil : id }
+
+    @MainActor
+    static func tree(model: AppModel) -> DeckNode {
+        // `decks` lists parents before children, so grouping keeps file order.
+        let byParent = Dictionary(grouping: model.decks) { deck in
+            deck.name.split(separator: "/").dropLast().joined(separator: "/")
+        }
+        func children(of parent: String) -> [DeckNode] {
+            (byParent[parent] ?? []).map { deck in
+                DeckNode(id: deck.name, title: deckTitle(deck.name), children: children(of: deck.name))
+            }
+        }
+        return DeckNode(
+            id: rootID,
+            title: model.folder?.lastPathComponent ?? "All Cards",
+            children: children(of: "")
+        )
+    }
+}
+
+private struct DeckTree: View {
+    let node: DeckNode
+    @Binding var expanded: Set<String>
+
+    var body: some View {
+        if node.children.isEmpty {
+            row
+        } else {
+            DisclosureGroup(isExpanded: isExpanded) {
+                ForEach(node.children) { child in
+                    DeckTree(node: child, expanded: $expanded)
+                }
+            } label: {
+                row
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var row: some View {
+        if node.id == DeckNode.rootID {
+            Label(node.title, systemImage: "rectangle.stack")
+                .tag(node.selection)
+        } else if !node.children.isEmpty {
+            Label(node.title, systemImage: "folder")
+                .lineLimit(1)
+                .tag(node.selection)
+        } else {
+            Label(node.title, systemImage: "rectangle.portrait.on.rectangle.portrait")
+                .lineLimit(1)
+                .tag(node.selection)
+        }
+    }
+
+    private var isExpanded: Binding<Bool> {
+        Binding(
+            get: { expanded.contains(node.id) },
+            set: { open in
+                if open { expanded.insert(node.id) } else { expanded.remove(node.id) }
+            }
+        )
     }
 }
 

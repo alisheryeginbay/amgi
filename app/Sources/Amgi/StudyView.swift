@@ -27,7 +27,7 @@ struct StudyView: View {
                 )
             }
         }
-        .navigationTitle(model.selectedDeck.map(deckTitle) ?? "All Cards")
+        .navigationTitle(model.selectedDeck.map(deckTitle) ?? model.folder?.lastPathComponent ?? "All Cards")
         .navigationSubtitle(subtitle)
         .toolbar {
             if let card = model.current {

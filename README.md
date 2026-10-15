@@ -2,7 +2,8 @@
 
 Plain-text flash cards, scheduled with [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm).
 
-A collection is a folder of Markdown files. Each file is a deck. Review history is
+A collection is a folder of Markdown files. Each file is a deck, and folders nest
+decks: studying `lang` covers `lang.md` and everything in `lang/`. Review history is
 stored in `.amgi.sqlite` at the root of the folder.
 
 ## Card format
