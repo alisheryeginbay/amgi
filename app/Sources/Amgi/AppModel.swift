@@ -22,6 +22,8 @@ final class AppModel {
     private(set) var folder: URL?
     private(set) var decks: [DeckInfo] = []
     private(set) var tags: [String] = []
+    /// Lowercased tag → icon, such as an emoji.
+    private(set) var tagIcons: [String: String] = [:]
     private(set) var warnings: [CollectionWarning] = []
     private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
     private(set) var current: StudyCard?
@@ -121,6 +123,7 @@ final class AppModel {
         perform {
             decks = try collection.decks()
             tags = collection.tags()
+            tagIcons = try collection.tagIcons()
             today = try collection.today()
             warnings = collection.warnings()
         }
@@ -154,6 +157,19 @@ final class AppModel {
         perform { try collection.answer(cardId: card.id, rating: rating) }
         current = nil
         refresh()
+    }
+
+    func icon(forTag tag: String) -> String? {
+        tagIcons[tag.lowercased()]
+    }
+
+    /// `nil` removes the icon.
+    func setIcon(_ icon: String?, forTag tag: String) {
+        guard let collection else { return }
+        perform {
+            try collection.setTagIcon(tag: tag, icon: icon)
+            tagIcons = try collection.tagIcons()
+        }
     }
 
     /// Open a deck file, given relative to the collection root.

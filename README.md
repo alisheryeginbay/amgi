@@ -47,7 +47,8 @@ A: to go
 
 Tags go on the card's last lines, after its first one, and only a line made entirely
 of `#tag` words counts, so a `# Heading` stays text. Pick a tag in the sidebar to browse
-its cards across decks.
+its cards across decks. Right-click a tag and choose **Choose Icon…** to give it an emoji;
+icons are kept in `.amgi.sqlite`.
 
 ## Importing from Anki
 

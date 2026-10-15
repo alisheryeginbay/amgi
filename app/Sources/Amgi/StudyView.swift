@@ -7,7 +7,7 @@ struct StudyView: View {
     var body: some View {
         Group {
             if let card = model.current {
-                CardContent(card: card, revealed: model.revealed, baseURL: deckDirectory(card))
+                CardContent(card: card, revealed: model.revealed, baseURL: deckDirectory(card), icons: model.tagIcons)
                     .id(card.id)
                     .transition(.opacity)
                     // Glass lives only on the floating controls, above the content.
@@ -49,6 +49,7 @@ private struct CardContent: View {
     let card: StudyCard
     let revealed: Bool
     let baseURL: URL?
+    let icons: [String: String]
 
     var body: some View {
         ScrollView {
@@ -56,7 +57,7 @@ private struct CardContent: View {
                 HStack(spacing: 10) {
                     Text(card.deck)
                         .foregroundStyle(.tertiary)
-                    TagPills(tags: card.tags)
+                    TagPills(tags: card.tags, icons: icons)
                 }
                 .font(.subheadline)
                 .padding(.bottom, 20)

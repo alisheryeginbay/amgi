@@ -5,14 +5,17 @@ func deckTitle(_ name: String) -> String {
     name.split(separator: "/").last.map(String.init) ?? name
 }
 
-/// A card's tags as capsules, in the surrounding font.
+/// A card's tags as capsules, in the surrounding font. Takes the icons rather than
+/// reading the model, since table cells do not always get the environment.
 struct TagPills: View {
     let tags: [String]
+    /// Lowercased tag → icon.
+    let icons: [String: String]
 
     var body: some View {
         HStack(spacing: 4) {
             ForEach(tags, id: \.self) { tag in
-                Text(tag)
+                Text([icons[tag.lowercased()], tag].compactMap(\.self).joined(separator: " "))
                     .lineLimit(1)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 1)

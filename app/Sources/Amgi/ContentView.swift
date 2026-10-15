@@ -90,9 +90,7 @@ private struct Sidebar: View {
             if !model.tags.isEmpty {
                 Section("Tags", isExpanded: $tagsExpanded) {
                     ForEach(model.tags, id: \.self) { tag in
-                        Label(tag, systemImage: "number")
-                            .lineLimit(1)
-                            .tag(SidebarItem.tag(tag))
+                        TagRow(tag: tag)
                     }
                 }
             }
@@ -176,6 +174,96 @@ private struct DeckTree: View {
                 if open { expanded.insert(node.id) } else { expanded.remove(node.id) }
             }
         )
+    }
+}
+
+private struct TagRow: View {
+    @Environment(AppModel.self) private var model
+    let tag: String
+    @State private var choosingIcon = false
+
+    var body: some View {
+        let icon = model.icon(forTag: tag)
+        Label {
+            Text(tag)
+        } icon: {
+            if let icon { Text(icon) } else { Image(systemName: "number") }
+        }
+        .lineLimit(1)
+        .tag(SidebarItem.tag(tag))
+        .contextMenu {
+            Button("Choose Icon…") { choosingIcon = true }
+            if icon != nil {
+                Button("Remove Icon") { model.setIcon(nil, forTag: tag) }
+            }
+        }
+        .popover(isPresented: $choosingIcon, arrowEdge: .trailing) {
+            // Popovers are hosted outside the window's view tree.
+            TagIconPicker(tag: tag)
+                .environment(model)
+        }
+    }
+}
+
+/// Common emoji to pick from, with the system emoji picker for everything else.
+private struct TagIconPicker: View {
+    private static let suggestions = Array("📚📝🧠💡🔬🧪🧮📐🌍🗺️🏛️🎨🎵💻⚙️🩺💊🌱🐾🍎⭐️🔥❤️✅")
+        .map(String.init)
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let tag: String
+    @State private var custom = ""
+    @FocusState private var fieldFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 4), count: 8), spacing: 4) {
+                ForEach(Self.suggestions, id: \.self) { emoji in
+                    Button {
+                        choose(emoji)
+                    } label: {
+                        Text(emoji)
+                            .font(.title2)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                model.icon(forTag: tag) == emoji ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
+                                in: .rect(cornerRadius: 6)
+                            )
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            HStack {
+                TextField("Other emoji", text: $custom)
+                    .focused($fieldFocused)
+                    .frame(width: 110)
+                    .onChange(of: custom) {
+                        // Keep only the last character typed or picked.
+                        if let last = custom.last { choose(String(last)) }
+                    }
+                Button {
+                    fieldFocused = true
+                    NSApp.orderFrontCharacterPalette(nil)
+                } label: {
+                    Image(systemName: "face.smiling")
+                }
+                .help("Show Emoji & Symbols")
+                Spacer()
+                Button("Remove") {
+                    model.setIcon(nil, forTag: tag)
+                    dismiss()
+                }
+                .disabled(model.icon(forTag: tag) == nil)
+            }
+        }
+        .padding(14)
+    }
+
+    private func choose(_ icon: String) {
+        model.setIcon(icon, forTag: tag)
+        dismiss()
     }
 }
 

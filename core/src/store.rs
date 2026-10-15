@@ -31,6 +31,11 @@ CREATE TABLE review_log (
 );
 CREATE INDEX review_log_card ON review_log (card_id, reviewed_at);
 CREATE INDEX review_log_time ON review_log (reviewed_at);
+"#, r#"
+CREATE TABLE tag_icon (
+    tag  TEXT PRIMARY KEY,
+    icon TEXT NOT NULL
+);
 "#];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -212,6 +217,26 @@ impl Store {
             |r| r.get(0),
         )
     }
+
+    /// Lowercased tag → icon.
+    pub fn tag_icons(&self) -> rusqlite::Result<HashMap<String, String>> {
+        let mut stmt = self.conn.prepare("SELECT tag, icon FROM tag_icon")?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
+    }
+
+    /// `None` removes the icon. `tag` is stored lowercased.
+    pub fn set_tag_icon(&self, tag: &str, icon: Option<&str>) -> rusqlite::Result<()> {
+        let tag = tag.to_lowercase();
+        match icon {
+            Some(icon) => self.conn.execute(
+                "INSERT INTO tag_icon (tag, icon) VALUES (?1, ?2)
+                 ON CONFLICT (tag) DO UPDATE SET icon = excluded.icon",
+                params![tag, icon],
+            )?,
+            None => self.conn.execute("DELETE FROM tag_icon WHERE tag = ?1", [tag])?,
+        };
+        Ok(())
+    }
 }
 
 fn insert_review(tx: &Transaction, card_id: &str, r: &LoggedReview) -> rusqlite::Result<()> {
@@ -257,6 +282,16 @@ fn upsert_state(tx: &Transaction, card_id: &str, state: &CardState) -> rusqlite:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tag_icons() {
+        let store = Store::open_in_memory().unwrap();
+        store.set_tag_icon("Korean", Some("🇰🇷")).unwrap();
+        store.set_tag_icon("korean", Some("🐯")).unwrap();
+        store.set_tag_icon("verbs", Some("🏃")).unwrap();
+        store.set_tag_icon("VERBS", None).unwrap();
+        assert_eq!(store.tag_icons().unwrap(), HashMap::from([("korean".into(), "🐯".into())]));
+    }
 
     #[test]
     fn record_and_reload() {

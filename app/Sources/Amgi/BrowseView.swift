@@ -31,7 +31,7 @@ struct BrowseView: View {
             }
             .width(ideal: 100)
             TableColumn("Tags") { card in
-                TagPills(tags: card.tags)
+                TagPills(tags: card.tags, icons: model.tagIcons)
             }
             .width(ideal: 100)
             TableColumn("Due", value: \.dueOrder) { card in
@@ -90,7 +90,7 @@ struct BrowseView: View {
 
     private var title: String {
         switch model.selection {
-        case .tag(let tag): "#\(tag)"
+        case .tag(let tag): model.icon(forTag: tag).map { "\($0) \(tag)" } ?? "#\(tag)"
         case .deck(let name): model.decks.first { $0.name == name }?.title ?? deckTitle(name)
         default: ""
         }

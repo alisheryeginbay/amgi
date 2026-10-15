@@ -282,6 +282,17 @@ impl CardCollection {
         self.lock().tags()
     }
 
+    /// Icons chosen for tags, such as an emoji, keyed by lowercased tag.
+    pub fn tag_icons(&self) -> Result<HashMap<String, String>> {
+        Ok(self.lock().store.tag_icons()?)
+    }
+
+    /// Set or, with `None` or an empty string, remove a tag's icon. Tags compare case-insensitively.
+    pub fn set_tag_icon(&self, tag: String, icon: Option<String>) -> Result<()> {
+        let icon = icon.as_deref().map(str::trim).filter(|i| !i.is_empty());
+        Ok(self.lock().store.set_tag_icon(&tag, icon)?)
+    }
+
     pub fn answer(&self, card_id: String, rating: Rating) -> Result<()> {
         self.lock().answer(&card_id, rating, unix_now())
     }
