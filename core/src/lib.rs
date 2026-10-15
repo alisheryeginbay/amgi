@@ -3,8 +3,8 @@
 //! A collection is a directory of Markdown files; each file is a deck. Review
 //! state lives in `.amgi.sqlite` at the collection root.
 
-pub mod fsrs;
 pub mod parser;
+pub mod scheduler;
 pub mod store;
 
 use std::collections::HashMap;
@@ -13,10 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub use fsrs::Rating;
 pub use parser::CardKind;
-use fsrs::Scheduler;
+pub use scheduler::Rating;
 use parser::ParsedCard;
+use scheduler::{Memory, Scheduler};
 use store::{CardState, Store};
 
 uniffi::setup_scaffolding!();
@@ -36,11 +36,21 @@ pub enum AmgiError {
     Database { message: String },
     #[error("unknown card: {id}")]
     UnknownCard { id: String },
+    #[error("scheduler error: {message}")]
+    Scheduler { message: String },
 }
 
 impl From<std::io::Error> for AmgiError {
     fn from(e: std::io::Error) -> Self {
         AmgiError::Io {
+            message: e.to_string(),
+        }
+    }
+}
+
+impl From<fsrs::FSRSError> for AmgiError {
+    fn from(e: fsrs::FSRSError) -> Self {
+        AmgiError::Scheduler {
             message: e.to_string(),
         }
     }
@@ -144,7 +154,7 @@ impl CardCollection {
     }
 
     /// Target probability of recall when a card comes due, between 0.7 and 0.99.
-    pub fn set_desired_retention(&self, retention: f64) {
+    pub fn set_desired_retention(&self, retention: f32) {
         self.lock().scheduler.desired_retention = retention.clamp(0.7, 0.99);
     }
 
@@ -296,24 +306,25 @@ impl Inner {
                 .or_else(|| earliest_due_before(now + LEARN_AHEAD_SECS)),
             None => earliest_due_before(now + LEARN_AHEAD_SECS),
         };
-        Ok(card.map(|c| self.study_card(c, now)))
+        card.map(|c| self.study_card(c, now)).transpose()
     }
 
-    fn elapsed(&self, state: Option<&CardState>, now: i64) -> (Option<fsrs::Memory>, f64) {
+    /// Memory state and whole study days since the last review (0 on the same day).
+    fn elapsed(&self, state: Option<&CardState>, now: i64) -> (Option<Memory>, u32) {
         match state {
-            Some(s) => (
-                Some(s.memory),
-                (now - s.last_review).max(0) as f64 / DAY_SECS as f64,
-            ),
-            None => (None, 0.0),
+            Some(s) => {
+                let days = (self.day_start(now) - self.day_start(s.last_review)) / DAY_SECS;
+                (Some(s.memory), days.max(0) as u32)
+            }
+            None => (None, 0),
         }
     }
 
-    fn study_card(&self, card: &Card, now: i64) -> StudyCard {
+    fn study_card(&self, card: &Card, now: i64) -> Result<StudyCard> {
         let state = self.states.get(&card.parsed.id);
         let (memory, elapsed) = self.elapsed(state, now);
-        let preview = self.scheduler.preview(memory, elapsed);
-        StudyCard {
+        let preview = self.scheduler.preview(memory, elapsed)?;
+        Ok(StudyCard {
             id: card.parsed.id.clone(),
             deck: card.deck.clone(),
             path: card.path.clone(),
@@ -323,7 +334,7 @@ impl Inner {
             back: card.parsed.back.clone(),
             is_new: state.is_none(),
             intervals: preview.iter().map(|o| o.interval_secs).collect(),
-        }
+        })
     }
 
     fn answer(&mut self, card_id: &str, rating: Rating, now: i64) -> Result<()> {
@@ -332,10 +343,10 @@ impl Inner {
         }
         let prev = self.states.get(card_id).copied();
         let (memory, elapsed) = self.elapsed(prev.as_ref(), now);
-        let outcome = self.scheduler.schedule(memory, elapsed, rating);
+        let outcome = self.scheduler.schedule(memory, elapsed, rating)?;
         let state = self
             .store
-            .record_review(card_id, now, rating, elapsed, prev, outcome)?;
+            .record_review(card_id, now, rating, elapsed.into(), prev, outcome)?;
         self.states.insert(card_id.to_string(), state);
         Ok(())
     }

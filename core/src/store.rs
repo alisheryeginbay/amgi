@@ -6,7 +6,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::fsrs::{Memory, Outcome, Rating};
+use crate::scheduler::{Memory, Outcome, Rating};
 
 const MIGRATIONS: &[&str] = &[r#"
 CREATE TABLE card_state (
