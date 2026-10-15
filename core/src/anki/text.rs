@@ -1,7 +1,7 @@
 //! Turning Anki note content into amgi Markdown: template rendering, HTML to
 //! inline Markdown, and `{{c1::cloze}}` to `[cloze]`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// Render an Anki card template. Supports `{{Field}}`, `{{filter:Field}}`,
 /// `{{#Field}}…{{/Field}}` and `{{^Field}}…{{/Field}}`. Unknown fields render empty.
@@ -102,18 +102,22 @@ pub fn strip_html(html: &str) -> String {
     out
 }
 
-/// Things lost when converting, reported to the user.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct Losses {
-    pub images: u32,
+/// Media referenced while converting.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Media {
+    /// Path from the deck file being written to the media folder, such as `../media/`.
+    pub prefix: String,
+    /// Anki media file names used by images.
+    pub images: BTreeSet<String>,
+    /// Sounds, which are removed.
     pub sounds: u32,
 }
 
 /// Convert Anki field HTML to inline Markdown on as few lines as needed. Text is
 /// escaped so it renders literally, including `[` and `]` (cloze markup in amgi).
-/// Cloze markers `{{c1::…}}` pass through unchanged.
-pub fn html_to_markdown(html: &str, losses: &mut Losses) -> String {
-    let html = strip_sounds(html, losses);
+/// Cloze markers `{{c1::…}}` pass through unchanged. Images link into the media folder.
+pub fn html_to_markdown(html: &str, media: &mut Media) -> String {
+    let html = strip_sounds(html, media);
     let mut out = String::new();
     let mut in_code = false;
     // Raw-text elements whose content is never shown.
@@ -173,21 +177,67 @@ pub fn html_to_markdown(html: &str, losses: &mut Losses) -> String {
                 out.push('`');
                 in_code = !closing;
             }
-            "img" => losses.images += 1,
+            "img" => {
+                if let Some(image) = attribute(tag, "src").and_then(|src| image_markdown(&src, media)) {
+                    out.push_str(&image);
+                }
+            }
             _ => {}
         }
     }
     tidy(&out)
 }
 
+/// Value of an HTML attribute, quoted or not, with entities decoded.
+fn attribute(tag: &str, name: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(name).map(|i| i + from) {
+        from = i + name.len();
+        // Must be a whole attribute name followed by `=`.
+        let before_ok = lower[..i].ends_with(|c: char| c.is_whitespace());
+        let Some(rest) = lower[from..].trim_start().strip_prefix('=') else { continue };
+        if !before_ok {
+            continue;
+        }
+        let value_start = tag.len() - rest.trim_start().len();
+        let value = &tag[value_start..];
+        let raw = match value.chars().next()? {
+            q @ ('"' | '\'') => &value[1..value[1..].find(q)? + 1],
+            // `<img src=a.png/>`: the slash closes the tag.
+            _ => value.split(char::is_whitespace).next()?.trim_end_matches('/'),
+        };
+        return Some(decode_entities(raw));
+    }
+    None
+}
+
+/// `![](media/name.png)` for a file in the package. Remote images are linked as they are.
+fn image_markdown(src: &str, media: &mut Media) -> Option<String> {
+    let path = if src.contains("://") {
+        src.to_string()
+    } else {
+        // Anki media is a flat folder; anything else could escape the collection.
+        if src.is_empty() || src.starts_with('.') || src.contains(['/', '\\']) {
+            return None;
+        }
+        media.images.insert(src.to_string());
+        format!("{}{src}", media.prefix)
+    };
+    if path.contains(['<', '>', '\n']) {
+        return None;
+    }
+    Some(if path.contains([' ', '(', ')']) { format!("![](<{path}>)") } else { format!("![]({path})") })
+}
+
 /// Remove `[sound:file.mp3]` references.
-fn strip_sounds(html: &str, losses: &mut Losses) -> String {
+fn strip_sounds(html: &str, media: &mut Media) -> String {
     let mut out = String::new();
     let mut rest = html;
     while let Some(start) = rest.find("[sound:") {
         let Some(end) = rest[start..].find(']') else { break };
         out.push_str(&rest[..start]);
-        losses.sounds += 1;
+        media.sounds += 1;
         rest = &rest[start + end + 1..];
     }
     out.push_str(rest);
@@ -403,7 +453,7 @@ mod tests {
     use super::*;
 
     fn md(html: &str) -> String {
-        html_to_markdown(html, &mut Losses::default())
+        html_to_markdown(html, &mut Media::default())
     }
 
     #[test]
@@ -426,9 +476,12 @@ mod tests {
         assert_eq!(md("2*3 [x] snake_case _x_ <code>v[0]*2</code>"), r"2\*3 \[x\] snake_case \_x\_ `v[0]*2`");
         assert_eq!(md("<style>.x{}</style>Q: real<!-- c -->"), r"Q\: real");
         assert_eq!(md("x < y &bogus; z"), "x < y &bogus; z");
-        let mut losses = Losses::default();
-        assert_eq!(html_to_markdown("<img src=\"a.png\">hi [sound:a.mp3]", &mut losses), "hi");
-        assert_eq!(losses, Losses { images: 1, sounds: 1 });
+        let mut media = Media { prefix: "../media/".into(), ..Media::default() };
+        let html = r#"<img src="a.png">hi [sound:a.mp3]<IMG class=x SRC='b &amp; c.jpg'/><img src=../x.png><img data-src=no>"#;
+        assert_eq!(html_to_markdown(html, &mut media), "![](../media/a.png)hi ![](<../media/b & c.jpg>)");
+        assert_eq!(media.images.iter().collect::<Vec<_>>(), ["a.png", "b & c.jpg"]);
+        assert_eq!(media.sounds, 1);
+        assert_eq!(md("<img src=https://x.org/a.png>"), "![](https://x.org/a.png)");
     }
 
     #[test]

@@ -23,6 +23,8 @@ use store::{CardState, LoggedReview, Store};
 uniffi::setup_scaffolding!();
 
 pub const DB_FILE: &str = ".amgi.sqlite";
+/// Folder at the collection root that imported images are copied to.
+pub const MEDIA_DIR: &str = "media";
 const DAY_SECS: i64 = 86_400;
 /// The scheduling day rolls over at 4am local time, so late-night study counts as the same day.
 const DAY_ROLLOVER_SECS: i64 = 4 * 3600;
@@ -131,8 +133,12 @@ pub struct ImportSummary {
     pub skipped_notes: u32,
     /// Suspended Anki cards, which are left out.
     pub suspended_cards: u32,
-    /// Images and sounds removed from cards.
-    pub media_removed: u32,
+    /// Images now in the collection's `media` folder.
+    pub images: u32,
+    /// Images cards refer to that the package does not contain.
+    pub missing_images: u32,
+    /// Sounds removed from cards.
+    pub sounds_removed: u32,
 }
 
 struct Card {
@@ -209,10 +215,17 @@ impl CardCollection {
     }
 
     /// Import an Anki package (`.apkg` or `.colpkg`) as Markdown decks in this
-    /// collection, keeping review history. Existing files are never overwritten.
+    /// collection, keeping review history. Images go to a `media` folder at the
+    /// root. Existing files are never overwritten.
     pub fn import_anki(&self, path: String) -> Result<ImportSummary> {
-        let conversion = anki::Package::read(Path::new(&path))?.convert();
-        self.lock().import_anki(conversion)
+        let package = anki::Package::read(Path::new(&path))?;
+        let conversion = package.convert();
+        let root = self.lock().root.clone();
+        let images = package.write_media(&conversion.media.images, &root.join(MEDIA_DIR))?;
+        let mut summary = self.lock().import_anki(conversion)?;
+        summary.missing_images -= images;
+        summary.images = images;
+        Ok(summary)
     }
 }
 
@@ -421,7 +434,9 @@ impl Inner {
             reviewed_cards,
             skipped_notes: conversion.skipped_notes,
             suspended_cards: conversion.suspended_cards,
-            media_removed: conversion.losses.images + conversion.losses.sounds,
+            images: 0,
+            missing_images: conversion.media.images.len() as u32,
+            sounds_removed: conversion.media.sounds,
         })
     }
 
@@ -655,6 +670,8 @@ mod tests {
         let summary = c.import_anki(package.to_string_lossy().into_owned()).unwrap();
         assert_eq!(summary.files, ["Default 2.md", "Lang/Kazakh-Verbs.md"]);
         assert_eq!((summary.cards, summary.reviewed_cards, summary.skipped_notes), (4, 2, 1));
+        assert_eq!((summary.images, summary.missing_images), (1, 0));
+        assert_eq!(fs::read(dir.join("media/hi.png")).unwrap(), b"png bytes");
 
         let inner = c.lock();
         assert_eq!(fs::read_to_string(dir.join("Default.md")).unwrap(), "Q: mine\nA: kept\n");

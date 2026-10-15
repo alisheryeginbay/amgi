@@ -132,7 +132,9 @@ extension ImportSummary {
         var lines = ["\(cards) cards from \(notes) notes were written to \(decks). \(reviewedCards) kept their review history."]
         if suspendedCards > 0 { lines.append("\(suspendedCards) suspended cards were left out.") }
         if skippedNotes > 0 { lines.append("\(skippedNotes) notes could not be converted, such as image occlusions.") }
-        if mediaRemoved > 0 { lines.append("\(mediaRemoved) images and sounds were removed.") }
+        if images > 0 { lines.append("\(images) images were copied to the media folder.") }
+        if missingImages > 0 { lines.append("\(missingImages) images were missing from the package.") }
+        if soundsRemoved > 0 { lines.append("\(soundsRemoved) sounds were removed.") }
         return lines.joined(separator: "\n\n")
     }
 }

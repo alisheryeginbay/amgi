@@ -11,7 +11,7 @@ struct StudyView: View {
     var body: some View {
         Group {
             if let card = model.current {
-                CardContent(card: card, revealed: model.revealed)
+                CardContent(card: card, revealed: model.revealed, baseURL: deckDirectory(card))
                     .id(card.id)
                     .transition(.opacity)
                     // Glass lives only on the floating controls, above the content.
@@ -43,6 +43,11 @@ struct StudyView: View {
         }
     }
 
+    /// Image paths in a card are relative to its deck file.
+    private func deckDirectory(_ card: StudyCard) -> URL? {
+        model.folder?.appending(path: card.path).deletingLastPathComponent()
+    }
+
     private var subtitle: String {
         let due = selected?.due ?? model.totalDue
         let new = selected?.new ?? model.today.newAvailable
@@ -53,6 +58,7 @@ struct StudyView: View {
 private struct CardContent: View {
     let card: StudyCard
     let revealed: Bool
+    let baseURL: URL?
 
     var body: some View {
         ScrollView {
@@ -64,18 +70,18 @@ private struct CardContent: View {
 
                 switch card.kind {
                 case .basic:
-                    MarkdownText(card.front)
+                    MarkdownText(card.front, baseURL: baseURL)
                         .font(.title)
                     if revealed {
                         Divider()
                             .padding(.vertical, 28)
-                        MarkdownText(card.back)
+                        MarkdownText(card.back, baseURL: baseURL)
                             .font(.title2)
                             .foregroundStyle(.secondary)
                             .transition(.opacity)
                     }
                 case .cloze:
-                    MarkdownText(revealed ? card.back : card.front, emphasis: .accentColor)
+                    MarkdownText(revealed ? card.back : card.front, baseURL: baseURL, emphasis: .accentColor)
                         .font(.title)
                 }
             }
@@ -138,24 +144,43 @@ private struct AnswerControls: View {
     }
 }
 
-/// Inline Markdown that keeps the card's line breaks. With `emphasis`, bold runs
-/// (cloze gaps and answers) are tinted instead of only bolded.
+/// Inline Markdown that keeps the card's line breaks, with images `![alt](path)` on
+/// rows of their own. Relative image paths resolve against `baseURL`. With `emphasis`,
+/// bold runs (cloze gaps and answers) are tinted instead of only bolded.
 private struct MarkdownText: View {
     let source: String
+    var baseURL: URL?
     var emphasis: Color?
 
-    init(_ source: String, emphasis: Color? = nil) {
+    init(_ source: String, baseURL: URL?, emphasis: Color? = nil) {
         self.source = source
+        self.baseURL = baseURL
         self.emphasis = emphasis
     }
 
     var body: some View {
-        Text(attributed)
-            .lineSpacing(6)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 16) {
+            ForEach(Array(MarkdownBlock.parse(source).enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .text(let text):
+                    Text(attributed(text))
+                        .lineSpacing(6)
+                case .image(let alt, let path, let angled):
+                    CardImage(url: resolve(path, angled: angled), alt: alt)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var attributed: AttributedString {
+    private func resolve(_ path: String, angled: Bool) -> URL? {
+        if let url = URL(string: path), url.scheme != nil { return url }
+        // `<path>` is literal; a bare destination may be percent-encoded.
+        let path = angled ? path : (path.removingPercentEncoding ?? path)
+        return baseURL?.appending(path: path).standardized
+    }
+
+    private func attributed(_ source: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         var text = (try? AttributedString(markdown: source, options: options)) ?? AttributedString(source)
         if let emphasis {
@@ -167,5 +192,82 @@ private struct MarkdownText: View {
             }
         }
         return text
+    }
+}
+
+private enum MarkdownBlock {
+    case text(String)
+    case image(alt: String, path: String, angled: Bool)
+
+    static func parse(_ source: String) -> [MarkdownBlock] {
+        // `![alt](path)` or `![alt](<path>)`; alt text may hold balanced brackets.
+        let image = #/!\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\((?:<([^>\n]*)>|([^)\s]*))\)/#
+        var blocks: [MarkdownBlock] = []
+        var rest = source[...]
+        func addText(_ text: Substring) {
+            // Images sit on rows of their own, so space next to them is not needed.
+            let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                blocks.append(.text(text))
+            }
+        }
+        while let match = rest.firstMatch(of: image) {
+            var before = rest[..<match.range.lowerBound]
+            var after = rest[match.range.upperBound...]
+            // Drop emphasis wrapped around the image, as in a cloze answer `**![](x.png)**`.
+            let stars = min(before.reversed().prefix { $0 == "*" }.count, after.prefix { $0 == "*" }.count)
+            before = before.dropLast(stars)
+            after = after.dropFirst(stars)
+            addText(before)
+            let angled = match.output.2 != nil
+            let path = match.output.2 ?? match.output.3 ?? ""
+            blocks.append(.image(alt: String(match.output.1), path: String(path), angled: angled))
+            rest = after
+        }
+        addText(rest)
+        return blocks
+    }
+}
+
+/// A card image at its natural size, scaled down to fit.
+private struct CardImage: View {
+    let url: URL?
+    let alt: String
+    @State private var image: NSImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: image.size.width, maxHeight: 360, alignment: .leading)
+                    .clipShape(.rect(cornerRadius: 8))
+            } else if failed || url == nil {
+                Label(alt.isEmpty ? (url?.lastPathComponent ?? "Image") : alt, systemImage: "photo")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .help("Image not found: \(url?.path(percentEncoded: false) ?? "")")
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .task(id: url) { await load() }
+    }
+
+    private func load() async {
+        image = nil
+        failed = false
+        guard let url else { return }
+        // Read off the main thread; local files and remote images alike.
+        let data: Data? = if url.isFileURL {
+            await Task.detached { try? Data(contentsOf: url) }.value
+        } else {
+            try? await URLSession.shared.data(from: url).0
+        }
+        image = data.flatMap(NSImage.init(data:))
+        failed = image == nil
     }
 }

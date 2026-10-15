@@ -19,6 +19,9 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
 - `Q:` / `A:`: basic card. Either field can continue onto later lines.
 - `C:`: cloze. Each `[answer]` becomes its own card; `[answer|hint]` shows the hint.
   Write `\[` and `\]` for literal brackets. Brackets inside `` `code` `` are always literal.
+- Images: `![](images/photo.jpg)`, with the path relative to the deck file. Use
+  `![](<my photo (1).jpg>)` for paths with spaces or parentheses. An image can also be a
+  cloze answer: `[![](flag.png)|flag]`.
 - A card ends at a blank line or the next `Q:` / `C:`. Every other line is ignored.
 
 A card's identity comes from its text (the question for basic cards, the whole text
@@ -29,13 +32,13 @@ Editing a question starts the card over.
 
 **File ▸ Import Anki Deck…** (<kbd>⇧⌘I</kbd>) converts an `.apkg` or `.colpkg` into Markdown
 files in the open folder, one per deck (`Languages::Korean` becomes `Languages/Korean.md`).
-Existing files are never overwritten.
+Existing files are never overwritten. Images are copied to a `media` folder at the root.
 
 - Basic note types become `Q:`/`A:` cards rendered from their templates. Cloze notes become
   `C:` cards, with `Back Extra` kept as a note under the card. Anki can test several
   deletions together (`c1` used twice); amgi gives each its own card.
 - Review history is replayed through amgi's FSRS scheduler, and due dates follow Anki's.
-- Suspended cards, images, sounds and image occlusion notes are left out.
+- Suspended cards, sounds and image occlusion notes are left out.
 
 ## Layout
 

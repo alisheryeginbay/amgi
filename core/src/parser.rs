@@ -12,8 +12,9 @@
 //! line or the next card marker. Continuation lines are appended to the current
 //! field. Every other line (headings, notes) is ignored. Each `[...]` deletion
 //! in a cloze produces its own card; `[answer|hint]` shows the hint when hidden.
-//! Brackets escaped with a backslash or inside `code` spans are literal. Escapes
-//! are kept in the output, where Markdown renders them as plain brackets.
+//! Brackets escaped with a backslash, inside `code` spans or in an image
+//! `![alt](path)` are literal. Escapes are kept in the output, where Markdown
+//! renders them as plain brackets.
 
 use std::fmt::Write;
 
@@ -162,19 +163,47 @@ enum Segment<'a> {
     Deletion { answer: &'a str, hint: Option<&'a str> },
 }
 
-/// Byte offset of the first `target` that is neither backslash-escaped nor inside a code span.
+/// Byte offset of the first `target` that is not backslash-escaped, inside a code
+/// span or part of an image.
 fn find_markup(s: &str, target: char) -> Option<usize> {
-    let (mut escaped, mut in_code) = (false, false);
+    let (mut escaped, mut in_code, mut skip_to) = (false, false, 0);
     for (i, c) in s.char_indices() {
         match c {
+            _ if i < skip_to => {}
             _ if escaped => escaped = false,
             '\\' if !in_code => escaped = true,
             '`' => in_code = !in_code,
+            '!' if !in_code => skip_to = image_len(&s[i..]).map_or(0, |len| i + len),
             c if c == target && !in_code => return Some(i),
             _ => {}
         }
     }
     None
+}
+
+/// Byte length of a Markdown image `![alt](path)` or `![alt](<path>)` at the start of `s`.
+pub fn image_len(s: &str) -> Option<usize> {
+    // Alt text may hold balanced brackets.
+    let mut depth = 0;
+    let alt_len = s.strip_prefix("![")?.char_indices().find_map(|(i, c)| {
+        match c {
+            '[' => depth += 1,
+            ']' if depth == 0 => return Some(i),
+            ']' => depth -= 1,
+            _ => {}
+        }
+        None
+    })?;
+    let dest_start = 2 + alt_len + 2;
+    let dest = s[dest_start - 1..].strip_prefix('(')?;
+    let dest_len = match dest.strip_prefix('<') {
+        Some(angled) => {
+            let close = angled.find('>')?;
+            angled[close + 1..].starts_with(')').then_some(close + 2)?
+        }
+        None => dest.find(')')?,
+    };
+    Some(dest_start + dest_len + 1)
 }
 
 fn segments(text: &str) -> Option<Vec<Segment<'_>>> {
@@ -314,6 +343,19 @@ mod tests {
         assert_eq!(r.cards[0].front, r"\[1\] `v[0]` is **[\[i\]]** and `m[k]`.");
         assert_eq!(r.cards[0].back, r"\[1\] `v[0]` is **first** and `m[k]`.");
         assert_eq!(r.cards[1].front, r"\[1\] `v[0]` is first and **[…]**.");
+    }
+
+    #[test]
+    fn images_are_not_deletions() {
+        let r = parse("C: ![a [b]](x.png) is [y] and [![](<z (1).png>)|pic]");
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.cards.len(), 2);
+        assert_eq!(r.cards[0].front, "![a [b]](x.png) is **[…]** and ![](<z (1).png>)");
+        assert_eq!(r.cards[1].back, "![a [b]](x.png) is y and **![](<z (1).png>)**");
+        assert_eq!(image_len("![](a.png) rest"), Some(10));
+        assert_eq!(image_len("![](<a b>) rest"), Some(10));
+        assert_eq!(image_len("![x] (a)"), None);
+        assert_eq!(image_len("!["), None);
     }
 
     #[test]
