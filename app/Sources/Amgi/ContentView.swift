@@ -77,10 +77,6 @@ private struct Sidebar: View {
                 ReviewRow()
                     .tag(SidebarItem.review)
             }
-            Section("Saved Views") {
-                Label("Leeches", systemImage: "ladybug")
-                    .tag(SidebarItem.leeches)
-            }
             // Sections collapse from the chevron shown when hovering the header.
             if !model.deckNames.isEmpty {
                 Section("Decks", isExpanded: $decksExpanded) {
@@ -88,6 +84,10 @@ private struct Sidebar: View {
                         DeckTree(node: node, expanded: $expanded)
                     }
                 }
+            }
+            Section("Saved Views") {
+                Label("Leeches", systemImage: "ladybug")
+                    .tag(SidebarItem.leeches)
             }
             if !model.tags.isEmpty {
                 Section("Tags", isExpanded: $tagsExpanded) {
