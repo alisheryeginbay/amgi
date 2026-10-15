@@ -1,0 +1,13 @@
+[package]
+name = "amgi-core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "amgi_core"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+thiserror = "2.0.21"
+uniffi = { workspace = true }
