@@ -1,5 +1,9 @@
 # amgi
 
+<p align="center">
+  <img src="media/amgi.svg" alt="Amgi, then 암기, written by hand" width="360" />
+</p>
+
 Plain-text flash cards, scheduled with [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm).
 
 A collection is a folder of Markdown files. Each file is a deck, and folders nest
