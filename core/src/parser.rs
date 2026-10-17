@@ -16,6 +16,9 @@
 //! `![alt](path)` are literal. Escapes are kept in the output, where Markdown
 //! renders them as plain brackets.
 //!
+//! A fenced code block (```` ``` ```` or `~~~`) keeps everything inside it, blank
+//! lines and lines starting `Q:` included, and its brackets are never deletions.
+//!
 //! A card's last lines may hold tags: `#korean #verbs`. A file may start with TOML
 //! front matter between `+++` lines, giving the deck a `name` and default `tags`.
 
@@ -93,11 +96,20 @@ struct Pending {
 pub fn parse(source: &str) -> ParseResult {
     let mut out = ParseResult::default();
     let mut pending: Option<Pending> = None;
+    let mut fence = Fences::default();
     let body_start = front_matter(source, &mut out);
 
     for (idx, raw) in source.lines().enumerate().skip(body_start) {
         let line_no = idx as u32 + 1;
         let line = raw.trim_end();
+
+        if fence.inside() {
+            fence.step(line);
+            if let Some(p) = pending.as_mut() {
+                p.current().push(line.to_string());
+            }
+            continue;
+        }
 
         if line.trim().is_empty() {
             finish(pending.take(), &mut out);
@@ -124,9 +136,58 @@ pub fn parse(source: &str) -> ParseResult {
         } else if let Some(p) = pending.as_mut() {
             p.current().push(line.to_string());
         }
+        // A fence opens on a marker line too, as in `A: ```r`.
+        let content = ["Q:", "A:", "C:"].iter().find_map(|m| marker(line, m)).unwrap_or(line);
+        fence.step(content);
+        if fence.inside() {
+            fence.start = line_no;
+        }
+    }
+    if fence.inside() {
+        out.warnings.push(ParseWarning {
+            line: fence.start,
+            message: "code block has no closing fence".into(),
+        });
     }
     finish(pending, &mut out);
     out
+}
+
+/// Tracks fenced code blocks line by line, as CommonMark does: a run of three or more
+/// backticks or tildes, indented at most three spaces, closed by a longer or equal run
+/// of the same character with nothing after it.
+#[derive(Default)]
+struct Fences {
+    open: Option<(char, usize)>,
+    /// 1-based line where the open block starts.
+    start: u32,
+}
+
+impl Fences {
+    fn inside(&self) -> bool {
+        self.open.is_some()
+    }
+
+    fn step(&mut self, line: &str) {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        if indent > 3 {
+            return;
+        }
+        let rest = &line[indent..];
+        let Some(c) = rest.chars().next().filter(|c| matches!(c, '`' | '~')) else { return };
+        let len = rest.len() - rest.trim_start_matches(c).len();
+        let after = &rest[len..];
+        match self.open {
+            Some((open, open_len)) => {
+                if c == open && len >= open_len && after.trim().is_empty() {
+                    self.open = None;
+                }
+            }
+            // A backtick fence's info string cannot hold backticks.
+            None if len >= 3 && !(c == '`' && after.contains('`')) => self.open = Some((c, len)),
+            None => {}
+        }
+    }
 }
 
 /// Read TOML front matter between `+++` lines at the top of the file. Returns the
@@ -196,12 +257,17 @@ pub fn set_card_tag(source: &str, line: u32, tag: &str, present: bool) -> Option
     if marker(first, "Q:").is_none() && marker(first, "C:").is_none() {
         return None;
     }
-    // The card runs to the next blank line or card marker, as when parsing.
+    // The card runs to the next blank line or card marker outside a code block, as
+    // when parsing.
+    let mut fence = Fences::default();
+    fence.step(marker(first, "Q:").or(marker(first, "C:")).unwrap_or(first));
     let mut end = start + 1;
     while let Some(l) = lines.get(end).map(|l| l.trim_end()) {
-        if l.trim().is_empty() || marker(l, "Q:").is_some() || marker(l, "C:").is_some() {
+        if !fence.inside() && (l.trim().is_empty() || marker(l, "Q:").is_some() || marker(l, "C:").is_some()) {
             break;
         }
+        let content = if fence.inside() { l } else { marker(l, "A:").unwrap_or(l) };
+        fence.step(content);
         end += 1;
     }
     // Its own tag lines close it; the marker line never counts as one.
@@ -318,13 +384,25 @@ enum Segment<'a> {
 /// Byte offset of the first `target` that is not backslash-escaped, inside a code
 /// span, part of an image or inside math.
 fn find_markup(s: &str, target: char) -> Option<usize> {
-    let (mut escaped, mut in_code, mut skip_to) = (false, false, 0);
+    let (mut escaped, mut skip_to) = (false, 0);
+    // Length of the backtick run that opened the current code span or block, which
+    // closes only on a run of the same length.
+    let mut code: Option<usize> = None;
     for (i, c) in s.char_indices() {
+        let in_code = code.is_some();
         match c {
             _ if i < skip_to => {}
             _ if escaped => escaped = false,
             '\\' if !in_code => escaped = true,
-            '`' => in_code = !in_code,
+            '`' => {
+                let run = s[i..].len() - s[i..].trim_start_matches('`').len();
+                skip_to = i + run;
+                code = match code {
+                    None => Some(run),
+                    Some(open) if open == run => None,
+                    open => open,
+                };
+            }
             '!' if !in_code => skip_to = image_len(&s[i..]).map_or(0, |len| i + len),
             '$' if !in_code => skip_to = math_len(&s[i..]).map_or(0, |len| i + len),
             c if c == target && !in_code => return Some(i),
@@ -626,6 +704,33 @@ mod tests {
         assert_eq!(set_card_tag(source, 6, SUSPENDED_TAG, true), None);
         // A deck tag cannot be removed from one card.
         assert_eq!(set_card_tag(source, 5, "x", false), None);
+    }
+
+    #[test]
+    fn code_blocks_keep_blank_lines_and_markers() {
+        let source = "Q: Python example\nA:\n```python\ndef f(x):\n\n    return x\n# not a tag\nQ: not a card\n```\n#code\n\nQ: next\nA: ~~~\n````\n~~~";
+        let r = parse(source);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.cards.len(), 2);
+        assert_eq!(r.cards[0].back, "```python\ndef f(x):\n\n    return x\n# not a tag\nQ: not a card\n```");
+        assert_eq!(r.cards[0].tags, ["code"]);
+        assert_eq!(r.cards[1].back, "~~~\n````\n~~~");
+
+        // Tags go after the closing fence, past the blank line inside the block.
+        let tagged = set_card_tag(source, 1, SUSPENDED_TAG, true).unwrap();
+        assert!(tagged.contains("```\n#code #suspended\n\nQ: next"));
+
+        let r = parse("Q: a\nA: ```\nopen\n\nQ: b\nA: c");
+        assert_eq!(r.warnings[0].message, "code block has no closing fence");
+        assert_eq!(r.warnings[0].line, 2);
+    }
+
+    #[test]
+    fn code_block_brackets_are_not_deletions() {
+        let r = parse("C: In R, [`x[1]`|index] gets\n```r\nx[1]\ny <- x[[2]]\n```\nthe [first] item.");
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.cards.len(), 2);
+        assert!(r.cards[1].front.contains("y <- x[[2]]\n```\nthe **[…]** item."));
     }
 
     #[test]

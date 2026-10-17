@@ -3,7 +3,7 @@
   import CardView from "../components/CardView.svelte";
   import TagPills from "../components/TagPills.svelte";
   import { app, commands, post } from "../lib/app.svelte";
-  import { renderInline } from "../lib/markdown";
+  import { oneLine, renderInline } from "../lib/markdown";
   import type { BrowseCard } from "../lib/types";
   import { COLUMNS, type ColumnId, type Sort, deckTitle, sorted } from "./columns";
   import { parseQuery } from "./query";
@@ -214,7 +214,7 @@
     let html = cache.get(source);
     if (html === undefined) {
       if (cache.size > 20_000) cache.clear();
-      html = renderInline(source.replace(/\s*\n\s*/g, " "), true);
+      html = renderInline(oneLine(source), true);
       cache.set(source, html);
     }
     return html;

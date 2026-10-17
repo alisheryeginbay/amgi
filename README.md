@@ -35,7 +35,13 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
   [Temml](https://temml.org) and drawn by WebKit in the system's math font. Brackets and `|` inside math are literal, so they never
   start a cloze. A `$` only starts math before a non-space (`$5 and $10` stays text);
   write `\$` for a literal one.
-- A card ends at a blank line or the next `Q:` / `C:`. Every other line is ignored.
+- Code: fenced blocks (```` ```python ```` … ```` ``` ```` or `~~~`) are highlighted by
+  [Shiki](https://shiki.style) in any of its 200+ languages, with GitHub's light and dark
+  themes. Each language's grammar loads the first time a card uses it. Blank lines and
+  `Q:` lines inside a block stay part of the card, and brackets inside it never start a
+  cloze.
+- A card ends at a blank line or the next `Q:` / `C:` outside a code block. Every other
+  line is ignored.
 
 A card's identity comes from its text (the question for basic cards, the whole text
 for clozes). You can move or reorder cards, fix answers and change tags without losing

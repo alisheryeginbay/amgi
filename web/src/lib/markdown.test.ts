@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { clozeGap, GAP } from "./markdown.ts";
+import { clozeGap, GAP, highlight, loadLanguage, oneLine, splitFences } from "./markdown.ts";
 
 test("finds the gap a cloze's answer fills", () => {
   const gap = clozeGap("The capital of **[…]** is Paris.", "The capital of **France** is Paris.");
@@ -21,4 +21,33 @@ test("leaves image answers to a whole-card swap", () => {
 
 test("leaves sides that differ elsewhere to a whole-card swap", () => {
   assert.equal(clozeGap("A **[…]** b", "Z **x** b"), null);
+});
+
+test("splits fenced code blocks from text", () => {
+  const source = "Some code:\n```Python extra\ndef f():\n\n    return [1]\n```\nafter\n~~~\n```\nunclosed";
+  assert.deepEqual(splitFences(source), [
+    { text: "Some code:" },
+    { code: "def f():\n\n    return [1]", language: "python" },
+    { text: "after" },
+    { code: "```\nunclosed", language: "" },
+  ]);
+  assert.deepEqual(splitFences("inline ```code``` stays"), [{ text: "inline ```code``` stays" }]);
+});
+
+test("highlights once a language is loaded, and escapes until then", async () => {
+  assert.equal(highlight("x <- '<b>'", "r"), "x &lt;- &#39;&lt;b&gt;&#39;");
+  await loadLanguage("r");
+  assert.equal(loadLanguage("r"), null);
+  const html = highlight("x <- 1 # one\ny", "r");
+  assert.match(html, /<span style="--shiki-light:#[0-9A-F]+;--shiki-dark:#[0-9A-F]+[^"]*"> # one<\/span>/i);
+  assert.match(html, /<br>/);
+  // Aliases load too; unknown languages stay plain.
+  await loadLanguage("py");
+  assert.match(highlight("def f(): pass", "py"), /--shiki-light/);
+  assert.equal(loadLanguage("nonsense"), null);
+  assert.equal(highlight("<b>", "nonsense"), "&lt;b&gt;");
+});
+
+test("puts code blocks on one line for table cells", () => {
+  assert.equal(oneLine("Q\n```r\nx <- `a`\n\ny\n```\nend"), "Q `` x <- `a` y `` end");
 });

@@ -1,5 +1,10 @@
 import { Marked } from "marked";
 import temml from "temml";
+import { createHighlighterCoreSync } from "shiki/core";
+import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import { bundledLanguages } from "shiki/langs";
+import githubDark from "@shikijs/themes/github-dark";
+import githubLight from "@shikijs/themes/github-light";
 
 /** File extensions shown as sounds rather than images. Anki's `[sound:…]` also takes
  *  video files, of which only the audio is played. */
@@ -23,7 +28,9 @@ export type Block =
   /** `src` is null when the path leaves the collection. */
   | { type: "image"; alt: string; src: string | null; path: string }
   /** Sounds next to each other share a row. */
-  | { type: "sounds"; sounds: { src: string | null; path: string }[] };
+  | { type: "sounds"; sounds: { src: string | null; path: string }[] }
+  /** A fenced code block, highlighted once its language is loaded. */
+  | { type: "code"; html: string; language: string };
 
 const escapes: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 export const escapeHTML = (s: string) => s.replace(/[&<>"']/g, (c) => escapes[c]);
@@ -151,10 +158,113 @@ export function renderInline(source: string, compact = false): string {
 /** `![alt](path)` or `![alt](<path>)`; alt text may hold balanced brackets. */
 const MEDIA = /!\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\((?:<([^>\n]*)>|([^)\s]*))\)/g;
 
-/** A card's Markdown as rows: text, images, and rows of sounds. Media paths are
- *  relative to the deck file at `cardPath`. */
+type Part = { text: string } | { code: string; language: string };
+
+/** Card Markdown split into fenced code blocks and the text between them. Fences
+ *  follow CommonMark, as in `core/src/parser.rs`: three or more backticks or tildes,
+ *  closed by a run at least as long of the same character. An unclosed block runs to
+ *  the end. */
+export function splitFences(source: string): Part[] {
+  const parts: Part[] = [];
+  let text: string[] = [];
+  let code: string[] | null = null;
+  let open = { char: "", length: 0, language: "" };
+  for (const line of source.split("\n")) {
+    const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (code) {
+      if (fence && fence[1][0] === open.char && fence[1].length >= open.length && !fence[2].trim()) {
+        parts.push({ code: code.join("\n"), language: open.language });
+        code = null;
+      } else {
+        code.push(line);
+      }
+    } else if (fence && !(fence[1][0] === "`" && fence[2].includes("`"))) {
+      if (text.length) parts.push({ text: text.join("\n") });
+      text = [];
+      code = [];
+      open = { char: fence[1][0], length: fence[1].length, language: fence[2].trim().split(/\s/)[0].toLowerCase() };
+    } else {
+      text.push(line);
+    }
+  }
+  if (code) parts.push({ code: code.join("\n"), language: open.language });
+  else if (text.length) parts.push({ text: text.join("\n") });
+  return parts;
+}
+
+/** Shiki with no grammars yet: each language is a chunk of its own, loaded when a card
+ *  first uses it. The JavaScript engine needs no WebAssembly and works synchronously. */
+const shiki = createHighlighterCoreSync({
+  themes: [githubLight, githubDark],
+  langs: [],
+  engine: createJavaScriptRegexEngine({ forgiving: true }),
+});
+const loading = new Map<string, Promise<void>>();
+const failed = new Set<string>();
+
+const isLoaded = (language: string) => shiki.getLoadedLanguages().includes(language);
+
+/** Loads the grammar for `language`, or null if it is loaded, unknown or failed to load.
+ *  Once the promise settles, `highlight` can use it. */
+export function loadLanguage(language: string): Promise<void> | null {
+  if (!Object.hasOwn(bundledLanguages, language) || isLoaded(language) || failed.has(language)) return null;
+  let promise = loading.get(language);
+  if (!promise) {
+    const load = bundledLanguages[language as keyof typeof bundledLanguages];
+    promise = load()
+      .then((grammar) => shiki.loadLanguageSync(grammar.default))
+      .catch((error) => {
+        failed.add(language);
+        console.error(`Could not load the ${language} grammar`, error);
+      });
+    loading.set(language, promise);
+  }
+  return promise;
+}
+
+/** Code as HTML, highlighted when the grammar for `language` is loaded. Each token holds
+ *  its light and dark colors in `--shiki-light` and `--shiki-dark`. */
+export function highlight(code: string, language: string): string {
+  if (!language || !isLoaded(language)) return escapeHTML(code);
+  return shiki.codeToHtml(code, {
+    lang: language,
+    themes: { light: "github-light", dark: "github-dark" },
+    defaultColor: false,
+    structure: "inline",
+  });
+}
+
+/** Card Markdown on one line, for table cells: code blocks become code spans. */
+export function oneLine(source: string): string {
+  return splitFences(source)
+    .map((part) => {
+      if ("text" in part) return part.text;
+      const code = part.code.replace(/\s+/g, " ").trim();
+      if (!code) return "";
+      // A code span's backticks must outnumber any run inside it.
+      const ticks = "`".repeat(Math.max(0, ...(code.match(/`+/g) ?? []).map((run) => run.length)) + 1);
+      return ` ${ticks} ${code} ${ticks} `;
+    })
+    .join("\n")
+    .replace(/\s*\n\s*/g, " ")
+    .trim();
+}
+
+/** A card's Markdown as rows: text, code blocks, images, and rows of sounds. Media
+ *  paths are relative to the deck file at `cardPath`. */
 export function parseBlocks(source: string, cardPath: string): Block[] {
   const blocks: Block[] = [];
+  for (const part of splitFences(source)) {
+    if ("code" in part) {
+      blocks.push({ type: "code", html: highlight(part.code, part.language), language: part.language });
+    } else {
+      parseMedia(part.text, cardPath, blocks);
+    }
+  }
+  return blocks;
+}
+
+function parseMedia(source: string, cardPath: string, blocks: Block[]) {
   const addText = (text: string) => {
     // Media sit on rows of their own, so space next to them is not needed.
     const trimmed = text.trim();
@@ -185,7 +295,6 @@ export function parseBlocks(source: string, cardPath: string): Block[] {
     rest = end;
   }
   addText(source.slice(rest));
-  return blocks;
 }
 
 /** Every sound linked in `source`, in order. */

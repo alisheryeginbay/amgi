@@ -1,7 +1,7 @@
 <script lang="ts">
   import CardImage from "./CardImage.svelte";
   import SoundButton from "./SoundButton.svelte";
-  import { GAP, parseBlocks } from "../lib/markdown";
+  import { GAP, loadLanguage, parseBlocks } from "../lib/markdown";
 
   /** Card Markdown that keeps its line breaks, with images and sounds on rows of their
    *  own. With `emphasis`, bold runs (cloze gaps and answers) are tinted. A `gap`, as
@@ -13,7 +13,17 @@
     emphasis = false,
     gap,
   }: { source: string; cardPath: string; emphasis?: boolean; gap?: { hint: string; answer: string } } = $props();
-  const blocks = $derived(parseBlocks(source, cardPath));
+  // Bumped when a code block's grammar arrives, so the block is highlighted again.
+  let grammars = $state(0);
+  const blocks = $derived.by(() => {
+    void grammars;
+    return parseBlocks(source, cardPath);
+  });
+  $effect(() => {
+    for (const block of blocks) {
+      if (block.type === "code") loadLanguage(block.language)?.then(() => grammars++);
+    }
+  });
 
   const html = (text: string) =>
     gap
@@ -29,6 +39,9 @@
     {#if block.type === "text"}
       <!-- Escaped when rendered: card text never holds HTML. -->
       <div class="text">{@html html(block.html)}</div>
+    {:else if block.type === "code"}
+      <!-- Escaped by the highlighter. -->
+      <pre class="code"><code data-language={block.language || undefined}>{@html block.html}</code></pre>
     {:else if block.type === "image"}
       <CardImage src={block.src} alt={block.alt} path={block.path} />
     {:else}
@@ -78,6 +91,38 @@
 
   .text :global(math.tml-display) {
     margin: 0.4em 0;
+  }
+
+  .code {
+    align-self: stretch;
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--fill);
+    overflow-x: auto;
+    /* Code reads at a smaller size than the card's large text, about 14px on a study
+       card, and never smaller than the 12px preview text. */
+    font-size: max(13.5px, 0.6em);
+    line-height: 1.5;
+    text-align: left;
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: text;
+  }
+
+  /* Shiki's GitHub themes, following the system appearance. */
+  .code :global(span) {
+    color: var(--shiki-light);
+    font-style: var(--shiki-light-font-style);
+    font-weight: var(--shiki-light-font-weight);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .code :global(span) {
+      color: var(--shiki-dark);
+      font-style: var(--shiki-dark-font-style);
+      font-weight: var(--shiki-dark-font-weight);
+    }
   }
 
   .emphasis :global(strong) {
