@@ -3,7 +3,7 @@
 //! A package is a zip archive holding the collection as SQLite: `collection.anki21b`
 //! (zstd-compressed, schema 18, current Anki) or `collection.anki21` / `collection.anki2`
 //! (legacy schema 11, where note types and decks are JSON in the `col` table).
-//! Images used by cards are copied to a `media` folder; sounds are left out.
+//! Images and sounds used by cards are copied to a `media` folder.
 
 mod text;
 
@@ -661,9 +661,11 @@ pub(crate) mod tests {
         zip.start_file("collection.anki21", options).unwrap();
         zip.write_all(&fs::read(&db).unwrap()).unwrap();
         zip.start_file("media", options).unwrap();
-        zip.write_all(br#"{"0": "hi.png"}"#).unwrap();
+        zip.write_all(br#"{"0": "hi.png", "1": "paris.mp3"}"#).unwrap();
         zip.start_file("0", options).unwrap();
         zip.write_all(b"png bytes").unwrap();
+        zip.start_file("1", options).unwrap();
+        zip.write_all(b"mp3 bytes").unwrap();
         zip.finish().unwrap();
         fs::remove_file(db).unwrap();
     }
@@ -691,7 +693,7 @@ pub(crate) mod tests {
         conn.execute_batch(
             "INSERT INTO notes VALUES
                (100, 1, 'сәлем' || char(31) || 'hello<img src=hi.png>', ''),
-               (101, 2, 'The {{c1::capital}} of [x] is {{c2::Paris}}' || char(31) || 'extra', 'geo'),
+               (101, 2, 'The {{c1::capital}} of [x] is {{c2::Paris}}[sound:paris.mp3]' || char(31) || 'extra[sound:gone.mp3]', 'geo'),
                (102, 2, 'no deletions' || char(31) || '', '');
              INSERT INTO cards VALUES
                (1000, 100, 10, 0, 0, 2, 2), (1001, 100, 99, 10, 1, 0, 0),
@@ -711,12 +713,13 @@ pub(crate) mod tests {
         let out = pkg.convert();
         let paths: Vec<_> = out.decks.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(paths, ["Default", "Lang/Kazakh-Verbs"]);
-        assert_eq!(out.decks[0].1, "C: The [capital] of \\[x\\] is [Paris]\n#geo\n\nextra\n");
+        assert_eq!(out.decks[0].1, "C: The [capital] of \\[x\\] is [Paris]![](media/paris.mp3)\n#geo\n\nextra![](media/gone.mp3)\n");
         assert_eq!(
             out.decks[1].1,
             "+++\nname = \"Kazakh/Verbs\"\n+++\n\nQ: сәлем\nA: hello![](../media/hi.png)\n\nQ: hello![](../media/hi.png)\nA: сәлем\n"
         );
         assert_eq!(out.media.images.iter().collect::<Vec<_>>(), ["hi.png"]);
+        assert_eq!(out.media.sounds.iter().collect::<Vec<_>>(), ["gone.mp3", "paris.mp3"]);
         assert_eq!((out.notes, out.cards, out.skipped_notes, out.suspended_cards), (3, 4, 1, 1));
 
         let all = parser::parse(&out.decks[1].1).cards;

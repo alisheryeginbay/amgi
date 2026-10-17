@@ -109,15 +109,19 @@ pub struct Media {
     pub prefix: String,
     /// Anki media file names used by images.
     pub images: BTreeSet<String>,
-    /// Sounds, which are removed.
-    pub sounds: u32,
+    /// Anki media file names used by `[sound:…]` references.
+    pub sounds: BTreeSet<String>,
 }
+
+/// Stands in for `[sound:…]` between finding sounds and reading tags.
+const SOUND_TAG: &str = "amgi-sound";
 
 /// Convert Anki field HTML to inline Markdown on as few lines as needed. Text is
 /// escaped so it renders literally, including `[` and `]` (cloze markup in amgi).
-/// Cloze markers `{{c1::…}}` pass through unchanged. Images link into the media folder.
+/// Cloze markers `{{c1::…}}` pass through unchanged. Images and sounds link into the
+/// media folder, both as `![](path)`; the app tells them apart by extension.
 pub fn html_to_markdown(html: &str, media: &mut Media) -> String {
-    let html = strip_sounds(html, media);
+    let html = mark_sounds(html);
     let mut out = String::new();
     let mut in_code = false;
     // Raw-text elements whose content is never shown.
@@ -178,8 +182,17 @@ pub fn html_to_markdown(html: &str, media: &mut Media) -> String {
                 in_code = !closing;
             }
             "img" => {
-                if let Some(image) = attribute(tag, "src").and_then(|src| image_markdown(&src, media)) {
+                if let Some(image) = attribute(tag, "src").and_then(|src| media_markdown(&src, &mut media.images, &media.prefix)) {
                     out.push_str(&image);
+                }
+            }
+            SOUND_TAG => {
+                // Sounds are always files in the package.
+                let sound = attribute(tag, "src")
+                    .filter(|src| !src.contains("://"))
+                    .and_then(|src| media_markdown(&src, &mut media.sounds, &media.prefix));
+                if let Some(sound) = sound {
+                    out.push_str(&sound);
                 }
             }
             _ => {}
@@ -212,8 +225,13 @@ fn attribute(tag: &str, name: &str) -> Option<String> {
     None
 }
 
-/// `![](media/name.png)` for a file in the package. Remote images are linked as they are.
-fn image_markdown(src: &str, media: &mut Media) -> Option<String> {
+/// `![](media/name.png)` for a file in the package, recorded in `used`. Remote
+/// files are linked as they are.
+fn media_markdown(src: &str, used: &mut BTreeSet<String>, prefix: &str) -> Option<String> {
+    // Angle brackets and newlines cannot be written in a Markdown link.
+    if src.contains(['<', '>', '\n']) {
+        return None;
+    }
     let path = if src.contains("://") {
         src.to_string()
     } else {
@@ -221,23 +239,23 @@ fn image_markdown(src: &str, media: &mut Media) -> Option<String> {
         if src.is_empty() || src.starts_with('.') || src.contains(['/', '\\']) {
             return None;
         }
-        media.images.insert(src.to_string());
-        format!("{}{src}", media.prefix)
+        used.insert(src.to_string());
+        format!("{prefix}{src}")
     };
-    if path.contains(['<', '>', '\n']) {
-        return None;
-    }
     Some(if path.contains([' ', '(', ')']) { format!("![](<{path}>)") } else { format!("![]({path})") })
 }
 
-/// Remove `[sound:file.mp3]` references.
-fn strip_sounds(html: &str, media: &mut Media) -> String {
+/// Replace `[sound:file.mp3]` with a tag read like `<img>`, so the file name is
+/// checked the same way.
+fn mark_sounds(html: &str) -> String {
     let mut out = String::new();
     let mut rest = html;
     while let Some(start) = rest.find("[sound:") {
         let Some(end) = rest[start..].find(']') else { break };
         out.push_str(&rest[..start]);
-        media.sounds += 1;
+        let name = &rest[start + "[sound:".len()..start + end];
+        let name = name.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;");
+        out.push_str(&format!(r#"<{SOUND_TAG} src="{name}">"#));
         rest = &rest[start + end + 1..];
     }
     out.push_str(rest);
@@ -480,9 +498,13 @@ mod tests {
         assert_eq!(md("text<br>#hashtag"), "text\n\\#hashtag");
         let mut media = Media { prefix: "../media/".into(), ..Media::default() };
         let html = r#"<img src="a.png">hi [sound:a.mp3]<IMG class=x SRC='b &amp; c.jpg'/><img src=../x.png><img data-src=no>"#;
-        assert_eq!(html_to_markdown(html, &mut media), "![](../media/a.png)hi ![](<../media/b & c.jpg>)");
+        assert_eq!(html_to_markdown(html, &mut media), "![](../media/a.png)hi ![](../media/a.mp3)![](<../media/b & c.jpg>)");
         assert_eq!(media.images.iter().collect::<Vec<_>>(), ["a.png", "b & c.jpg"]);
-        assert_eq!(media.sounds, 1);
+        assert_eq!(media.sounds.iter().collect::<Vec<_>>(), ["a.mp3"]);
+        // Names are kept literally; ones that could leave the media folder are dropped.
+        let html = r#"[sound:my "word" & x.mp3][sound:<x>.mp3][sound:../a.mp3][sound:https://x.org/a.mp3] [sound:"#;
+        assert_eq!(html_to_markdown(html, &mut media), r#"![](<../media/my "word" & x.mp3>) \[sound:"#);
+        assert_eq!(media.sounds.iter().collect::<Vec<_>>(), ["a.mp3", r#"my "word" & x.mp3"#]);
         assert_eq!(md("<img src=https://x.org/a.png>"), "![](https://x.org/a.png)");
     }
 

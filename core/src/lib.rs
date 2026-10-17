@@ -163,8 +163,10 @@ pub struct ImportSummary {
     pub images: u32,
     /// Images cards refer to that the package does not contain.
     pub missing_images: u32,
-    /// Sounds removed from cards.
-    pub sounds_removed: u32,
+    /// Sounds now in the collection's `media` folder.
+    pub sounds: u32,
+    /// Sounds cards refer to that the package does not contain.
+    pub missing_sounds: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -316,16 +318,20 @@ impl CardCollection {
     }
 
     /// Import an Anki package (`.apkg` or `.colpkg`) as Markdown decks in this
-    /// collection, keeping review history. Images go to a `media` folder at the
-    /// root. Existing files are never overwritten.
+    /// collection, keeping review history. Images and sounds go to a `media` folder
+    /// at the root. Existing files are never overwritten.
     pub fn import_anki(&self, path: String) -> Result<ImportSummary> {
         let package = anki::Package::read(Path::new(&path))?;
         let conversion = package.convert();
         let root = self.lock().root.clone();
-        let images = package.write_media(&conversion.media.images, &root.join(MEDIA_DIR))?;
+        let media_dir = root.join(MEDIA_DIR);
+        let images = package.write_media(&conversion.media.images, &media_dir)?;
+        let sounds = package.write_media(&conversion.media.sounds, &media_dir)?;
         let mut summary = self.lock().import_anki(conversion)?;
         summary.missing_images -= images;
         summary.images = images;
+        summary.missing_sounds -= sounds;
+        summary.sounds = sounds;
         Ok(summary)
     }
 }
@@ -642,7 +648,8 @@ impl Inner {
             suspended_cards: conversion.suspended_cards,
             images: 0,
             missing_images: conversion.media.images.len() as u32,
-            sounds_removed: conversion.media.sounds,
+            sounds: 0,
+            missing_sounds: conversion.media.sounds.len() as u32,
         })
     }
 
@@ -988,7 +995,9 @@ mod tests {
         assert_eq!(summary.files, ["Default 2.md", "Lang/Kazakh-Verbs.md"]);
         assert_eq!((summary.cards, summary.reviewed_cards, summary.skipped_notes), (4, 2, 1));
         assert_eq!((summary.images, summary.missing_images), (1, 0));
+        assert_eq!((summary.sounds, summary.missing_sounds), (1, 1));
         assert_eq!(fs::read(dir.join("media/hi.png")).unwrap(), b"png bytes");
+        assert_eq!(fs::read(dir.join("media/paris.mp3")).unwrap(), b"mp3 bytes");
 
         let inner = c.lock();
         assert_eq!(fs::read_to_string(dir.join("Default.md")).unwrap(), "Q: mine\nA: kept\n");

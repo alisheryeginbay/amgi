@@ -246,7 +246,8 @@ extension ImportSummary {
         if skippedNotes > 0 { lines.append("\(skippedNotes) notes could not be converted, such as image occlusions.") }
         if images > 0 { lines.append("\(images) images were copied to the media folder.") }
         if missingImages > 0 { lines.append("\(missingImages) images were missing from the package.") }
-        if soundsRemoved > 0 { lines.append("\(soundsRemoved) sounds were removed.") }
+        if sounds > 0 { lines.append("\(sounds) sounds were copied to the media folder.") }
+        if missingSounds > 0 { lines.append("\(missingSounds) sounds were missing from the package.") }
         return lines.joined(separator: "\n\n")
     }
 }

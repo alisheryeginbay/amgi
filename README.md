@@ -23,6 +23,10 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
 - Images: `![](images/photo.jpg)`, with the path relative to the deck file. Use
   `![](<my photo (1).jpg>)` for paths with spaces or parentheses. An image can also be a
   cloze answer: `[![](flag.png)|flag]`.
+- Sounds use the same syntax: `![](audio/word.mp3)`. Links to audio files (`mp3`, `m4a`,
+  `wav`, `flac` and other formats macOS can play) show as play buttons. A card's sounds
+  play when it appears, and the answer's when it is shown; press <kbd>R</kbd> to replay.
+  Turn autoplay off in **Settings** (<kbd>⌘,</kbd>).
 - A card ends at a blank line or the next `Q:` / `C:`. Every other line is ignored.
 
 A card's identity comes from its text (the question for basic cards, the whole text
@@ -54,14 +58,15 @@ icons are kept in `.amgi.sqlite`.
 
 **File ▸ Import Anki Deck…** (<kbd>⇧⌘I</kbd>) converts an `.apkg` or `.colpkg` into Markdown
 files in the open folder, one per deck (`Languages::Korean` becomes `Languages/Korean.md`).
-Existing files are never overwritten. Images are copied to a `media` folder at the root,
-and note tags become `#tag` lines.
+Existing files are never overwritten. Images and sounds are copied to a `media` folder at
+the root, and note tags become `#tag` lines.
 
 - Basic note types become `Q:`/`A:` cards rendered from their templates. Cloze notes become
   `C:` cards, with `Back Extra` kept as a note under the card. Anki can test several
   deletions together (`c1` used twice); amgi gives each its own card.
 - Review history is replayed through amgi's FSRS scheduler, and due dates follow Anki's.
-- Suspended cards, sounds and image occlusion notes are left out.
+- `[sound:…]` references become sound links. Text-to-speech (`{{tts:…}}`) is left out.
+- Suspended cards and image occlusion notes are left out.
 
 ## Layout
 

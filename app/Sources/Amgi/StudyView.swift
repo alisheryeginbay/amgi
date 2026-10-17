@@ -3,6 +3,8 @@ import SwiftUI
 
 struct StudyView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage(autoplaySoundsKey) private var autoplay = true
+    @State private var sounds = SoundPlayer()
 
     var body: some View {
         Group {
@@ -23,9 +25,30 @@ struct StudyView: View {
                 )
             }
         }
+        .environment(sounds)
+        // Play a card's sounds when it appears, then the answer's when it is revealed.
+        .onChange(of: model.current.map { "\($0.id) \(model.revealed)" }, initial: true) { _, key in
+            if key != nil && autoplay {
+                playSounds()
+            } else {
+                sounds.stop()
+            }
+        }
+        .onDisappear { sounds.stop() }
         .navigationTitle(model.folder?.lastPathComponent ?? "All Cards")
         .navigationSubtitle("\(model.totalDue) due · \(model.today.newAvailable) new")
         .toolbar {
+            if let card = model.current, !soundURLs(card, side: .all).isEmpty {
+                ToolbarItem {
+                    Button {
+                        playSounds(replay: true)
+                    } label: {
+                        Label("Replay Audio", systemImage: "speaker.wave.2")
+                    }
+                    .keyboardShortcut("r", modifiers: [])
+                    .help("Replay Audio (R)")
+                }
+            }
             if let card = model.current {
                 ToolbarItem {
                     Button {
@@ -42,6 +65,38 @@ struct StudyView: View {
     /// Image paths in a card are relative to its deck file.
     private func deckDirectory(_ card: StudyCard) -> URL? {
         model.folder?.appending(path: card.path).deletingLastPathComponent()
+    }
+
+    private enum Side {
+        /// Sounds on the side showing.
+        case all
+        /// Sounds the revealed answer adds to the question, as Anki plays them.
+        case added
+    }
+
+    private func soundURLs(_ card: StudyCard, side: Side) -> [URL] {
+        let base = deckDirectory(card)
+        let front = soundLinks(in: card.front, baseURL: base)
+        guard model.revealed else { return front }
+        // A cloze's answer is the whole card again; a basic one shows both sides.
+        let back = soundLinks(in: card.back, baseURL: base)
+        let shown = card.kind == .cloze ? back : front + back
+        return side == .all ? shown : back.filter { !front.contains($0) }
+    }
+
+    /// Sounds for the side showing. On the answer side that is what the answer adds;
+    /// a replay falls back to every sound shown when the answer adds none.
+    private func playSounds(replay: Bool = false) {
+        guard let card = model.current else { return }
+        var urls = soundURLs(card, side: model.revealed ? .added : .all)
+        if replay && urls.isEmpty {
+            urls = soundURLs(card, side: .all)
+        }
+        if urls.isEmpty {
+            sounds.stop()
+        } else {
+            sounds.play(urls)
+        }
     }
 }
 
@@ -160,18 +215,17 @@ private struct MarkdownText: View {
                     Text(attributed(text))
                         .lineSpacing(6)
                 case .image(let alt, let path, let angled):
-                    CardImage(url: resolve(path, angled: angled), alt: alt)
+                    CardImage(url: resolveMedia(path, angled: angled, baseURL: baseURL), alt: alt)
+                case .sounds(let links):
+                    HStack(spacing: 8) {
+                        ForEach(Array(links.enumerated()), id: \.offset) { _, link in
+                            SoundButton(url: resolveMedia(link.path, angled: link.angled, baseURL: baseURL))
+                        }
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func resolve(_ path: String, angled: Bool) -> URL? {
-        if let url = URL(string: path), url.scheme != nil { return url }
-        // `<path>` is literal; a bare destination may be percent-encoded.
-        let path = angled ? path : (path.removingPercentEncoding ?? path)
-        return baseURL?.appending(path: path).standardized
     }
 
     private func attributed(_ source: String) -> AttributedString {
@@ -189,9 +243,33 @@ private struct MarkdownText: View {
     }
 }
 
+/// A media link's destination; `angled` when written as `<path>`.
+private struct MediaLink: Equatable {
+    let path: String
+    let angled: Bool
+}
+
+/// Resolve a media link written in a card. Relative paths are relative to `baseURL`.
+private func resolveMedia(_ path: String, angled: Bool, baseURL: URL?) -> URL? {
+    if let url = URL(string: path), url.scheme != nil { return url }
+    // `<path>` is literal; a bare destination may be percent-encoded.
+    let path = angled ? path : (path.removingPercentEncoding ?? path)
+    return baseURL?.appending(path: path).standardized
+}
+
+/// Every sound linked in `source`, in order.
+private func soundLinks(in source: String, baseURL: URL?) -> [URL] {
+    MarkdownBlock.parse(source).flatMap { block -> [URL] in
+        guard case .sounds(let links) = block else { return [] }
+        return links.compactMap { resolveMedia($0.path, angled: $0.angled, baseURL: baseURL) }
+    }
+}
+
 private enum MarkdownBlock {
     case text(String)
     case image(alt: String, path: String, angled: Bool)
+    /// Sounds next to each other share a row.
+    case sounds([MediaLink])
 
     static func parse(_ source: String) -> [MarkdownBlock] {
         // `![alt](path)` or `![alt](<path>)`; alt text may hold balanced brackets.
@@ -214,8 +292,17 @@ private enum MarkdownBlock {
             after = after.dropFirst(stars)
             addText(before)
             let angled = match.output.2 != nil
-            let path = match.output.2 ?? match.output.3 ?? ""
-            blocks.append(.image(alt: String(match.output.1), path: String(path), angled: angled))
+            let path = String(match.output.2 ?? match.output.3 ?? "")
+            if isSound(path) {
+                let link = MediaLink(path: path, angled: angled)
+                if case .sounds(let links)? = blocks.last {
+                    blocks[blocks.count - 1] = .sounds(links + [link])
+                } else {
+                    blocks.append(.sounds([link]))
+                }
+            } else {
+                blocks.append(.image(alt: String(match.output.1), path: path, angled: angled))
+            }
             rest = after
         }
         addText(rest)
@@ -263,5 +350,31 @@ private struct CardImage: View {
         }
         image = data.flatMap(NSImage.init(data:))
         failed = image == nil
+    }
+}
+
+/// A button playing one sound. Missing and unplayable files are shown crossed out.
+private struct SoundButton: View {
+    @Environment(SoundPlayer.self) private var player
+    let url: URL?
+
+    var body: some View {
+        let missing = url.map { $0.isFileURL && !FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) } ?? true
+        let unplayable = missing || url.map(player.unplayable.contains) == true
+        let name = url?.lastPathComponent ?? "Sound"
+        Button {
+            if let url { player.play([url]) }
+        } label: {
+            Image(systemName: unplayable ? "speaker.slash" : player.current == url ? "speaker.wave.2.fill" : "speaker.wave.2")
+                .font(.title3)
+                .frame(width: 36, height: 36)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(unplayable ? .secondary : .primary)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .disabled(missing)
+        .help(missing ? "Sound not found: \(url?.path(percentEncoded: false) ?? "")"
+              : unplayable ? "Can't play \(name)" : "Play \(name)")
     }
 }
