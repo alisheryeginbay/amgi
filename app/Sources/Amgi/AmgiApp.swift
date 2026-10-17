@@ -18,6 +18,7 @@ struct AmgiApp: App {
                 }
         }
         .commands {
+            HelpCommands()
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") { model.chooseFolder() }
                     .keyboardShortcut("o")
@@ -38,9 +39,27 @@ struct AmgiApp: App {
         }
         .defaultSize(width: 420, height: 600)
 
+        // Every shortcut in one list, opened from the Help menu with ⌘/.
+        Window("Keyboard Shortcuts", id: "keyboard-shortcuts") {
+            KeyboardShortcutsView()
+        }
+        .defaultSize(width: 380, height: 560)
+
         Settings {
             SettingsView()
                 .environment(model)
+        }
+    }
+}
+
+/// Replaces the Help menu's search-only "Amgi Help" item, as there is no help book.
+private struct HelpCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .help) {
+            Button("Keyboard Shortcuts") { openWindow(id: "keyboard-shortcuts") }
+                .keyboardShortcut("/")
         }
     }
 }
