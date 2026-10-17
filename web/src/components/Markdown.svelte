@@ -1,19 +1,34 @@
 <script lang="ts">
   import CardImage from "./CardImage.svelte";
   import SoundButton from "./SoundButton.svelte";
-  import { parseBlocks } from "../lib/markdown";
+  import { GAP, parseBlocks } from "../lib/markdown";
 
   /** Card Markdown that keeps its line breaks, with images and sounds on rows of their
-   *  own. With `emphasis`, bold runs (cloze gaps and answers) are tinted. */
-  let { source, cardPath, emphasis = false }: { source: string; cardPath: string; emphasis?: boolean } = $props();
+   *  own. With `emphasis`, bold runs (cloze gaps and answers) are tinted. A `gap`, as
+   *  from `clozeGap`, fills the `GAP` in `source` with both its hint and its answer, for
+   *  the card to show one or the other. */
+  let {
+    source,
+    cardPath,
+    emphasis = false,
+    gap,
+  }: { source: string; cardPath: string; emphasis?: boolean; gap?: { hint: string; answer: string } } = $props();
   const blocks = $derived(parseBlocks(source, cardPath));
+
+  const html = (text: string) =>
+    gap
+      ? text.replace(
+          `<strong>${GAP}</strong>`,
+          `<span class="gap"><span class="hint">${gap.hint}</span><span class="fill">${gap.answer}</span></span>`,
+        )
+      : text;
 </script>
 
 <div class="markdown" class:emphasis>
   {#each blocks as block, i (i)}
     {#if block.type === "text"}
       <!-- Escaped when rendered: card text never holds HTML. -->
-      <div class="text">{@html block.html}</div>
+      <div class="text">{@html html(block.html)}</div>
     {:else if block.type === "image"}
       <CardImage src={block.src} alt={block.alt} path={block.path} />
     {:else}

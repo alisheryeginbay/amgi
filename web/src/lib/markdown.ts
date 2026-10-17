@@ -230,3 +230,32 @@ export function fileName(path: string): string {
     return name;
   }
 }
+
+/** Stands in for a cloze's gap in its Markdown, so the sentence renders once. */
+export const GAP = "";
+
+/** A cloze card's gap, so the answer can replace just the gap: the card with the gap
+ *  marked by `GAP`, and the gap's hint and answer as HTML. The two sides differ only
+ *  there, `**[hint]**` against `**answer**`. Null if they differ some other way, or the
+ *  answer is an image or sound. */
+export function clozeGap(front: string, back: string): { source: string; hint: string; answer: string } | null {
+  const shorter = Math.min(front.length, back.length);
+  let same = 0;
+  while (same < shorter && front[same] === back[same]) same++;
+  let sameEnd = 0;
+  while (sameEnd < shorter - same && front.at(-1 - sameEnd) === back.at(-1 - sameEnd)) sameEnd++;
+
+  // The common ends can reach into the gap, as when the answer starts with `[`.
+  const start = front.lastIndexOf("**[", same);
+  const close = front.indexOf("]**", Math.max(start, front.length - sameEnd - 1));
+  if (start < 0 || close < 0) return null;
+  const end = close + 3;
+  const after = front.slice(end);
+  const answer = back.slice(start, back.length - after.length);
+  if (back.slice(0, start) !== front.slice(0, start) || !back.endsWith(after)) return null;
+  if (!/^\*\*[\s\S]+\*\*$/.test(answer) || answer.includes("![")) return null;
+
+  const source = front.slice(0, start) + `**${GAP}**` + after;
+  if (!renderInline(source).includes(`<strong>${GAP}</strong>`)) return null;
+  return { source, hint: renderInline(front.slice(start, end)), answer: renderInline(answer) };
+}

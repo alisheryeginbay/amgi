@@ -353,7 +353,7 @@
   <aside class="preview" style:width="{shownPreviewWidth}px" aria-label="Selected card">
     {#if selected}
       <div class="card">
-        <CardView card={selected} revealed preview />
+        <CardView card={selected} />
       </div>
       <footer class="tabular">
         {#if selected.suspended}

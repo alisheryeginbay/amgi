@@ -60,6 +60,8 @@ final class AppModel {
     /// How many browsed cards match the tag or saved view, as counted by the browse pane.
     private(set) var browsedCount: Int?
     var revealed = false
+    /// The last answer given, which the study pane animates by.
+    private(set) var lastRating: Rating?
     /// Cards selected in the browse table.
     var browseSelection: Set<String> = []
     /// The browse search, as typed.
@@ -239,7 +241,7 @@ final class AppModel {
             pane: pane,
             environment: .current,
             icons: tagIcons,
-            study: StudyPayload(card: current, revealed: revealed, autoplay: autoplay),
+            study: StudyPayload(card: current, revealed: revealed, autoplay: autoplay, answered: lastRating),
             dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDue, today: today) } : nil,
             browse: browse,
             search: search,
@@ -338,6 +340,7 @@ final class AppModel {
     func answer(_ rating: Rating) {
         guard let collection, let card = current else { return }
         perform { try collection.answer(cardId: card.id, rating: rating) }
+        lastRating = rating
         current = nil
         refresh()
     }

@@ -21,6 +21,8 @@ export interface StudyState {
   card: StudyCard | null;
   revealed: boolean;
   autoplay: boolean;
+  /** The rating of the last answer, 1 for Again to 4 for Easy; null before any. */
+  answered: 1 | 2 | 3 | 4 | null;
 }
 
 export interface DashboardState {

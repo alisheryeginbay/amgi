@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { fade } from "svelte/transition";
   import Markdown from "./Markdown.svelte";
   import TagPills from "./TagPills.svelte";
   import type { CardKind } from "../lib/types";
@@ -13,35 +12,24 @@
     back: string;
   }
 
-  /** A card as studied: the question, then the answer once `revealed`. A cloze shows its
-   *  answer in place of the question while studying; `preview` shows both, one above the
-   *  other, in smaller type. */
-  let { card, revealed, preview = false }: { card: Card; revealed: boolean; preview?: boolean } = $props();
+  /** A card's two sides, one above the other, as previewed beside the browse table. */
+  let { card }: { card: Card } = $props();
+  const cloze = $derived(card.kind === "cloze");
 </script>
 
-<article class:preview>
+<article>
   <header>
     <span class="deck">{card.deck}</span>
     <TagPills tags={card.tags} />
   </header>
 
-  {#if card.kind === "basic" || preview}
-    <div class="front">
-      <Markdown source={card.front} cardPath={card.path} emphasis={card.kind === "cloze"} />
-    </div>
-    {#if revealed}
-      <div class="answer" in:fade={{ duration: preview ? 0 : 250 }}>
-        <hr />
-        <div class="back">
-          <Markdown source={card.back} cardPath={card.path} emphasis={card.kind === "cloze"} />
-        </div>
-      </div>
-    {/if}
-  {:else}
-    <div class="front">
-      <Markdown source={revealed ? card.back : card.front} cardPath={card.path} emphasis />
-    </div>
-  {/if}
+  <div class="front">
+    <Markdown source={card.front} cardPath={card.path} emphasis={cloze} />
+  </div>
+  <hr />
+  <div class="back">
+    <Markdown source={card.back} cardPath={card.path} emphasis={cloze} />
+  </div>
 </article>
 
 <style>
@@ -52,9 +40,10 @@
 
   header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
-    margin-bottom: 20px;
+    margin-bottom: 14px;
     font-size: 11px;
   }
 
@@ -64,39 +53,22 @@
   }
 
   .front {
-    font-size: var(--font-title);
+    font-size: var(--font-title2);
   }
 
   hr {
-    margin: 28px 0;
+    margin: 18px 0;
     border: none;
     border-top: 1px solid var(--separator);
   }
 
   .back {
-    font-size: var(--font-title2);
+    font-size: var(--font-title3);
     color: var(--secondary-label);
   }
 
-  .preview header {
-    flex-wrap: wrap;
-    margin-bottom: 14px;
-  }
-
-  .preview .front {
-    font-size: var(--font-title2);
-  }
-
-  .preview hr {
-    margin: 18px 0;
-  }
-
-  .preview .back {
-    font-size: var(--font-title3);
-  }
-
   /* Smaller images in the narrow preview. */
-  .preview :global(img) {
+  article :global(img) {
     max-height: 240px;
   }
 </style>

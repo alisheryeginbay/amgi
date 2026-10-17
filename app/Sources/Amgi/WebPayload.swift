@@ -39,14 +39,18 @@ struct StudyPayload: Encodable, Equatable {
     let card: StudyCard?
     let revealed: Bool
     let autoplay: Bool
+    /// The last answer, for the card leaving to drift its way.
+    let answered: Rating?
 
-    enum CodingKeys: CodingKey { case card, revealed, autoplay }
+    enum CodingKeys: CodingKey { case card, revealed, autoplay, answered }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(card.map(CardPayload.init), forKey: .card)
         try c.encode(revealed, forKey: .revealed)
         try c.encode(autoplay, forKey: .autoplay)
+        // 1 for Again through 4 for Easy, as the page sends ratings.
+        try c.encode(answered.map { $0.index + 1 }, forKey: .answered)
     }
 }
 
