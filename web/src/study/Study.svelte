@@ -28,24 +28,51 @@
   /** The card on screen, as a list keyed by deal: a card leaving keeps what it showed. */
   const dealtCards = $derived(card ? [{ deal, card, revealed }] : []);
 
-  /** The next card settles into place, under the one leaving. */
-  function dealIn(_node: Element) {
+  /** The next card settles into place. Under one leaving it lies there whole, so the two
+   *  never show through each other, and its face shows once the other has nearly gone. */
+  function dealIn(node: HTMLElement) {
+    const under = !reduceMotion && node.parentElement?.querySelector(".leaving") != null;
+    if (under) {
+      for (const part of node.querySelectorAll(".card > *")) {
+        part.animate([{ opacity: 0 }, { opacity: 1 }], { delay: 220, duration: 240, easing: "ease-out", fill: "backwards" });
+      }
+    }
     return {
       delay: reduceMotion ? 0 : 60,
       duration: reduceMotion ? 150 : 460,
       easing: cubicOut,
       css: (t: number, u: number) =>
-        reduceMotion ? `opacity: ${t}` : `opacity: ${t}; transform: translateY(${u * 14}px) scale(${0.97 + 0.03 * t})`,
+        reduceMotion
+          ? `opacity: ${t}`
+          : `${under ? "" : `opacity: ${t};`} transform: translateY(${u * 14}px) scale(${0.97 + 0.03 * t})`,
     };
   }
 
   /** How far an answered card drifts aside as it leaves: left for Again, right for Easy. */
   const DRIFT = [-24, -10, 10, 24];
 
+  /** Takes a leaving card out of the pile's layout, pinned where it stood, so the pile
+   *  takes the next card's size and place at once instead of when this one is gone. */
+  function pinInPlace(node: HTMLElement) {
+    const pile = node.parentElement!;
+    const scroller = pile.parentElement!;
+    // Where it stood before the next card joined the pile.
+    const next = [...pile.children].filter((c): c is HTMLElement => c !== node && !c.classList.contains("leaving"));
+    for (const c of next) c.style.display = "none";
+    const at = node.getBoundingClientRect();
+    for (const c of next) c.style.display = "";
+    node.style.width = `${node.offsetWidth}px`;
+    node.classList.add("leaving");
+    // The next card starts from its top, even after a long card was scrolled.
+    scroller.scrollTop = 0;
+    const origin = pile.getBoundingClientRect();
+    node.style.top = `${at.top - origin.top}px`;
+    node.style.left = `${at.left - origin.left}px`;
+  }
+
   /** The card answered lifts off the pile and fades. */
   function dealOut(node: HTMLElement, { answered }: { answered: boolean }) {
-    node.style.zIndex = "1";
-    node.style.pointerEvents = "none";
+    pinInPlace(node);
     const rating = app.study?.answered;
     const drift = answered && rating ? DRIFT[rating - 1] : 0;
     return {
@@ -145,6 +172,7 @@
   /* Auto margins center the card, and keep a tall one's top in view. Cards coming
      and going share one cell. */
   .pile {
+    position: relative;
     display: grid;
     width: min(560px, 100%);
     margin: auto;
@@ -153,5 +181,12 @@
   .stage {
     grid-area: 1 / 1;
     min-width: 0;
+  }
+
+  /* An answered card leaving lies over the pile without sizing it. */
+  .stage:global(.leaving) {
+    position: absolute;
+    z-index: 1;
+    pointer-events: none;
   }
 </style>
