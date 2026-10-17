@@ -54,6 +54,14 @@ of `#tag` words counts, so a `# Heading` stays text. Pick a tag in the sidebar t
 its cards across decks. Right-click a tag and choose **Choose Icon…** to give it an emoji;
 icons are kept in `.amgi.sqlite`.
 
+### Suspending cards
+
+A card tagged `#suspended` never comes up for study, and isn't counted as due or new;
+`tags = ["suspended"]` in a deck's front matter suspends the whole deck. **Suspend Card**
+in the toolbar while studying, or right-clicking cards while browsing, adds or removes the
+tag in the file for you. Tags aren't part of a card's identity, so it keeps its history.
+Pick the `suspended` tag in the sidebar to see them all.
+
 ## Importing from Anki
 
 **File ▸ Import Anki Deck…** (<kbd>⇧⌘I</kbd>) converts an `.apkg` or `.colpkg` into Markdown
@@ -66,7 +74,10 @@ the root, and note tags become `#tag` lines.
   deletions together (`c1` used twice); amgi gives each its own card.
 - Review history is replayed through amgi's FSRS scheduler, and due dates follow Anki's.
 - `[sound:…]` references become sound links. Text-to-speech (`{{tts:…}}`) is left out.
-- Suspended cards and image occlusion notes are left out.
+- Suspended cards are imported with the `#suspended` tag and keep their history. amgi
+  suspends a cloze as a whole, so when only some of a cloze's deletions were suspended in
+  Anki, those get a tagged copy of the cloze of their own.
+- Image occlusion notes are left out.
 
 ## Layout
 

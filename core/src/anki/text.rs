@@ -353,8 +353,9 @@ fn decode_entities(s: &str) -> String {
 
 /// Convert Anki cloze markers in Markdown from [`html_to_markdown`] to amgi
 /// deletions. Returns the text and the Anki cloze number of each deletion, in order.
-/// Nested clozes are flattened into their parent.
-pub fn convert_clozes(markdown: &str) -> (String, Vec<u32>) {
+/// Nested clozes are flattened into their parent. Deletions whose number `keep`
+/// rejects, such as suspended ones, become plain text.
+pub fn convert_clozes(markdown: &str, keep: impl Fn(u32) -> bool) -> (String, Vec<u32>) {
     let mut out = String::new();
     let mut numbers = Vec::new();
     let mut rest = markdown;
@@ -363,6 +364,11 @@ pub fn convert_clozes(markdown: &str) -> (String, Vec<u32>) {
         out.push_str(&rest[..start]);
         let body = &rest[body_start..body_start + body_len];
         let (answer, hint) = split_hint(body);
+        if !keep(number) {
+            out.push_str(&flatten_clozes(answer));
+            rest = &rest[body_start + body_len + 2..];
+            continue;
+        }
         out.push('[');
         out.push_str(&escape_bar(&flatten_clozes(answer)));
         if let Some(hint) = hint.map(str::trim).filter(|h| !h.is_empty()) {
@@ -510,10 +516,13 @@ mod tests {
 
     #[test]
     fn clozes() {
-        let (text, numbers) = convert_clozes(&md("The {{c1::capital}} of [x] is {{c2::Paris::city}}, {{c1::a|b}}."));
+        let (text, numbers) = convert_clozes(&md("The {{c1::capital}} of [x] is {{c2::Paris::city}}, {{c1::a|b}}."), |_| true);
         assert_eq!(text, r"The [capital] of \[x\] is [Paris|city], [a\|b].");
         assert_eq!(numbers, [1, 2, 1]);
-        let (text, numbers) = convert_clozes("{{c1::outer {{c2::inner::h}} end}} {{c3::x::y::z}} {{c1::open");
+        // A suspended deletion is no longer a gap.
+        let (text, numbers) = convert_clozes("{{c1::a}} {{c2::b::hint}} {{c3::c}}", |n| n != 2);
+        assert_eq!((text.as_str(), numbers), ("[a] b [c]", vec![1, 3]));
+        let (text, numbers) = convert_clozes("{{c1::outer {{c2::inner::h}} end}} {{c3::x::y::z}} {{c1::open", |_| true);
         assert_eq!(text, "[outer inner end] [x|y::z] {{c1::open");
         assert_eq!(numbers, [1, 3]);
     }

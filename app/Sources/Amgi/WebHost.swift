@@ -11,8 +11,8 @@ final class WebHost: NSObject {
     let webView: AmgiWebView
     /// Called for everything the page sends except `ready`.
     var onMessage: (WebMessage) -> Void = { _ in }
-    /// Called when "Edit Card" is chosen from a right-click menu.
-    var onEditCard: (String) -> Void = { _ in }
+    /// Items for a right-click on browse rows, given the cards it acts on.
+    var contextMenu: ([String]) -> [NSMenuItem] = { _ in [] }
 
     /// The open collection, served at `amgi://collection/`.
     var collectionRoot: URL? {
@@ -51,7 +51,7 @@ final class WebHost: NSObject {
         #if DEBUG
         webView.isInspectable = true
         #endif
-        webView.onEditCard = { [weak self] id in self?.onEditCard(id) }
+        webView.contextMenu = { [weak self] ids in self?.contextMenu(ids) ?? [] }
         webView.onMenuClosed = { [weak self] in self?.command("contextMenuClosed") }
         monitorStudyKeys()
         load()
@@ -155,8 +155,8 @@ final class WebHost: NSObject {
                 self.state = nil
                 apply(state)
             }
-        case .contextCard(let id):
-            webView.contextCardID = id
+        case .contextCards(let ids):
+            webView.contextCardIDs = ids
         default:
             onMessage(message)
         }
@@ -218,12 +218,12 @@ private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-/// The web view, with a context menu that keeps only text actions and adds "Edit Card"
-/// for the browse row clicked.
+/// The web view, with a context menu that keeps only text actions and adds the app's
+/// own items for the browse rows clicked.
 final class AmgiWebView: WKWebView {
     /// Set by the page while handling the right-click, just before the menu opens.
-    var contextCardID: String?
-    var onEditCard: (String) -> Void = { _ in }
+    var contextCardIDs: [String] = []
+    var contextMenu: ([String]) -> [NSMenuItem] = { _ in [] }
     var onMenuClosed: () -> Void = {}
 
     private static let kept: Set<String> = {
@@ -250,14 +250,10 @@ final class AmgiWebView: WKWebView {
         }
         if menu.items.last?.isSeparatorItem == true { menu.removeItem(at: menu.items.count - 1) }
 
-        if let id = contextCardID {
-            let item = NSMenuItem(title: "Edit Card", action: #selector(editCard(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = id
-            if !menu.items.isEmpty { menu.insertItem(.separator(), at: 0) }
-            menu.insertItem(item, at: 0)
-        }
-        contextCardID = nil
+        let items = contextCardIDs.isEmpty ? [] : contextMenu(contextCardIDs)
+        if !items.isEmpty && !menu.items.isEmpty { menu.insertItem(.separator(), at: 0) }
+        for item in items.reversed() { menu.insertItem(item, at: 0) }
+        contextCardIDs = []
         super.willOpenMenu(menu, with: event)
     }
 
@@ -266,9 +262,21 @@ final class AmgiWebView: WKWebView {
         onMenuClosed()
     }
 
-    @objc private func editCard(_ item: NSMenuItem) {
-        if let id = item.representedObject as? String { onEditCard(id) }
+}
+
+/// A menu item that runs a closure.
+final class ActionMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(_ title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        target = self
     }
+
+    required init(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func run() { handler() }
 }
 
 /// Serves `amgi://app/…` from the bundled page and `amgi://collection/…` from the open

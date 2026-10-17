@@ -42,6 +42,15 @@ pub struct ParsedCard {
     pub tags: Vec<String>,
 }
 
+/// Cards with this tag, on the card or in the deck's front matter, are never studied.
+pub const SUSPENDED_TAG: &str = "suspended";
+
+impl ParsedCard {
+    pub fn is_suspended(&self) -> bool {
+        self.tags.iter().any(|t| t.eq_ignore_ascii_case(SUSPENDED_TAG))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ParseWarning {
     pub line: u32,
@@ -175,6 +184,64 @@ fn take_tags(lines: &mut Vec<String>) -> Vec<String> {
         tags.splice(0..0, line_tags);
     }
     tags
+}
+
+/// Add or remove `#tag` on the card starting at 1-based `line`, in the card's own tag
+/// lines; the rest of the file is kept byte for byte. `None` when no card starts
+/// there or its own tags already say so (a front matter tag cannot be removed here).
+pub fn set_card_tag(source: &str, line: u32, tag: &str, present: bool) -> Option<String> {
+    let mut lines: Vec<String> = source.split_inclusive('\n').map(String::from).collect();
+    let start = line.checked_sub(1)? as usize;
+    let first = lines.get(start)?.trim_end();
+    if marker(first, "Q:").is_none() && marker(first, "C:").is_none() {
+        return None;
+    }
+    // The card runs to the next blank line or card marker, as when parsing.
+    let mut end = start + 1;
+    while let Some(l) = lines.get(end).map(|l| l.trim_end()) {
+        if l.trim().is_empty() || marker(l, "Q:").is_some() || marker(l, "C:").is_some() {
+            break;
+        }
+        end += 1;
+    }
+    // Its own tag lines close it; the marker line never counts as one.
+    let mut tags_start = end;
+    while tags_start > start + 1 && tag_line(&lines[tags_start - 1]).is_some() {
+        tags_start -= 1;
+    }
+    let matches = |t: &String| t.eq_ignore_ascii_case(tag);
+    let has = (tags_start..end).any(|i| tag_line(&lines[i]).is_some_and(|tags| tags.iter().any(matches)));
+    if has == present {
+        return None;
+    }
+
+    let split = |l: &str| {
+        let body = l.trim_end_matches(['\n', '\r']);
+        (body.to_string(), l[body.len()..].to_string())
+    };
+    if present {
+        let (body, newline) = split(&lines[end - 1]);
+        if tags_start < end {
+            lines[end - 1] = format!("{body} #{tag}{newline}");
+        } else if newline.is_empty() {
+            // The card ends the file without a final newline.
+            lines[end - 1] = format!("{body}\n");
+            lines.insert(end, format!("#{tag}"));
+        } else {
+            lines.insert(end, format!("#{tag}{newline}"));
+        }
+    } else {
+        for i in (tags_start..end).rev() {
+            let (body, newline) = split(&lines[i]);
+            let kept: Vec<&str> = body.split_whitespace().filter(|w| !w.strip_prefix('#').is_some_and(|t| t.eq_ignore_ascii_case(tag))).collect();
+            if kept.is_empty() {
+                lines.remove(i);
+            } else {
+                lines[i] = format!("{}{newline}", kept.join(" "));
+            }
+        }
+    }
+    Some(lines.concat())
 }
 
 fn marker<'a>(line: &'a str, tag: &str) -> Option<&'a str> {
@@ -492,5 +559,35 @@ mod tests {
         assert!(r.cards.is_empty());
         let lines: Vec<u32> = r.warnings.iter().map(|w| w.line).collect();
         assert_eq!(lines, vec![1, 3, 5, 7]);
+    }
+
+    #[test]
+    fn suspending_edits_only_the_card() {
+        let source = "+++\ntags = [\"x\"]\n+++\n\nQ: one\nA: 1\n#geo\n\nC: The [capital] is here.\r\nmore text\r\n\nQ: last\nA: 3";
+        // Joins an existing tag line.
+        let a = set_card_tag(source, 5, SUSPENDED_TAG, true).unwrap();
+        assert!(a.contains("A: 1\n#geo #suspended\n\nC:"));
+        // Gets a tag line of its own, with the file's line ending.
+        let b = set_card_tag(&a, 9, SUSPENDED_TAG, true).unwrap();
+        assert!(b.contains("more text\r\n#suspended\r\n\nQ: last"));
+        // The last card, without a final newline.
+        let c = set_card_tag(&b, 13, SUSPENDED_TAG, true).unwrap();
+        assert!(c.ends_with("A: 3\n#suspended"));
+        let cards = parse(&c).cards;
+        assert!(cards.iter().all(ParsedCard::is_suspended));
+        // Tags are not part of a card's identity, so history is kept.
+        assert_eq!(cards.iter().map(|c| &c.id).collect::<Vec<_>>(), parse(source).cards.iter().map(|c| &c.id).collect::<Vec<_>>());
+
+        let mut back = c;
+        for line in [13, 9, 5] {
+            back = set_card_tag(&back, line, "Suspended", false).unwrap();
+        }
+        // Removing restores the file, now with a final newline.
+        assert_eq!(back, format!("{source}\n"));
+        // Nothing to do, or no card at that line.
+        assert_eq!(set_card_tag(source, 5, SUSPENDED_TAG, false), None);
+        assert_eq!(set_card_tag(source, 6, SUSPENDED_TAG, true), None);
+        // A deck tag cannot be removed from one card.
+        assert_eq!(set_card_tag(source, 5, "x", false), None);
     }
 }

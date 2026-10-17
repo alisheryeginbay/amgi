@@ -118,7 +118,7 @@
     // Right-clicking a row outside the selection acts on that row alone.
     const targets = selection.has(card.id) ? selection : new Set([card.id]);
     contextRow = selection.has(card.id) ? null : card.id;
-    post({ type: "contextCard", id: targets.size === 1 ? [...targets][0] : null });
+    post({ type: "contextCards", ids: [...targets] });
   }
 
   const closeMenu = () => (contextRow = null);
@@ -260,6 +260,7 @@
         class:odd={index % 2 === 1}
         class:selected={selection.has(card.id)}
         class:context={contextRow === card.id}
+        class:suspended={card.suspended}
         role="row"
         tabindex="-1"
         aria-selected={selection.has(card.id)}
@@ -273,7 +274,9 @@
         <div class="cell secondary">{@html line(card.back)}</div>
         <div class="cell" title={card.deck}>{deckTitle(card.deck)}</div>
         <div class="cell"><TagPills tags={card.tags} /></div>
-        {#if card.due === null}
+        {#if card.suspended}
+          <div class="cell tertiary" title="Tagged #suspended, so it doesn't come up for study">Suspended</div>
+        {:else if card.due === null}
           <div class="cell tertiary">New</div>
         {:else}
           <div class="cell">{dueFormat.format(new Date(card.due * 1000))}</div>
@@ -421,6 +424,11 @@
   .focused .row.selected .tertiary,
   .focused .row.selected :global(.pill) {
     color: inherit;
+  }
+
+  /* Suspended cards stay listed, but read as out of rotation. */
+  .row.suspended:not(.selected) {
+    color: var(--secondary-label);
   }
 
   .row.context {

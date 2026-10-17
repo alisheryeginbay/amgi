@@ -393,6 +393,7 @@ pub struct Conversion {
     pub cards: u32,
     /// Notes that produced no card, such as image occlusion or empty templates.
     pub skipped_notes: u32,
+    /// Suspended Anki cards, written with the `#suspended` tag.
     pub suspended_cards: u32,
     pub media: Media,
 }
@@ -413,8 +414,7 @@ impl Package {
             };
             out.notes += 1;
             let active: Vec<&AnkiCard> = cards.iter().copied().filter(|c| !c.suspended).collect();
-            out.suspended_cards += (cards.len() - active.len()) as u32;
-            let Some(first) = active.first() else { continue };
+            let Some(first) = active.first().or(cards.first()) else { continue };
 
             let mut fields: HashMap<&str, &str> = notetype
                 .fields
@@ -428,14 +428,26 @@ impl Package {
             let before = out.cards;
             if notetype.cloze {
                 out.media.prefix = self.media_prefix(first.deck);
-                if let Some((block, ids)) = cloze_block(notetype, &fields, &mut out.media) {
-                    let block = with_tags(&block, &note.tags);
-                    self.add_histories(&active, |ord| ids_for_cloze(&ids, ord), &mut out);
+                // Each Anki card is one cloze number, but amgi suspends a cloze block as a
+                // whole. So suspended numbers get a block of their own, tagged, beside the
+                // block of those still studied: the sentence is written twice.
+                let suspended: Vec<&AnkiCard> = cards.iter().copied().filter(|c| c.suspended).collect();
+                for (group, is_suspended) in [(&active, false), (&suspended, true)] {
+                    if group.is_empty() {
+                        continue;
+                    }
+                    let numbers: BTreeSet<u32> = group.iter().map(|c| c.ord + 1).collect();
+                    let Some((block, ids)) = cloze_block(notetype, &fields, &numbers, &mut out.media) else { continue };
+                    let block = with_tags(&block, &note_tags(&note.tags, is_suspended));
+                    self.add_histories(group, |ord| ids_for_cloze(&ids, ord), &mut out);
                     out.cards += ids.len() as u32;
+                    if is_suspended {
+                        out.suspended_cards += ids.len() as u32;
+                    }
                     push_block(&mut decks, first.deck, &block);
                 }
             } else {
-                for card in &active {
+                for card in cards {
                     let Some((name, qfmt, afmt)) = notetype.templates.get(card.ord as usize) else { continue };
                     let deck = self.deck_name(card.deck);
                     let mut fields = fields.clone();
@@ -443,9 +455,10 @@ impl Package {
                     fields.insert("Deck", &deck);
                     out.media.prefix = self.media_prefix(card.deck);
                     let Some((block, id)) = basic_block(qfmt, afmt, &fields, &mut out.media) else { continue };
-                    let block = with_tags(&block, &note.tags);
+                    let block = with_tags(&block, &note_tags(&note.tags, card.suspended));
                     self.add_histories(&[card], |_| vec![id.clone()], &mut out);
                     out.cards += 1;
+                    out.suspended_cards += u32::from(card.suspended);
                     push_block(&mut decks, card.deck, &block);
                 }
             }
@@ -507,6 +520,12 @@ impl Package {
             .collect::<Vec<_>>()
             .join("/")
     }
+}
+
+/// A note's tags, with `suspended` added for a suspended card.
+fn note_tags(tags: &str, suspended: bool) -> String {
+    let has = tags.split_whitespace().any(|t| t.eq_ignore_ascii_case(parser::SUSPENDED_TAG));
+    if suspended && !has { format!("{tags} {}", parser::SUSPENDED_TAG) } else { tags.to_string() }
 }
 
 /// Add Anki's space-separated note tags as a `#tag` line at the end of the card,
@@ -586,7 +605,12 @@ fn answer_part(html: &str) -> &str {
 
 /// A `C:` card from a cloze note, with the amgi id and Anki cloze number of each
 /// deletion. The rest of the answer side, such as Back Extra, follows as a note.
-fn cloze_block(notetype: &Notetype, fields: &HashMap<&str, &str>, media: &mut Media) -> Option<(String, Vec<(String, u32)>)> {
+fn cloze_block(
+    notetype: &Notetype,
+    fields: &HashMap<&str, &str>,
+    active: &BTreeSet<u32>,
+    media: &mut Media,
+) -> Option<(String, Vec<(String, u32)>)> {
     let (_, qfmt, afmt) = notetype.templates.first()?;
     // Image occlusion masks are clozes over an image; there is nothing to show without it.
     if qfmt.contains("image-occlusion") {
@@ -600,7 +624,7 @@ fn cloze_block(notetype: &Notetype, fields: &HashMap<&str, &str>, media: &mut Me
         .map(|html| text::html_to_markdown(html, media))
         .collect::<Vec<_>>()
         .join("\n");
-    let (cloze, numbers) = text::convert_clozes(&source);
+    let (cloze, numbers) = text::convert_clozes(&source, |n| active.contains(&n));
     if numbers.is_empty() {
         return None;
     }
@@ -694,14 +718,17 @@ pub(crate) mod tests {
             "INSERT INTO notes VALUES
                (100, 1, 'сәлем' || char(31) || 'hello<img src=hi.png>', ''),
                (101, 2, 'The {{c1::capital}} of [x] is {{c2::Paris}}[sound:paris.mp3]' || char(31) || 'extra[sound:gone.mp3]', 'geo'),
-               (102, 2, 'no deletions' || char(31) || '', '');
+               (102, 2, 'no deletions' || char(31) || '', ''),
+               (103, 1, 'Capital of Spain?' || char(31) || 'Madrid', 'geo');
              INSERT INTO cards VALUES
                (1000, 100, 10, 0, 0, 2, 2), (1001, 100, 99, 10, 1, 0, 0),
                (1010, 101, 1, 0, 0, 2, 2), (1011, 101, 1, 0, 1, 0, -1),
-               (1020, 102, 1, 0, 0, 0, 0);
+               (1020, 102, 1, 0, 0, 0, 0),
+               (1030, 103, 1, 0, 0, 2, -1);
              INSERT INTO revlog VALUES
                (1700000000000, 1000, 3, 0, 1), (1700086400000, 1000, 3, 1, 3),
-               (1700000000000, 1010, 1, 0, -600);",
+               (1700000000000, 1010, 1, 0, -600),
+               (1700000000000, 1030, 3, 0, 1);",
         )
         .unwrap();
         conn
@@ -713,17 +740,25 @@ pub(crate) mod tests {
         let out = pkg.convert();
         let paths: Vec<_> = out.decks.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(paths, ["Default", "Lang/Kazakh-Verbs"]);
-        assert_eq!(out.decks[0].1, "C: The [capital] of \\[x\\] is [Paris]![](media/paris.mp3)\n#geo\n\nextra![](media/gone.mp3)\n");
+        // `c2` is suspended, so Paris is no longer a gap.
+        // `c2` is suspended, so it gets a tagged copy of the cloze of its own. A suspended
+        // card keeps its history and is tagged.
+        assert_eq!(
+            out.decks[0].1,
+            "C: The [capital] of \\[x\\] is Paris![](media/paris.mp3)\n#geo\n\nextra![](media/gone.mp3)\n\n\
+             C: The capital of \\[x\\] is [Paris]![](media/paris.mp3)\n#geo #suspended\n\nextra![](media/gone.mp3)\n\n\
+             Q: Capital of Spain?\nA: Madrid\n#geo #suspended\n"
+        );
         assert_eq!(
             out.decks[1].1,
             "+++\nname = \"Kazakh/Verbs\"\n+++\n\nQ: сәлем\nA: hello![](../media/hi.png)\n\nQ: hello![](../media/hi.png)\nA: сәлем\n"
         );
         assert_eq!(out.media.images.iter().collect::<Vec<_>>(), ["hi.png"]);
         assert_eq!(out.media.sounds.iter().collect::<Vec<_>>(), ["gone.mp3", "paris.mp3"]);
-        assert_eq!((out.notes, out.cards, out.skipped_notes, out.suspended_cards), (3, 4, 1, 1));
+        assert_eq!((out.notes, out.cards, out.skipped_notes, out.suspended_cards), (4, 5, 1, 2));
 
         let all = parser::parse(&out.decks[1].1).cards;
-        assert_eq!(out.histories.len(), 2);
+        assert_eq!(out.histories.len(), 3);
         assert_eq!(out.histories[0].0, all[0].id);
         assert_eq!(out.histories[0].1.len(), 2);
         assert_eq!(out.histories[0].1[1], Revlog { time: 1_700_086_400, ease: 3, kind: 1, interval: 3 });

@@ -59,6 +59,7 @@ struct DashboardPayload: Encodable, Equatable {
     let newCards: UInt32
     let youngCards: UInt32
     let matureCards: UInt32
+    let suspendedCards: UInt32
     let retention: Double?
 
     init(_ d: Dashboard, due: UInt32, today: TodayStats) {
@@ -72,6 +73,7 @@ struct DashboardPayload: Encodable, Equatable {
         newCards = d.newCards
         youngCards = d.youngCards
         matureCards = d.matureCards
+        suspendedCards = d.suspendedCards
         retention = d.retention
     }
 }
@@ -107,8 +109,9 @@ struct CardPayload: Encodable {
     var due: Int64?
     var reps: UInt32?
     var lapses: UInt32?
+    var suspended: Bool?
 
-    enum CodingKeys: CodingKey { case id, deck, tags, path, line, kind, front, back, due, reps, lapses }
+    enum CodingKeys: CodingKey { case id, deck, tags, path, line, kind, front, back, due, reps, lapses, suspended }
 
     init(_ card: StudyCard) {
         id = card.id
@@ -133,6 +136,7 @@ struct CardPayload: Encodable {
         due = card.due
         reps = card.reps
         lapses = card.lapses
+        suspended = card.suspended
     }
 
     func encode(to encoder: Encoder) throws {
@@ -150,6 +154,7 @@ struct CardPayload: Encodable {
             try c.encode(due, forKey: .due)
             try c.encode(reps, forKey: .reps)
             try c.encode(lapses, forKey: .lapses)
+            try c.encode(suspended, forKey: .suspended)
         }
     }
 }
@@ -171,8 +176,8 @@ enum WebMessage {
     /// Open a card's deck file.
     case open(path: String)
     case select(ids: [String])
-    /// The card a right-click acts on, if it is one card.
-    case contextCard(id: String?)
+    /// The cards a right-click acts on.
+    case contextCards(ids: [String])
 
     init?(_ body: Any) {
         guard let body = body as? [String: Any], let type = body["type"] as? String else { return nil }
@@ -187,8 +192,8 @@ enum WebMessage {
             self = .open(path: path)
         case "select":
             self = .select(ids: body["ids"] as? [String] ?? [])
-        case "contextCard":
-            self = .contextCard(id: body["id"] as? String)
+        case "contextCards":
+            self = .contextCards(ids: body["ids"] as? [String] ?? [])
         default:
             return nil
         }

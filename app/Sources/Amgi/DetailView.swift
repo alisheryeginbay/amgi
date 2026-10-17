@@ -69,6 +69,16 @@ private struct DetailToolbar: ToolbarContent {
                 }
                 ToolbarItem {
                     Button {
+                        model.setSuspended([card.id], true)
+                    } label: {
+                        Label("Suspend Card", systemImage: "pause.circle")
+                    }
+                    .help(card.kind == .cloze
+                        ? "Suspend Card: tags it #suspended, so none of this cloze's gaps come up"
+                        : "Suspend Card: tags it #suspended, so it doesn't come up")
+                }
+                ToolbarItem {
+                    Button {
                         model.revealInEditor(path: card.path)
                     } label: {
                         Label("Edit Card", systemImage: "pencil")

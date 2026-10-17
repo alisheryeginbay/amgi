@@ -34,6 +34,9 @@
             {@render count("New", d.newCards, "Never studied")}
             {@render count("Young", d.youngCards, "Next review less than 21 days after the last")}
             {@render count("Mature", d.matureCards, "Next review 21 days or more after the last")}
+            {#if d.suspendedCards > 0}
+              {@render count("Suspended", d.suspendedCards, "Tagged #suspended, so they don't come up")}
+            {/if}
           </dl>
           <hr />
           <dl>

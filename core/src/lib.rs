@@ -8,7 +8,7 @@ pub mod parser;
 pub mod scheduler;
 pub mod store;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -130,6 +130,8 @@ pub struct BrowseCard {
     pub due: Option<i64>,
     pub reps: u32,
     pub lapses: u32,
+    /// Tagged `#suspended`, so never studied.
+    pub suspended: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -161,7 +163,7 @@ pub struct ImportSummary {
     pub new_cards: u32,
     /// Notes that produced no card, such as image occlusion notes.
     pub skipped_notes: u32,
-    /// Suspended Anki cards, which are left out.
+    /// Suspended Anki cards, imported with the `#suspended` tag.
     pub suspended_cards: u32,
     /// Images now in the collection's `media` folder.
     pub images: u32,
@@ -187,6 +189,8 @@ pub struct Dashboard {
     /// Seen cards scheduled less than 21 days after their last review.
     pub young_cards: u32,
     pub mature_cards: u32,
+    /// Tagged `#suspended`; not counted as new, young or mature.
+    pub suspended_cards: u32,
     /// Share of reviews in the last 30 days, of cards last seen a day or more before,
     /// that were not rated Again. `None` without such reviews.
     pub retention: Option<f64>,
@@ -224,6 +228,12 @@ struct Card {
     parsed: ParsedCard,
     deck: String,
     path: String,
+}
+
+impl Card {
+    fn suspended(&self) -> bool {
+        self.parsed.is_suspended()
+    }
 }
 
 struct Inner {
@@ -306,6 +316,14 @@ impl CardCollection {
 
     pub fn answer(&self, card_id: String, rating: Rating) -> Result<()> {
         self.lock().answer(&card_id, rating, unix_now())
+    }
+
+    /// Suspend or unsuspend cards by adding or removing `#suspended` on their tag
+    /// lines, then reload. A cloze is one card in its file, so all its deletions
+    /// change together. Returns how many cards in the files changed; one suspended by
+    /// its deck's front matter cannot be unsuspended here.
+    pub fn set_suspended(&self, card_ids: Vec<String>, suspended: bool) -> Result<u32> {
+        self.lock().set_suspended(&card_ids, suspended)
     }
 
     pub fn today(&self) -> Result<TodayStats> {
@@ -449,6 +467,9 @@ impl Inner {
         for card in &self.cards {
             let counts = own.entry(&card.deck).or_default();
             counts.0 += 1;
+            if card.suspended() {
+                continue;
+            }
             match self.states.get(&card.parsed.id) {
                 Some(s) if s.due <= now => counts.1 += 1,
                 Some(_) => {}
@@ -500,14 +521,16 @@ impl Inner {
                     due: state.map(|s| s.due),
                     reps: state.map_or(0, |s| s.reps),
                     lapses: state.map_or(0, |s| s.lapses),
+                    suspended: card.suspended(),
                 }
             })
             .collect()
     }
 
     fn next_card(&self, scope: &StudyScope, now: i64) -> Result<Option<StudyCard>> {
+        let studied = || self.in_scope(scope).filter(|c| !c.suspended());
         let earliest_due_before = |limit: i64| {
-            self.in_scope(scope)
+            studied()
                 .filter_map(|c| self.states.get(&c.parsed.id).map(|s| (s.due, c)))
                 .filter(|(due, _)| *due <= limit)
                 .min_by_key(|(due, _)| *due)
@@ -516,8 +539,7 @@ impl Inner {
 
         let card = match earliest_due_before(now) {
             Some(c) => Some(c),
-            None if self.new_remaining(now)? > 0 => self
-                .in_scope(scope)
+            None if self.new_remaining(now)? > 0 => studied()
                 .find(|c| !self.states.contains_key(&c.parsed.id))
                 .or_else(|| earliest_due_before(now + LEARN_AHEAD_SECS)),
             None => earliest_due_before(now + LEARN_AHEAD_SECS),
@@ -568,6 +590,33 @@ impl Inner {
         Ok(())
     }
 
+    fn set_suspended(&mut self, ids: &[String], suspended: bool) -> Result<u32> {
+        // Each card's block once: a cloze's deletions share one.
+        let mut blocks: BTreeMap<&str, BTreeSet<u32>> = BTreeMap::new();
+        for id in ids {
+            let card = &self.cards[*self.index.get(id).ok_or_else(|| AmgiError::UnknownCard { id: id.clone() })?];
+            blocks.entry(&card.path).or_default().insert(card.parsed.line);
+        }
+        let mut changed = 0;
+        for (path, lines) in blocks {
+            let file = self.root.join(path);
+            let mut source = fs::read_to_string(&file)?;
+            let before = changed;
+            // From the bottom up, so an added line never moves a card still to edit.
+            for &line in lines.iter().rev() {
+                if let Some(edited) = parser::set_card_tag(&source, line, parser::SUSPENDED_TAG, suspended) {
+                    source = edited;
+                    changed += 1;
+                }
+            }
+            if changed > before {
+                fs::write(&file, source)?;
+            }
+        }
+        self.reload()?;
+        Ok(changed)
+    }
+
     fn dashboard(&self, activity_days: u32, now: i64) -> Result<Dashboard> {
         // Day `n` starts at `n * DAY_SECS - shift`, matching `day_start`.
         let shift = self.utc_offset_secs - DAY_ROLLOVER_SECS;
@@ -586,8 +635,12 @@ impl Inner {
         let streak = (0..).take_while(|n| studied.contains(&(from - n))).count() as u32;
 
         let mut forecast = vec![0; FORECAST_DAYS];
-        let (mut new_cards, mut young_cards, mut mature_cards) = (0, 0, 0);
+        let (mut new_cards, mut young_cards, mut mature_cards, mut suspended_cards) = (0, 0, 0, 0);
         for card in &self.cards {
+            if card.suspended() {
+                suspended_cards += 1;
+                continue;
+            }
             let Some(state) = self.states.get(&card.parsed.id) else {
                 new_cards += 1;
                 continue;
@@ -612,6 +665,7 @@ impl Inner {
             new_cards,
             young_cards,
             mature_cards,
+            suspended_cards,
             retention: (recalled_of > 0).then(|| f64::from(recalled) / f64::from(recalled_of)),
         })
     }
@@ -726,7 +780,7 @@ impl Inner {
         let unseen = self
             .cards
             .iter()
-            .filter(|c| !self.states.contains_key(&c.parsed.id))
+            .filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id))
             .count() as u32;
         Ok(TodayStats {
             reviewed: self.store.reviews_since(since)?,
@@ -989,6 +1043,36 @@ mod tests {
     }
 
     #[test]
+    fn suspended_cards_are_not_studied() {
+        let (dir, c) = collection(&[
+            ("a.md", "Q: kept\nA: 1\n\nQ: paused\nA: 2\n#suspended\n"),
+            ("b.md", "+++\ntags = [\"suspended\"]\n+++\nQ: whole deck\nA: 3\n"),
+        ]);
+        let ids: Vec<String> = c.cards(StudyScope::All).into_iter().map(|card| card.id).collect();
+        let mut inner = c.lock();
+        assert_eq!(inner.decks(T0).unwrap().iter().map(|d| d.new).sum::<u32>(), 1);
+        assert_eq!(inner.today(T0).unwrap().new_available, 1);
+        let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
+        assert_eq!(card.front, "kept");
+        inner.answer(&card.id, Rating::Good, T0).unwrap();
+        assert!(inner.next_card(&StudyScope::All, T0).unwrap().is_none());
+        let browsed = inner.browse(&StudyScope::All);
+        assert_eq!(browsed.iter().map(|c| c.suspended).collect::<Vec<_>>(), [false, true, true]);
+        assert_eq!(inner.dashboard(1, T0).unwrap().suspended_cards, 2);
+
+        // Unsuspending edits the file; a front matter tag stays.
+        assert_eq!(inner.set_suspended(&ids[1..], false).unwrap(), 1);
+        assert_eq!(fs::read_to_string(dir.join("a.md")).unwrap(), "Q: kept\nA: 1\n\nQ: paused\nA: 2\n");
+        assert_eq!(inner.next_card(&StudyScope::All, T0).unwrap().unwrap().front, "paused");
+        // And suspending puts the tag back, keeping the card's history.
+        assert_eq!(inner.set_suspended(&ids[..1], true).unwrap(), 1);
+        assert!(inner.states.contains_key(&ids[0]));
+        assert_eq!(fs::read_to_string(dir.join("a.md")).unwrap(), "Q: kept\nA: 1\n#suspended\n\nQ: paused\nA: 2\n");
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn day_rollover_respects_offset() {
         let (dir, c) = collection(&[("a.md", "")]);
         c.set_utc_offset(5 * 3600);
@@ -1008,8 +1092,8 @@ mod tests {
         anki::tests::write_package(&package);
         let summary = c.import_anki(package.to_string_lossy().into_owned()).unwrap();
         assert_eq!(summary.files, ["Default 2.md", "Lang/Kazakh-Verbs.md"]);
-        assert_eq!((summary.cards, summary.reviewed_cards, summary.skipped_notes), (4, 2, 1));
-        assert_eq!((summary.existing_history, summary.new_cards), (0, 2));
+        assert_eq!((summary.cards, summary.reviewed_cards, summary.skipped_notes), (5, 3, 1));
+        assert_eq!((summary.existing_history, summary.new_cards, summary.suspended_cards), (0, 2, 2));
         assert_eq!((summary.images, summary.missing_images), (1, 0));
         assert_eq!((summary.sounds, summary.missing_sounds), (1, 1));
         assert_eq!(fs::read(dir.join("media/hi.png")).unwrap(), b"png bytes");
@@ -1020,7 +1104,7 @@ mod tests {
         let names: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.name).collect();
         assert_eq!(names, ["Default", "Default 2", "Lang", "Lang/Kazakh-Verbs"]);
         assert_eq!(inner.decks(T0).unwrap()[3].title, "Kazakh/Verbs");
-        assert_eq!(inner.tags(), ["geo"]);
+        assert_eq!(inner.tags(), ["geo", "suspended"]);
         let card = inner.cards.iter().find(|c| c.parsed.front == "сәлем").unwrap();
         let state = inner.states[&card.parsed.id];
         assert_eq!((state.reps, state.last_review, state.due), (2, 1_700_086_400, 1_700_086_400 + 3 * DAY_SECS));
@@ -1029,7 +1113,7 @@ mod tests {
 
         // Importing again keeps the history already here and says so.
         let again = c.import_anki(package.to_string_lossy().into_owned()).unwrap();
-        assert_eq!((again.reviewed_cards, again.existing_history, again.new_cards), (0, 2, 2));
+        assert_eq!((again.reviewed_cards, again.existing_history, again.new_cards), (0, 3, 2));
         fs::remove_dir_all(dir).unwrap();
     }
 

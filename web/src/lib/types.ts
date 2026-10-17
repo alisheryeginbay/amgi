@@ -37,6 +37,8 @@ export interface DashboardState {
   newCards: number;
   youngCards: number;
   matureCards: number;
+  /** Tagged `#suspended`; not counted as new, young or mature. */
+  suspendedCards: number;
   /** Missing without reviews to measure. */
   retention?: number | null;
 }
@@ -54,6 +56,8 @@ export interface BrowseCard {
   due: number | null;
   reps: number;
   lapses: number;
+  /** Tagged `#suspended`, so never studied. */
+  suspended: boolean;
 }
 
 export interface BrowseState {
@@ -76,4 +80,4 @@ export type Message =
   | { type: "answer"; rating: 1 | 2 | 3 | 4 }
   | { type: "open"; path: string; line: number }
   | { type: "select"; ids: string[] }
-  | { type: "contextCard"; id: string | null };
+  | { type: "contextCards"; ids: string[] };

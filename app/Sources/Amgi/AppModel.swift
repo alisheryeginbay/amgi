@@ -92,10 +92,7 @@ final class AppModel {
 
     init() {
         web.onMessage = { [weak self] in self?.handle($0) }
-        web.onEditCard = { [weak self] id in
-            guard let self, let card = browsed.first(where: { $0.id == id }) else { return }
-            revealInEditor(path: card.path)
-        }
+        web.contextMenu = { [weak self] ids in self?.menuItems(for: ids) ?? [] }
         if let path = UserDefaults.standard.string(forKey: Self.folderKey) {
             open(URL(fileURLWithPath: path))
         }
@@ -230,6 +227,38 @@ final class AppModel {
         return browsed.first { $0.id == id }
     }
 
+    /// Suspend or unsuspend cards; the next card comes up if the one studied is suspended.
+    func setSuspended(_ ids: [String], _ suspended: Bool) {
+        guard let collection else { return }
+        perform {
+            let changed = try collection.setSuspended(cardIds: ids, suspended: suspended)
+            if !suspended && changed == 0 {
+                errorMessage = "These cards are suspended by their deck: remove `suspended` from the tags in the deck file's front matter."
+            }
+        }
+        if suspended, let current, ids.contains(current.id) {
+            self.current = nil
+        }
+        refresh()
+    }
+
+    /// Right-click items for browse rows.
+    private func menuItems(for ids: [String]) -> [NSMenuItem] {
+        let cards = browsed.filter { ids.contains($0.id) }
+        guard !cards.isEmpty else { return [] }
+        var items: [NSMenuItem] = []
+        if cards.count == 1, let card = cards.first {
+            items.append(ActionMenuItem("Edit Card") { [weak self] in self?.revealInEditor(path: card.path) })
+        }
+        let suspend = cards.contains { !$0.suspended }
+        let noun = cards.count == 1 ? "Card" : "\(cards.count) Cards"
+        let ids = cards.map(\.id)
+        items.append(ActionMenuItem(suspend ? "Suspend \(noun)" : "Unsuspend \(noun)") { [weak self] in
+            self?.setSuspended(ids, suspend)
+        })
+        return items
+    }
+
     func revealWithAnimation() {
         guard current != nil else { return }
         withAnimation(.smooth(duration: 0.3)) { revealed = true }
@@ -246,7 +275,7 @@ final class AppModel {
         case .answer(let rating): answerWithAnimation(rating)
         case .open(let path): revealInEditor(path: path)
         case .select(let ids): update(\.browseSelection, Set(ids))
-        case .ready, .contextCard: break
+        case .ready, .contextCards: break
         }
     }
 
@@ -329,7 +358,11 @@ extension ImportSummary {
         if existingHistory > 0 { first += " \(existingHistory) already had review history here, which was kept." }
         if newCards > 0 { first += newCards == 1 ? " 1 is new." : " \(newCards) are new." }
         var lines = [first]
-        if suspendedCards > 0 { lines.append("\(suspendedCards) suspended cards were left out.") }
+        if suspendedCards > 0 {
+            lines.append(suspendedCards == 1
+                ? "1 suspended card was imported with the #suspended tag."
+                : "\(suspendedCards) suspended cards were imported with the #suspended tag.")
+        }
         if skippedNotes > 0 { lines.append("\(skippedNotes) notes could not be converted, such as image occlusions.") }
         if images > 0 { lines.append("\(images) images were copied to the media folder.") }
         if missingImages > 0 { lines.append("\(missingImages) images were missing from the package.") }
