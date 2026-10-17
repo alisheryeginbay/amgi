@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Card text is never HTML, but cards can link images and sounds anywhere. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' amgi:; script-src 'self' amgi:; style-src 'self' 'unsafe-inline' amgi:; img-src * amgi: data: blob:; media-src * amgi: blob:; connect-src 'self' amgi:"
+    />
+    <title>Amgi</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

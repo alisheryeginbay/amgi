@@ -1,6 +1,7 @@
 import AmgiCore
 import AppKit
 import Observation
+import SwiftUI
 import UniformTypeIdentifiers
 
 /// What the sidebar shows in the detail pane.
@@ -45,6 +46,10 @@ final class AppModel {
     /// Cards of the deck or tag being browsed.
     private(set) var browsed: [BrowseCard] = []
     var revealed = false
+    /// Cards selected in the browse table.
+    var browseSelection: Set<String> = []
+    /// The browse search, as typed.
+    var search = ""
     var errorMessage: String?
     var importSummary: ImportSummary?
 
@@ -61,6 +66,8 @@ final class AppModel {
     var selection: SidebarItem = .review {
         didSet {
             guard oldValue != selection else { return }
+            search = ""
+            browseSelection = []
             switch selection {
             case .dashboard: loadDashboard()
             case .review: loadNext()
@@ -80,8 +87,15 @@ final class AppModel {
     }
 
     private var collection: CardCollection?
+    /// The web view behind every detail pane.
+    let web = WebHost()
 
     init() {
+        web.onMessage = { [weak self] in self?.handle($0) }
+        web.onEditCard = { [weak self] id in
+            guard let self, let card = browsed.first(where: { $0.id == id }) else { return }
+            revealInEditor(path: card.path)
+        }
         if let path = UserDefaults.standard.string(forKey: Self.folderKey) {
             open(URL(fileURLWithPath: path))
         }
@@ -108,6 +122,7 @@ final class AppModel {
             collection.setDesiredRetention(retention: Float(desiredRetention))
             self.collection = collection
             self.folder = url
+            web.collectionRoot = url
             self.selection = .review
             UserDefaults.standard.set(url.path, forKey: Self.folderKey)
         }
@@ -164,7 +179,75 @@ final class AppModel {
     /// Statistics are only gathered while the dashboard is showing.
     func loadDashboard() {
         guard let collection else { return }
-        perform { update(\.dashboard, try collection.dashboard(activityDays: ActivityHeatmap.dayCount())) }
+        perform { update(\.dashboard, try collection.dashboard(activityDays: Self.activityDays())) }
+    }
+
+    /// Weeks of activity on the dashboard, one column each.
+    private static let activityWeeks = 53
+
+    /// Days to request so the heatmap ends today and fills its week columns.
+    private static func activityDays(now: Date = .now) -> UInt32 {
+        // Study days roll over at 4am, like the scheduler.
+        let today = now.addingTimeInterval(-4 * 3600)
+        let calendar = Calendar.current
+        let weekday = (calendar.component(.weekday, from: today) - calendar.firstWeekday + 7) % 7
+        return UInt32((activityWeeks - 1) * 7 + weekday + 1)
+    }
+
+    // MARK: Web panes
+
+    /// What the web panes show. Read while rendering the detail column, so any change
+    /// here updates the page.
+    func webState(autoplay: Bool) -> WebState {
+        let pane: WebPane = switch selection {
+        case .dashboard: .dashboard
+        case .review: .study
+        case .deck, .tag, .leeches: .browse
+        }
+        let browse = browseScope.map { scope in
+            let key = switch scope {
+            case .all: "all"
+            case .deck(let name): "deck:\(name)"
+            case .tag(let tag): "tag:\(tag)"
+            case .leeches: "leeches"
+            }
+            return BrowseSource(scope: key, cards: browsed)
+        }
+        return WebState(
+            pane: pane,
+            environment: .current,
+            icons: tagIcons,
+            study: StudyPayload(card: current, revealed: revealed, autoplay: autoplay),
+            dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDue, today: today) } : nil,
+            browse: browse,
+            search: search
+        )
+    }
+
+    /// The one browsed card selected, if exactly one is.
+    var selectedBrowseCard: BrowseCard? {
+        guard browseSelection.count == 1, let id = browseSelection.first else { return nil }
+        return browsed.first { $0.id == id }
+    }
+
+    func revealWithAnimation() {
+        guard current != nil else { return }
+        withAnimation(.smooth(duration: 0.3)) { revealed = true }
+    }
+
+    func answerWithAnimation(_ rating: Rating) {
+        guard current != nil, revealed else { return }
+        withAnimation(.smooth(duration: 0.25)) { answer(rating) }
+    }
+
+    private func handle(_ message: WebMessage) {
+        switch message {
+        case .reveal: revealWithAnimation()
+        case .answer(let rating): answerWithAnimation(rating)
+        case .open(let path): revealInEditor(path: path)
+        case .select(let ids): update(\.browseSelection, Set(ids))
+        case .ready, .contextCard: break
+        }
     }
 
     /// Card lists are only read while a deck or tag is showing.

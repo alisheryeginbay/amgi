@@ -21,6 +21,7 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [.unsafeFlags([coreLibrary])]
         ),
-        .executableTarget(name: "Amgi", dependencies: ["AmgiCore"]),
+        // `Web` holds the Svelte panes, built by `scripts/build-web.sh`.
+        .executableTarget(name: "Amgi", dependencies: ["AmgiCore"], resources: [.copy("Web")]),
     ]
 )

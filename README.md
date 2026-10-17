@@ -72,21 +72,28 @@ the root, and note tags become `#tag` lines.
 
 - `core/`: Rust library containing the parser, FSRS-6 scheduler, SQLite store and the
   `CardCollection` API, exported through [UniFFI](https://mozilla.github.io/uniffi-rs/)
-- `app/`: SwiftUI macOS app (Swift package)
+- `app/`: SwiftUI macOS app (Swift package): the window, sidebar, toolbar and settings
+- `web/`: the study, dashboard and browse panes in [Svelte](https://svelte.dev), shown in
+  one web view. The app sends each pane its data and the page sends back what you do;
+  cards' images and sounds are served from the collection at `amgi://collection/`.
 - `examples/`: a sample collection
 
 ## Build & run
 
 ```sh
 scripts/build-core.sh        # build Rust core + generate Swift bindings
+scripts/build-web.sh         # build the Svelte panes into the app (needs Node)
 cd app && swift run          # or: open app/Package.swift in Xcode
 cargo test                   # core tests
 ```
 
-Re-run `scripts/build-core.sh` after any change to `core/`.
+Re-run `scripts/build-core.sh` after any change to `core/` and `scripts/build-web.sh` after
+any change to `web/`. To work on the panes with live reload, run `npm run dev` in `web/`
+and start the app with `AMGI_WEB_URL=http://localhost:5173 swift run`. Debug builds can be
+inspected with Safari's Web Inspector (Develop ▸ your Mac ▸ Amgi).
 
 Keys while studying: <kbd>Space</kbd> shows the answer, <kbd>1</kbd>–<kbd>4</kbd> rate
-Again/Hard/Good/Easy, <kbd>⌘O</kbd> opens a folder, <kbd>⌘R</kbd> reloads. Files also reload
+Again/Hard/Good/Easy, <kbd>R</kbd> replays the card's sounds, <kbd>⌘O</kbd> opens a folder, <kbd>⌘R</kbd> reloads. Files also reload
 whenever the app comes to the front.
 
 **Review** in the sidebar studies the whole collection. Pick a deck or tag to browse its

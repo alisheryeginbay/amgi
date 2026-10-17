@@ -13,11 +13,7 @@ struct ContentView: View {
                     Sidebar()
                         .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
                 } detail: {
-                    switch model.selection {
-                    case .dashboard: DashboardView()
-                    case .review: StudyView()
-                    case .deck, .tag, .leeches: BrowseView()
-                    }
+                    DetailView()
                 }
             }
         }
