@@ -1,5 +1,5 @@
-import katex from "katex";
 import { Marked } from "marked";
+import temml from "temml";
 
 /** File extensions shown as sounds rather than images. Anki's `[sound:…]` also takes
  *  video files, of which only the audio is played. */
@@ -61,8 +61,9 @@ export function mathLength(src: string): number | null {
   return null;
 }
 
-/** Inline Markdown only. Card text is never HTML: tags are shown as typed. Math is
- *  rendered with KaTeX; with `compact`, display math stays on the line, as in a table cell. */
+/** Inline Markdown only. Card text is never HTML: tags are shown as typed. Math becomes
+ *  MathML, which WebKit lays out natively in the system's math font; with `compact`, display
+ *  math stays on the line and nothing wraps, as in a table cell. */
 function renderer(compact: boolean): Marked {
   const marked = new Marked({ gfm: true, async: false });
   marked.use({
@@ -91,12 +92,15 @@ function renderer(compact: boolean): Marked {
           return { type: "math", raw: src.slice(0, length), tex: src.slice(delimiter, length - delimiter), display };
         },
         renderer(token) {
-          return katex.renderToString(token.tex as string, {
-            displayMode: (token.display as boolean) && !compact,
+          const display = (token.display as boolean) && !compact;
+          const html = temml.renderToString(token.tex as string, {
+            displayMode: display,
+            // Groups that end after a relation or operator, where TeX would break a line.
+            wrap: display || compact ? "none" : "tex",
             // Mistakes show in red with the TeX as written, rather than failing the card.
             throwOnError: false,
-            output: "html",
           });
+          return display || compact ? html : breakable(html);
         },
       },
     ],
@@ -107,6 +111,33 @@ function renderer(compact: boolean): Marked {
     },
   });
   return marked;
+}
+
+/** Inline MathML as one `<math>` per group Temml marked, with a line break allowed between
+ *  them. WebKit never breaks inside a `<math>`, so a long formula would otherwise run off
+ *  the card. */
+function breakable(html: string): string {
+  const match = /^<math([^>]*)>([\s\S]*)<\/math>$/.exec(html);
+  if (!match) return html;
+  const [, attributes, body] = match;
+  const groups: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (const tag of body.matchAll(/<(\/?)mrow\b[^>]*?(\/?)>/g)) {
+    if (tag[2]) continue;
+    if (tag[1]) {
+      depth--;
+      if (depth === 0) {
+        groups.push(body.slice(start, tag.index + tag[0].length));
+        start = tag.index + tag[0].length;
+      }
+    } else {
+      if (depth === 0 && body.slice(start, tag.index).trim()) return html;
+      depth++;
+    }
+  }
+  if (groups.length < 2 || depth !== 0 || body.slice(start).trim()) return html;
+  return groups.map((group) => `<math${attributes}>${group}</math>`).join("<wbr>");
 }
 
 const card = renderer(false);

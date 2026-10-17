@@ -368,7 +368,7 @@ private final class SchemeHandler: NSObject, WKURLSchemeHandler {
         }
     }
 
-    /// Web types UTType doesn't know, such as KaTeX's fonts, then the system's.
+    /// Web types UTType doesn't know, such as `.woff2` fonts, then the system's.
     private nonisolated static func mimeType(_ ext: String) -> String {
         let web = ["woff2": "font/woff2", "woff": "font/woff", "js": "text/javascript", "mjs": "text/javascript"]
         return web[ext.lowercased()] ?? UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"

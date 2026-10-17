@@ -45,12 +45,23 @@
     cursor: text;
   }
 
-  /* KaTeX lays out its own spacing. */
-  .text :global(.katex) {
+  /* Math sets its own spacing, a touch larger to match the text's weight. */
+  .text :global(math) {
     white-space: normal;
+    font-size: 1.1em;
   }
 
-  .text :global(.katex-display) {
+  /* Each group of a long formula is its own <math>, placed in the line like a word, so
+     the line can break between them. Temml's flex layout is for Chromium. */
+  .text :global(math:not(.tml-display)) {
+    display: inline;
+  }
+
+  .text :global(math > mrow) {
+    padding: 0;
+  }
+
+  .text :global(math.tml-display) {
     margin: 0.4em 0;
   }
 

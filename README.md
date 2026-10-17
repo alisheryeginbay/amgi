@@ -27,8 +27,8 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
   `wav`, `flac` and other formats macOS can play) show as play buttons. A card's sounds
   play when it appears, and the answer's when it is shown; press <kbd>R</kbd> to replay.
   Turn autoplay off in **Settings** (<kbd>⌘,</kbd>).
-- Math: `$…$` inline and `$$…$$` for display, in TeX, rendered with
-  [KaTeX](https://katex.org). Brackets and `|` inside math are literal, so they never
+- Math: `$…$` inline and `$$…$$` for display, in TeX, turned into MathML by
+  [Temml](https://temml.org) and drawn by WebKit in the system's math font. Brackets and `|` inside math are literal, so they never
   start a cloze. A `$` only starts math before a non-space (`$5 and $10` stays text);
   write `\$` for a literal one.
 - A card ends at a blank line or the next `Q:` / `C:`. Every other line is ignored.
