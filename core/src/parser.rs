@@ -17,7 +17,8 @@
 //! renders them as plain brackets.
 //!
 //! A fenced code block (```` ``` ```` or `~~~`) keeps everything inside it, blank
-//! lines and lines starting `Q:` included, and its brackets are never deletions.
+//! lines and lines starting `Q:` included. Brackets in code are literal; a deletion
+//! there is written `{{answer}}` or `{{answer|hint}}`.
 //!
 //! A card's last lines may hold tags: `#korean #verbs`. A file may start with TOML
 //! front matter between `+++` lines, giving the deck a `name` and default `tags`.
@@ -378,38 +379,102 @@ fn finish(pending: Option<Pending>, out: &mut ParseResult) {
 
 enum Segment<'a> {
     Text(&'a str),
-    Deletion { answer: &'a str, hint: Option<&'a str> },
+    /// `code` for a `{{…}}` deletion inside code.
+    Deletion { answer: &'a str, hint: Option<&'a str>, code: bool },
 }
 
-/// Byte offset of the first `target` that is not backslash-escaped, inside a code
-/// span, part of an image or inside math.
-fn find_markup(s: &str, target: char) -> Option<usize> {
-    let (mut escaped, mut skip_to) = (false, 0);
-    // Length of the backtick run that opened the current code span or block, which
-    // closes only on a run of the same length.
-    let mut code: Option<usize> = None;
-    for (i, c) in s.char_indices() {
-        let in_code = code.is_some();
+/// Open and close a deletion inside code in a cloze card's sides, where `**` could be
+/// code. The app strips them and marks the text between.
+pub const CODE_GAP_OPEN: char = '\u{E001}';
+pub const CODE_GAP_CLOSE: char = '\u{E002}';
+
+/// A cloze's text and deletions: `[…]` outside code, `{{…}}` inside code spans and
+/// fenced blocks. Outside code, brackets escaped with a backslash, in an image or in
+/// math are literal. `Err` names a deletion left open.
+fn segments(text: &str) -> Result<Vec<Segment<'_>>, &'static str> {
+    let mut segs = Vec::new();
+    let (mut text_start, mut skip_to, mut escaped) = (0, 0, false);
+    // The open deletion: whether it is in code, where it starts, its first `|`.
+    let mut open: Option<(bool, usize, Option<usize>)> = None;
+    // Length of the backtick run that opened the current code span, which closes only
+    // on a run of the same length.
+    let mut span: Option<usize> = None;
+    let mut fence = Fences::default();
+
+    for (i, c) in text.char_indices() {
+        if i < skip_to {
+            continue;
+        }
+        // A fence line opens or closes a block and is otherwise literal.
+        if span.is_none() && (i == 0 || text[..i].ends_with('\n')) {
+            let line_end = text[i..].find('\n').map_or(text.len(), |n| i + n);
+            let was = fence.inside();
+            fence.step(text[i..line_end].trim_end());
+            if fence.inside() != was {
+                skip_to = line_end;
+                continue;
+            }
+        }
+        let in_code = span.is_some() || fence.inside();
+        let rest = &text[i..];
         match c {
-            _ if i < skip_to => {}
             _ if escaped => escaped = false,
-            '\\' if !in_code => escaped = true,
-            '`' => {
-                let run = s[i..].len() - s[i..].trim_start_matches('`').len();
+            '`' if !fence.inside() => {
+                let run = rest.len() - rest.trim_start_matches('`').len();
                 skip_to = i + run;
-                code = match code {
+                span = match span {
                     None => Some(run),
-                    Some(open) if open == run => None,
-                    open => open,
+                    Some(len) if len == run => None,
+                    len => len,
                 };
             }
-            '!' if !in_code => skip_to = image_len(&s[i..]).map_or(0, |len| i + len),
-            '$' if !in_code => skip_to = math_len(&s[i..]).map_or(0, |len| i + len),
-            c if c == target && !in_code => return Some(i),
+            '\\' if !in_code => escaped = true,
+            '!' if !in_code => skip_to = image_len(rest).map_or(0, |len| i + len),
+            '$' if !in_code => skip_to = math_len(rest).map_or(0, |len| i + len),
+            '|' => {
+                if let Some((code, _, bar @ None)) = &mut open
+                    && *code == in_code
+                {
+                    *bar = Some(i);
+                }
+            }
+            '[' if !in_code && open.is_none() => open = Some((false, i + 1, None)),
+            '{' if in_code && open.is_none() && rest.starts_with("{{") => {
+                open = Some((true, i + 2, None));
+                skip_to = i + 2;
+            }
+            ']' | '}' => {
+                let Some((code, start, bar)) = open else { continue };
+                let closes = if code { in_code && rest.starts_with("}}") } else { !in_code && c == ']' };
+                if !closes {
+                    continue;
+                }
+                let delimiter = if code { 2 } else { 1 };
+                if start - delimiter > text_start {
+                    segs.push(Segment::Text(&text[text_start..start - delimiter]));
+                }
+                let (answer, hint) = match bar {
+                    Some(bar) => (text[start..bar].trim(), Some(text[bar + 1..i].trim()).filter(|h| !h.is_empty())),
+                    None => (text[start..i].trim(), None),
+                };
+                segs.push(Segment::Deletion { answer, hint, code });
+                open = None;
+                text_start = i + delimiter;
+                skip_to = text_start;
+            }
             _ => {}
         }
     }
-    None
+    match open {
+        Some((true, ..)) => Err("unclosed `{{` in cloze"),
+        Some((false, ..)) => Err("unclosed `[` in cloze"),
+        None => {
+            if text_start < text.len() {
+                segs.push(Segment::Text(&text[text_start..]));
+            }
+            Ok(segs)
+        }
+    }
 }
 
 /// Byte length of `$…$` or `$$…$$` math at the start of `s`. As in Pandoc, a single `$`
@@ -473,36 +538,13 @@ pub fn image_len(s: &str) -> Option<usize> {
     Some(dest_start + dest_len + 1)
 }
 
-fn segments(text: &str) -> Option<Vec<Segment<'_>>> {
-    let mut segs = Vec::new();
-    let mut rest = text;
-    while let Some(start) = find_markup(rest, '[') {
-        let end = find_markup(&rest[start + 1..], ']')? + start + 1;
-        if start > 0 {
-            segs.push(Segment::Text(&rest[..start]));
-        }
-        let inner = &rest[start + 1..end];
-        let (answer, hint) = match find_markup(inner, '|') {
-            Some(bar) => (inner[..bar].trim(), Some(inner[bar + 1..].trim())),
-            None => (inner.trim(), None),
-        };
-        let hint = hint.filter(|h| !h.is_empty());
-        segs.push(Segment::Deletion { answer, hint });
-        rest = &rest[end + 1..];
-    }
-    if !rest.is_empty() {
-        segs.push(Segment::Text(rest));
-    }
-    Some(segs)
-}
-
 fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) {
-    let Some(segs) = segments(text) else {
-        out.warnings.push(ParseWarning {
-            line,
-            message: "unclosed `[` in cloze".into(),
-        });
-        return;
+    let segs = match segments(text) {
+        Ok(segs) => segs,
+        Err(message) => {
+            out.warnings.push(ParseWarning { line, message: message.into() });
+            return;
+        }
     };
     let deletions = segs
         .iter()
@@ -511,7 +553,7 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
     if deletions == 0 {
         out.warnings.push(ParseWarning {
             line,
-            message: "cloze has no `[...]` deletions".into(),
+            message: "cloze has no `[...]` deletions (`{{...}}` in code)".into(),
         });
         return;
     }
@@ -526,9 +568,13 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
                     front.push_str(t);
                     back.push_str(t);
                 }
-                Segment::Deletion { answer, hint } => {
-                    if n == target {
-                        let _ = write!(front, "**[{}]**", hint.unwrap_or("…"));
+                Segment::Deletion { answer, hint, code } => {
+                    let hint = hint.unwrap_or("…");
+                    if n == target && *code {
+                        let _ = write!(front, "{CODE_GAP_OPEN}[{hint}]{CODE_GAP_CLOSE}");
+                        let _ = write!(back, "{CODE_GAP_OPEN}{answer}{CODE_GAP_CLOSE}");
+                    } else if n == target {
+                        let _ = write!(front, "**[{hint}]**");
                         let _ = write!(back, "**{answer}**");
                     } else {
                         front.push_str(answer);
@@ -731,6 +777,28 @@ mod tests {
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
         assert_eq!(r.cards.len(), 2);
         assert!(r.cards[1].front.contains("y <- x[[2]]\n```\nthe **[…]** item."));
+    }
+
+    #[test]
+    fn deletions_in_code_use_braces() {
+        let source = "C: Load [expm|package]:\n```r\nlibrary(\"{{expm}}\")\nx[[2]] <- {{ expm | function }}(m)\n```\nor `{{require}}(x[1])`.";
+        let r = parse(source);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.cards.len(), 4);
+        let (open, close) = (CODE_GAP_OPEN, CODE_GAP_CLOSE);
+        assert_eq!(r.cards[0].front, "Load **[package]**:\n```r\nlibrary(\"expm\")\nx[[2]] <- expm(m)\n```\nor `require(x[1])`.");
+        assert_eq!(r.cards[1].front, format!("Load expm:\n```r\nlibrary(\"{open}[…]{close}\")\nx[[2]] <- expm(m)\n```\nor `require(x[1])`."));
+        assert_eq!(r.cards[2].front, format!("Load expm:\n```r\nlibrary(\"expm\")\nx[[2]] <- {open}[function]{close}(m)\n```\nor `require(x[1])`."));
+        assert_eq!(r.cards[2].back, format!("Load expm:\n```r\nlibrary(\"expm\")\nx[[2]] <- {open}expm{close}(m)\n```\nor `require(x[1])`."));
+        assert!(r.cards[3].back.ends_with(&format!("`{open}require{close}(x[1])`.")));
+
+        // Braces outside code are text; an open one in code is a mistake.
+        assert_eq!(parse("C: {{x}} and [y]").cards[0].front, "{{x}} and **[…]**");
+        assert_eq!(parse("C: `{{x`").warnings[0].message, "unclosed `{{` in cloze");
+        // A `~~~` block's brackets are literal too.
+        let r = parse("C: ~~~\nv[0] = {{1}}\n~~~");
+        assert_eq!(r.cards.len(), 1);
+        assert_eq!(r.cards[0].back, format!("~~~\nv[0] = {open}1{close}\n~~~"));
     }
 
     #[test]

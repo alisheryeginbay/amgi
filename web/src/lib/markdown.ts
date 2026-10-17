@@ -113,6 +113,8 @@ function renderer(compact: boolean): Marked {
     ],
     renderer: {
       html: ({ text }) => escapeHTML(text),
+      // A cloze's gap in a code span is bold, like gaps in text.
+      codespan: ({ text }) => `<code>${escapeHTML(text).replace(CODE_GAP, "<strong>$1</strong>")}</code>`,
       // Images are taken out before rendering; any left (inside a link) show their alt text.
       image: ({ text }) => escapeHTML(text),
     },
@@ -222,15 +224,43 @@ export function loadLanguage(language: string): Promise<void> | null {
   return promise;
 }
 
+/** Around a cloze's gap inside code, where `**` could be code. Kept in step with
+ *  `CODE_GAP_OPEN` and `CODE_GAP_CLOSE` in `core/src/parser.rs`. */
+const CODE_GAP = /\uE001([^\uE002]*)\uE002/g;
+
+/** Code with its gap markers taken out, and where each gap was. */
+function codeGaps(source: string): { code: string; gaps: { start: number; end: number }[] } {
+  const gaps: { start: number; end: number }[] = [];
+  let removed = 0;
+  const code = source.replace(CODE_GAP, (marked, inner: string, index: number) => {
+    const start = index - removed;
+    gaps.push({ start, end: start + inner.length });
+    removed += marked.length - inner.length;
+    return inner;
+  });
+  return { code, gaps };
+}
+
 /** Code as HTML, highlighted when the grammar for `language` is loaded. Each token holds
- *  its light and dark colors in `--shiki-light` and `--shiki-dark`. */
-export function highlight(code: string, language: string): string {
-  if (!language || !isLoaded(language)) return escapeHTML(code);
+ *  its light and dark colors in `--shiki-light` and `--shiki-dark`. A cloze's gap is
+ *  marked with the class `gap`. */
+export function highlight(source: string, language: string): string {
+  const { code, gaps } = codeGaps(source);
+  if (!language || !isLoaded(language)) {
+    let html = "";
+    let last = 0;
+    for (const { start, end } of gaps) {
+      html += escapeHTML(code.slice(last, start)) + `<span class="gap">${escapeHTML(code.slice(start, end))}</span>`;
+      last = end;
+    }
+    return html + escapeHTML(code.slice(last));
+  }
   return shiki.codeToHtml(code, {
     lang: language,
     themes: { light: "github-light", dark: "github-dark" },
     defaultColor: false,
     structure: "inline",
+    decorations: gaps.filter(({ start, end }) => end > start).map(({ start, end }) => ({ start, end, properties: { class: "gap" } })),
   });
 }
 

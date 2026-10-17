@@ -125,6 +125,17 @@
     }
   }
 
+  /* A cloze's gap inside code. */
+  .code :global(.gap),
+  .code :global(.gap span) {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .code :global(.gap) {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
   .emphasis :global(strong) {
     color: var(--accent);
   }

@@ -38,8 +38,15 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
 - Code: fenced blocks (```` ```python ```` … ```` ``` ```` or `~~~`) are highlighted by
   [Shiki](https://shiki.style) in any of its 200+ languages, with GitHub's light and dark
   themes. Each language's grammar loads the first time a card uses it. Blank lines and
-  `Q:` lines inside a block stay part of the card, and brackets inside it never start a
-  cloze.
+  `Q:` lines inside a block stay part of the card. Brackets in code are literal, so a cloze
+  gap in a code block or `` `span` `` is written `{{answer}}` or `{{answer|hint}}`:
+
+  ````markdown
+  C: Raise a matrix to a power with the [expm|package] package:
+  ```r
+  powmat <- {{expm|function}}(1.1 * logm(mat))
+  ```
+  ````
 - A card ends at a blank line or the next `Q:` / `C:` outside a code block. Every other
   line is ignored.
 

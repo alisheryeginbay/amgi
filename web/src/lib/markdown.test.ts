@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { clozeGap, GAP, highlight, loadLanguage, oneLine, splitFences } from "./markdown.ts";
+import { clozeGap, GAP, highlight, loadLanguage, oneLine, renderInline, splitFences } from "./markdown.ts";
 
 test("finds the gap a cloze's answer fills", () => {
   const gap = clozeGap("The capital of **[…]** is Paris.", "The capital of **France** is Paris.");
@@ -50,4 +50,13 @@ test("highlights once a language is loaded, and escapes until then", async () =>
 
 test("puts code blocks on one line for table cells", () => {
   assert.equal(oneLine("Q\n```r\nx <- `a`\n\ny\n```\nend"), "Q `` x <- `a` y `` end");
+});
+
+test("marks a cloze's gap in code", async () => {
+  await loadLanguage("r");
+  const html = highlight('library("\uE001[…]\uE002")\nx', "r");
+  assert.match(html, /class="gap">\[…\]<\/span>/);
+  assert.doesNotMatch(html, /[\uE001\uE002]/);
+  assert.equal(highlight("a \uE001<b>\uE002 c", ""), 'a <span class="gap">&lt;b&gt;</span> c');
+  assert.equal(renderInline("`f(\uE001x\uE002)`"), "<code>f(<strong>x</strong>)</code>");
 });
