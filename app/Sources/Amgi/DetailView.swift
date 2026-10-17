@@ -110,7 +110,7 @@ private struct DetailToolbar: ToolbarContent {
                 }
                 .help(preview ? "Hide the selected card" : "Show the selected card beside the table")
             }
-            ToolbarItem {
+            ToolbarItem(placement: .navigation) {
                 @Bindable var model = model
                 SearchField(text: $model.search, prompt: "Search Cards")
                     .frame(width: 200)
