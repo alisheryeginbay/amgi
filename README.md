@@ -102,6 +102,7 @@ scripts/build-core.sh        # build Rust core + generate Swift bindings
 scripts/build-web.sh         # build the Svelte panes into the app (needs Node)
 cd app && swift run          # or: open app/Package.swift in Xcode
 cargo test                   # core tests
+(cd web && npm test)         # search tests
 ```
 
 Re-run `scripts/build-core.sh` after any change to `core/` and `scripts/build-web.sh` after
@@ -120,3 +121,21 @@ resize it, or hide it with **Hide Card** in the toolbar.
 
 **Saved Views ▸ Leeches** lists cards you have forgotten 8 or more times, across all decks:
 they usually need rewording or splitting.
+
+### Searching
+
+Every word in a search must match the card's question, answer or tags, ignoring case
+and accents. Words can also be filters:
+
+| Search | Finds cards |
+|---|---|
+| `"capital of"` | with that exact phrase |
+| `-paris` | without `paris` (works before any filter, too) |
+| `#verbs`, `#lang*` | tagged `verbs`; with a tag starting with `lang` |
+| `deck:french` | in a deck named `french` or under one, such as `lang/french/words` |
+| `q:paris`, `a:"to go"` | with that text in the question or answer only |
+| `is:new` `is:due` `is:suspended` `is:leech` `is:cloze` `is:basic` | in that state or of that kind |
+| `lapses>3`, `reviews<=5` | compared by count (`<`, `<=`, `>`, `>=`, `=`) |
+| `due<7`, `due<0` | due within 7 days; overdue. New cards have no due date |
+
+Anything else, such as `12:30`, is searched as text.

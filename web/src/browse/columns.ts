@@ -48,17 +48,6 @@ export function sorted(cards: BrowseCard[], sort: Sort | null, collator: Intl.Co
     .map(({ card }) => card);
 }
 
-/** Case- and accent-insensitive, like Finder's search. */
-export function fold(s: string): string {
-  return s.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase();
-}
-
-export function matches(card: BrowseCard, query: string): boolean {
-  const q = fold(query);
-  const tag = q.replace(/^#/, "");
-  return fold(card.front).includes(q) || fold(card.back).includes(q) || card.tags.some((t) => fold(t).includes(tag));
-}
-
 /** Last path component of a deck name: `science/physics` → `physics`. */
 export function deckTitle(name: string): string {
   return name.split("/").pop() || name;

@@ -5,7 +5,8 @@
   import { app, commands, post } from "../lib/app.svelte";
   import { renderInline } from "../lib/markdown";
   import type { BrowseCard } from "../lib/types";
-  import { COLUMNS, type ColumnId, type Sort, deckTitle, matches, sorted } from "./columns";
+  import { COLUMNS, type ColumnId, type Sort, deckTitle, sorted } from "./columns";
+  import { parseQuery } from "./query";
 
   // The table renders only the rows in view, so ten cards cost the same as ten thousand.
   const ROW_HEIGHT = 24;
@@ -38,7 +39,10 @@
   const collator = $derived(new Intl.Collator(app.environment.locale, { numeric: true, sensitivity: "base" }));
   const cards = $derived(app.browse?.cards ?? []);
   const query = $derived(app.search.trim());
-  const rows = $derived(sorted(query ? cards.filter((c) => matches(c, query)) : cards, sort, collator));
+  const rows = $derived.by(() => {
+    const matches = parseQuery(query);
+    return sorted(query ? cards.filter(matches) : cards, sort, collator);
+  });
   const rowIndex = $derived(new Map(rows.map((card, i) => [card.id, i])));
 
   // MARK: Layout
