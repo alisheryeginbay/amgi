@@ -9,6 +9,7 @@
   --quaternary-label: #0000001a;
   --separator: #0000001a;
   --accent: #0a84ff;
+  --yellow: #ffcc00;
   --selected-row: #0064e1;
   --unfocused-selected-row: #dcdcdc;
   --selected-text: #ffffff;
@@ -34,6 +35,7 @@
     --tertiary-label: #ffffff40;
     --quaternary-label: #ffffff1a;
     --separator: #ffffff1a;
+    --yellow: #ffd60a;
     --unfocused-selected-row: #464646;
     --text-background: #1e1e1e;
     --card-background: #2c2c2e;
@@ -49,6 +51,7 @@
     --quaternary-label: -apple-system-quaternary-label;
     --separator: -apple-system-separator;
     --accent: -apple-system-control-accent;
+    --yellow: -apple-system-yellow;
     --selected-row: -apple-system-selected-content-background;
     --unfocused-selected-row: -apple-system-unemphasized-selected-content-background;
     --selected-text: -apple-system-alternate-selected-text;

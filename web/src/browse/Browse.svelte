@@ -519,9 +519,9 @@
     color: inherit;
   }
 
-  /* Suspended cards stay listed, but read as out of rotation. */
+  /* Suspended cards stay listed, tinted yellow as out of rotation. */
   .row.suspended:not(.selected) {
-    color: var(--secondary-label);
+    background: color-mix(in srgb, var(--yellow) 28%, transparent);
   }
 
   .row.context {
