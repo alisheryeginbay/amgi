@@ -99,6 +99,10 @@
 
   function onRowDown(event: MouseEvent, card: BrowseCard) {
     if (event.button !== 0) return;
+    // Focus stays on the table: a row scrolled out of view is removed, and focus would
+    // go with it, so the arrow keys would stop working.
+    event.preventDefault();
+    scroller?.focus({ preventScroll: true });
     contextRow = null;
     if (event.shiftKey && anchor && rowIndex.has(anchor)) {
       select(range(anchor, card.id));
