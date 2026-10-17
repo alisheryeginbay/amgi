@@ -213,7 +213,7 @@ private struct TagRow: View {
             }
         }
         .popover(isPresented: $choosingIcon, arrowEdge: .trailing) {
-            IconPicker(current: icon) { model.setIcon($0, forTag: tag) }
+            EmojiPicker(current: icon) { model.setIcon($0, forTag: tag) }
         }
     }
 }
@@ -242,7 +242,7 @@ private struct SavedViewRow: View {
             Button("Delete View") { model.deleteSavedView(view) }
         }
         .popover(isPresented: $choosingIcon, arrowEdge: .trailing) {
-            IconPicker(current: view.icon) { model.setIcon($0, for: view) }
+            EmojiPicker(current: view.icon) { model.setIcon($0, for: view) }
         }
     }
 }
@@ -285,69 +285,6 @@ private struct SavedViewEditor: View {
         }
         .padding(20)
         .frame(width: 400)
-    }
-}
-
-/// Common emoji to pick from, with the system emoji picker for everything else.
-/// Popovers are hosted outside the window's view tree, so it takes no environment.
-private struct IconPicker: View {
-    private static let suggestions = Array("📚📝🧠💡🔬🧪🧮📐🌍🗺️🏛️🎨🎵💻⚙️🩺💊🌱🐾🍎⭐️🔥❤️✅")
-        .map(String.init)
-
-    @Environment(\.dismiss) private var dismiss
-    let current: String?
-    let onChoose: (String?) -> Void
-    @State private var custom = ""
-    @FocusState private var fieldFocused: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 4), count: 8), spacing: 4) {
-                ForEach(Self.suggestions, id: \.self) { emoji in
-                    Button {
-                        choose(emoji)
-                    } label: {
-                        Text(emoji)
-                            .font(.title2)
-                            .frame(width: 28, height: 28)
-                            .background(
-                                current == emoji ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
-                                in: .rect(cornerRadius: 6)
-                            )
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            HStack {
-                TextField("Other emoji", text: $custom)
-                    .focused($fieldFocused)
-                    .frame(width: 110)
-                    .onChange(of: custom) {
-                        // Keep only the last character typed or picked.
-                        if let last = custom.last { choose(String(last)) }
-                    }
-                Button {
-                    fieldFocused = true
-                    NSApp.orderFrontCharacterPalette(nil)
-                } label: {
-                    Image(systemName: "face.smiling")
-                }
-                .help("Show Emoji & Symbols")
-                Spacer()
-                Button("Remove") {
-                    onChoose(nil)
-                    dismiss()
-                }
-                .disabled(current == nil)
-            }
-        }
-        .padding(14)
-    }
-
-    private func choose(_ icon: String) {
-        onChoose(icon)
-        dismiss()
     }
 }
 

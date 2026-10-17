@@ -21,7 +21,8 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [.unsafeFlags([coreLibrary])]
         ),
-        // `Web` holds the Svelte panes, built by `scripts/build-web.sh`.
-        .executableTarget(name: "Amgi", dependencies: ["AmgiCore"], resources: [.copy("Web")]),
+        // `Web` holds the Svelte panes, built by `scripts/build-web.sh`; `Emoji.tsv` the emoji
+        // picker's data, written by `scripts/build-emoji.py`.
+        .executableTarget(name: "Amgi", dependencies: ["AmgiCore"], resources: [.copy("Web"), .copy("Emoji.tsv")]),
     ]
 )

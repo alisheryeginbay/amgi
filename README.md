@@ -59,8 +59,9 @@ A: to go
 
 Tags go on the card's last lines, after its first one, and only a line made entirely
 of `#tag` words counts, so a `# Heading` stays text. Pick a tag in the sidebar to browse
-its cards across decks. Right-click a tag and choose **Choose Icon…** to give it an emoji;
-icons are kept in `.amgi.sqlite`.
+its cards across decks. Right-click a tag and choose **Choose Icon…** to give it an emoji:
+type to search by name or keyword, use the arrow keys to move, and press <kbd>Return</kbd> to
+choose. Icons are kept in `.amgi.sqlite`.
 
 ### Suspending cards
 
@@ -110,7 +111,8 @@ cargo test                   # core tests
 ```
 
 Re-run `scripts/build-core.sh` after any change to `core/` and `scripts/build-web.sh` after
-any change to `web/`. To work on the panes with live reload, run `npm run dev` in `web/`
+any change to `web/`. The emoji picker's names and keywords come from GitHub's
+[gemoji](https://github.com/github/gemoji) (MIT); `scripts/build-emoji.py` refreshes them. To work on the panes with live reload, run `npm run dev` in `web/`
 and start the app with `AMGI_WEB_URL=http://localhost:5173 swift run`. Debug builds can be
 inspected with Safari's Web Inspector (Develop ▸ your Mac ▸ Amgi).
 
