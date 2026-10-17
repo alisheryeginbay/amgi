@@ -60,6 +60,11 @@ final class AppModel {
     /// How many browsed cards match the tag or saved view, as counted by the browse pane.
     private(set) var browsedCount: Int?
     var revealed = false
+    /// The card the Card Info window shows, kept current as cards are studied or edited.
+    private(set) var infoCard: CardInfo?
+    @ObservationIgnored private var infoCardID: String?
+    /// Opens the Card Info window. Set by the main window's view, which can open windows.
+    @ObservationIgnored var openCardInfoWindow: () -> Void = {}
     /// The last answer given, which the study pane animates by.
     private(set) var lastRating: Rating?
     /// Cards selected in the browse table.
@@ -202,9 +207,29 @@ final class AppModel {
             update(\.today, try collection.today())
             update(\.warnings, collection.warnings())
         }
+        loadCardInfo()
         if selection == .dashboard { loadDashboard() }
         if browseScope != nil { loadBrowsed() }
         if current == nil || !revealed { loadNext() }
+    }
+
+    /// The card Card Info is for here: the one studied, or the one selected in browse.
+    var infoTarget: String? {
+        selection == .review ? current?.id : selectedBrowseCard?.id
+    }
+
+    func showCardInfo(id: String) {
+        infoCardID = id
+        loadCardInfo()
+        openCardInfoWindow()
+    }
+
+    /// Keeps showing a card that leaves the collection, as it was last seen.
+    private func loadCardInfo() {
+        guard let collection, let id = infoCardID else { return }
+        perform {
+            if let info = try collection.cardInfo(cardId: id) { update(\.infoCard, info) }
+        }
     }
 
     /// Statistics are only gathered while the dashboard is showing.
@@ -274,19 +299,23 @@ final class AppModel {
         refresh()
     }
 
-    /// ⌘S suspends the card being studied and ⌘K opens the More menu. Caught before
-    /// any view, so they work whether the web view, sidebar or nothing has focus.
+    /// ⌘S suspends the card being studied and ⌘K opens the More menu; ⌘I shows Card Info
+    /// for that card or the one selected in browse. Caught before any view, so they work
+    /// whether the web view, sidebar or nothing has focus.
     private func monitorReviewShortcuts() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
             let key = event.charactersIgnoringModifiers?.lowercased()
             let window = event.window
             let handled = MainActor.assumeIsolated { () -> Bool in
-                guard let self, flags == .command, key == "s" || key == "k",
-                      self.selection == .review, self.current != nil,
-                      let window, window.attachedSheet == nil,
+                guard let self, flags == .command, let window, window.attachedSheet == nil,
                       window === self.web.webView.window
                 else { return false }
+                if key == "i", let id = self.infoTarget {
+                    self.showCardInfo(id: id)
+                    return true
+                }
+                guard key == "s" || key == "k", self.selection == .review, self.current != nil else { return false }
                 if key == "s" {
                     if !event.isARepeat { self.suspendCurrent() }
                 } else {
@@ -315,6 +344,11 @@ final class AppModel {
             ? "Suspend Card (⌘S): tags it #suspended, so none of this cloze's gaps come up"
             : "Suspend Card (⌘S): tags it #suspended, so it doesn't come up"
         menu.addItem(suspend)
+        let info = ActionMenuItem("Card Info", keyEquivalent: "i") { [weak self] in
+            self?.showCardInfo(id: card.id)
+        }
+        info.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
+        menu.addItem(info)
         if let view = moreMenuAnchor, view.window != nil {
             let below = NSPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 6 : -6)
             menu.popUp(positioning: nil, at: below, in: view)
@@ -331,6 +365,7 @@ final class AppModel {
         var items: [NSMenuItem] = []
         if cards.count == 1, let card = cards.first {
             items.append(ActionMenuItem("Edit Card") { [weak self] in self?.revealInEditor(path: card.path) })
+            items.append(ActionMenuItem("Card Info") { [weak self] in self?.showCardInfo(id: card.id) })
         }
         let suspend = cards.contains { !$0.suspended }
         let noun = cards.count == 1 ? "Card" : "\(cards.count) Cards"
@@ -358,6 +393,7 @@ final class AppModel {
         case .open(let path): revealInEditor(path: path)
         case .select(let ids): update(\.browseSelection, Set(ids))
         case .count(let count): update(\.browsedCount, count)
+        case .info(let id): showCardInfo(id: id)
         case .ready, .contextCards: break
         }
     }

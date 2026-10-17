@@ -365,6 +365,18 @@
         {/if}
         <span>{selected.reps === 1 ? "1 review" : `${selected.reps} reviews`}</span>
         <span>{selected.lapses === 1 ? "1 lapse" : `${selected.lapses} lapses`}</span>
+        <button
+          class="info"
+          title="Card Info (⌘I)"
+          aria-label="Card Info"
+          onclick={() => post({ type: "info", id: selected!.id })}
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <circle cx="8" cy="5" r="0.9" fill="currentColor" />
+            <path d="M8 7.3v4.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          </svg>
+        </button>
       </footer>
     {:else}
       <p class="empty">{selection.size > 1 ? `${selection.size} cards selected` : "No card selected"}</p>
@@ -577,6 +589,25 @@
     border-top: 1px solid var(--separator);
     font-size: var(--font-callout);
     color: var(--secondary-label);
+  }
+
+  /* At the footer's trailing end. */
+  .preview .info {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    margin: -3px -5px -3px auto;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--secondary-label);
+  }
+
+  .preview .info:hover {
+    background: var(--fill);
+    color: var(--label);
   }
 
   .empty {

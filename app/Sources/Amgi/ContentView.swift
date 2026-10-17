@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
@@ -16,6 +17,9 @@ struct ContentView: View {
                     DetailView()
                 }
             }
+        }
+        .onAppear {
+            model.openCardInfoWindow = { [openWindow] in openWindow(id: "card-info") }
         }
         .alert(
             "Something went wrong",

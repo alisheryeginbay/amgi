@@ -21,6 +21,11 @@ pub enum Rating {
 
 impl Rating {
     pub const ALL: [Rating; 4] = [Rating::Again, Rating::Hard, Rating::Good, Rating::Easy];
+
+    /// From its number, 1 for Again to 4 for Easy.
+    pub fn from_number(n: i64) -> Option<Rating> {
+        Rating::ALL.get(usize::try_from(n).ok()?.checked_sub(1)?).copied()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,6 +57,16 @@ impl From<MemoryState> for Memory {
 pub struct Outcome {
     pub memory: Memory,
     pub interval_secs: i64,
+}
+
+/// Probability of recalling a card with this stability `elapsed_days` after its last
+/// review: the forgetting curve of the default parameters, 90% at `stability` days.
+pub fn retrievability(stability: f64, elapsed_days: f64) -> f64 {
+    let state = MemoryState {
+        stability: stability as f32,
+        difficulty: 5.0, // The curve doesn't depend on difficulty.
+    };
+    fsrs::current_retrievability(state, elapsed_days.max(0.0) as f32, fsrs::DEFAULT_PARAMETERS[20]).into()
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +115,12 @@ impl Scheduler {
         }))
     }
 
+    /// Probability of recalling a card `elapsed_days` after its last review, on the
+    /// forgetting curve of the default parameters the scheduler uses.
+    pub fn retrievability(&self, memory: Memory, elapsed_days: f64) -> f64 {
+        retrievability(memory.stability, elapsed_days)
+    }
+
     pub fn schedule(
         &self,
         memory: Option<Memory>,
@@ -116,6 +137,18 @@ mod tests {
 
     fn days(o: &Outcome) -> i64 {
         o.interval_secs / DAY_SECS
+    }
+
+    #[test]
+    fn retrievability_falls_to_retention_at_stability() {
+        let s = Scheduler::default();
+        let memory = Memory { stability: 10.0, difficulty: 5.0 };
+        assert!((s.retrievability(memory, 0.0) - 1.0).abs() < 1e-6);
+        assert!((s.retrievability(memory, 10.0) - 0.9).abs() < 1e-4);
+        assert!(s.retrievability(memory, 30.0) < 0.9);
+        assert_eq!(Rating::from_number(3), Some(Rating::Good));
+        assert_eq!(Rating::from_number(0), None);
+        assert_eq!(Rating::from_number(5), None);
     }
 
     #[test]

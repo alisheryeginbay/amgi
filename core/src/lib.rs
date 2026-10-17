@@ -134,6 +134,53 @@ pub struct BrowseCard {
     pub suspended: bool,
 }
 
+/// Everything known about one card: its content, schedule, memory and review history.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CardInfo {
+    pub id: String,
+    pub deck: String,
+    /// Without `#`.
+    pub tags: Vec<String>,
+    /// Source file relative to the collection root.
+    pub path: String,
+    pub line: u32,
+    pub kind: CardKind,
+    /// Markdown.
+    pub front: String,
+    /// Markdown.
+    pub back: String,
+    pub suspended: bool,
+    /// Unix seconds; `None` for a new card.
+    pub due: Option<i64>,
+    /// Unix seconds; `None` for a new card.
+    pub last_review: Option<i64>,
+    pub reps: u32,
+    pub lapses: u32,
+    /// Days until recall falls to 90%; `None` for a new card.
+    pub stability: Option<f64>,
+    /// From 1 (easiest) to 10 (hardest); `None` for a new card.
+    pub difficulty: Option<f64>,
+    /// Probability of recalling it now; `None` for a new card.
+    pub retrievability: Option<f64>,
+    /// Oldest first.
+    pub reviews: Vec<CardReview>,
+}
+
+/// One review of a card, with the memory state and interval it led to.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CardReview {
+    /// Unix seconds.
+    pub reviewed_at: i64,
+    pub rating: Rating,
+    /// Study days since the review before; 0 for the first.
+    pub elapsed_days: f64,
+    pub stability: f64,
+    pub difficulty: f64,
+    /// Seconds until the card was due again.
+    pub interval_secs: i64,
+    pub was_new: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct CollectionWarning {
     pub path: String,
@@ -344,6 +391,11 @@ impl CardCollection {
 
     pub fn answer(&self, card_id: String, rating: Rating) -> Result<()> {
         self.lock().answer(&card_id, rating, unix_now())
+    }
+
+    /// `None` for a card no longer in the collection.
+    pub fn card_info(&self, card_id: String) -> Result<Option<CardInfo>> {
+        self.lock().card_info(&card_id, unix_now())
     }
 
     /// Suspend or unsuspend cards by adding or removing `#suspended` on their tag
@@ -602,6 +654,46 @@ impl Inner {
         })
     }
 
+    fn card_info(&self, card_id: &str, now: i64) -> Result<Option<CardInfo>> {
+        let Some(&i) = self.index.get(card_id) else { return Ok(None) };
+        let card = &self.cards[i];
+        let state = self.states.get(card_id);
+        let reviews = self.store.reviews(card_id)?;
+        Ok(Some(CardInfo {
+            id: card.parsed.id.clone(),
+            deck: card.deck.clone(),
+            tags: card.parsed.tags.clone(),
+            path: card.path.clone(),
+            line: card.parsed.line,
+            kind: card.parsed.kind,
+            front: card.parsed.front.clone(),
+            back: card.parsed.back.clone(),
+            suspended: card.suspended(),
+            due: state.map(|s| s.due),
+            last_review: state.map(|s| s.last_review),
+            reps: state.map_or(0, |s| s.reps),
+            lapses: state.map_or(0, |s| s.lapses),
+            stability: state.map(|s| s.memory.stability),
+            difficulty: state.map(|s| s.memory.difficulty),
+            retrievability: state.map(|s| {
+                let days = (now - s.last_review) as f64 / DAY_SECS as f64;
+                self.scheduler.retrievability(s.memory, days)
+            }),
+            reviews: reviews
+                .into_iter()
+                .map(|r| CardReview {
+                    reviewed_at: r.reviewed_at,
+                    rating: r.rating,
+                    elapsed_days: r.elapsed_days,
+                    stability: r.memory.stability,
+                    difficulty: r.memory.difficulty,
+                    interval_secs: r.interval_secs,
+                    was_new: r.was_new,
+                })
+                .collect(),
+        }))
+    }
+
     fn answer(&mut self, card_id: &str, rating: Rating, now: i64) -> Result<()> {
         if !self.index.contains_key(card_id) {
             return Err(AmgiError::UnknownCard { id: card_id.into() });
@@ -817,6 +909,13 @@ impl Inner {
 }
 
 /// Short human-readable interval for answer buttons: `10m`, `3d`, `1.5mo`, `2.1y`.
+/// Probability of recalling a card with this stability (in days) `elapsed_days` after
+/// its last review, for drawing its forgetting curve.
+#[uniffi::export]
+pub fn recall_probability(stability: f64, elapsed_days: f64) -> f64 {
+    scheduler::retrievability(stability, elapsed_days)
+}
+
 #[uniffi::export]
 pub fn format_interval(seconds: i64) -> String {
     let s = seconds.max(0) as f64;
@@ -966,6 +1065,31 @@ mod tests {
         assert_eq!((cards[0].reps, cards[0].due.is_some()), (1, true));
         assert_eq!((cards[1].reps, cards[1].due), (0, None));
         assert_eq!(inner.browse(&StudyScope::All).len(), 3);
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn card_info_has_schedule_and_history() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: one\n#x\n")]);
+        let mut inner = c.lock();
+        let id = inner.next_card(&deck("a"), T0).unwrap().unwrap().id;
+
+        let new = inner.card_info(&id, T0).unwrap().unwrap();
+        assert_eq!((new.front.as_str(), new.tags.as_slice(), new.due), ("1", ["x".to_string()].as_slice(), None));
+        assert_eq!((new.stability, new.retrievability, new.reviews.len()), (None, None, 0));
+
+        inner.answer(&id, Rating::Good, T0).unwrap();
+        inner.answer(&id, Rating::Again, T0 + 3 * DAY_SECS).unwrap();
+        let info = inner.card_info(&id, T0 + 3 * DAY_SECS).unwrap().unwrap();
+        assert_eq!((info.reps, info.lapses), (2, 1));
+        assert_eq!(info.reviews.iter().map(|r| r.rating).collect::<Vec<_>>(), [Rating::Good, Rating::Again]);
+        assert!(info.reviews[0].was_new && info.reviews[1].elapsed_days == 3.0);
+        assert_eq!(info.due, Some(T0 + 3 * DAY_SECS + scheduler::AGAIN_DELAY_SECS));
+        assert!((info.retrievability.unwrap() - 1.0).abs() < 1e-6);
+        let later = inner.card_info(&id, T0 + 10 * DAY_SECS).unwrap().unwrap();
+        assert!(later.retrievability.unwrap() < 1.0);
+        assert!(inner.card_info("nope", T0).unwrap().is_none());
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }

@@ -7,7 +7,7 @@ struct AmgiApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        // One window: a collection is studied in a single place, so no extra windows or tabs.
+        // One main window: a collection is studied in a single place, so no tabs.
         Window("Amgi", id: "main") {
             ContentView()
                 .environment(model)
@@ -30,6 +30,13 @@ struct AmgiApp: App {
                     .disabled(model.folder == nil || model.importing)
             }
         }
+
+        // A card's history beside the main window, opened with ⌘I.
+        Window("Card Info", id: "card-info") {
+            CardInfoView()
+                .environment(model)
+        }
+        .defaultSize(width: 420, height: 600)
 
         Settings {
             SettingsView()

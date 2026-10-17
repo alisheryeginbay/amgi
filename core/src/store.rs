@@ -141,6 +141,29 @@ impl Store {
             .optional()
     }
 
+    /// A card's review log, oldest first. Rows with an unknown rating are skipped.
+    pub fn reviews(&self, card_id: &str) -> rusqlite::Result<Vec<LoggedReview>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new
+             FROM review_log WHERE card_id = ?1 ORDER BY reviewed_at, id",
+        )?;
+        let rows = stmt.query_map([card_id], |r| {
+            let Some(rating) = Rating::from_number(r.get(1)?) else { return Ok(None) };
+            Ok(Some(LoggedReview {
+                reviewed_at: r.get(0)?,
+                rating,
+                elapsed_days: r.get(2)?,
+                memory: Memory {
+                    stability: r.get(3)?,
+                    difficulty: r.get(4)?,
+                },
+                interval_secs: r.get(5)?,
+                was_new: r.get(6)?,
+            }))
+        })?;
+        rows.filter_map(Result::transpose).collect()
+    }
+
     /// Persist a review: append to the log and upsert the card's state atomically.
     pub fn record_review(
         &mut self,
@@ -367,5 +390,9 @@ mod tests {
         assert_eq!(store.new_cards_since(0).unwrap(), 1);
         assert_eq!(store.reviews_since(0).unwrap(), 2);
         assert_eq!(store.reviews_since(5000).unwrap(), 1);
+        let log = store.reviews("abc").unwrap();
+        assert_eq!(log.iter().map(|r| r.rating).collect::<Vec<_>>(), [Rating::Good, Rating::Again]);
+        assert!(log[0].was_new && !log[1].was_new);
+        assert!(store.reviews("other").unwrap().is_empty());
     }
 }

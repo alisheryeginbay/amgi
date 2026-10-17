@@ -190,6 +190,8 @@ enum WebMessage {
     case contextCards(ids: [String])
     /// How many cards match the browsed tag or saved view.
     case count(Int)
+    /// Show a card in the Card Info window.
+    case info(id: String)
 
     init?(_ body: Any) {
         guard let body = body as? [String: Any], let type = body["type"] as? String else { return nil }
@@ -206,6 +208,9 @@ enum WebMessage {
             self = .select(ids: body["ids"] as? [String] ?? [])
         case "contextCards":
             self = .contextCards(ids: body["ids"] as? [String] ?? [])
+        case "info":
+            guard let id = body["id"] as? String else { return nil }
+            self = .info(id: id)
         case "count":
             guard let count = body["count"] as? Int else { return nil }
             self = .count(count)

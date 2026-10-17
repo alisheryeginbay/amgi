@@ -85,5 +85,7 @@ export type Message =
   | { type: "open"; path: string; line: number }
   | { type: "select"; ids: string[] }
   | { type: "contextCards"; ids: string[] }
+  /** Show a card in the Card Info window. */
+  | { type: "info"; id: string }
   /** Cards matching the browse state's `query`, before the search typed. */
   | { type: "count"; count: number };
