@@ -316,7 +316,7 @@ enum Segment<'a> {
 }
 
 /// Byte offset of the first `target` that is not backslash-escaped, inside a code
-/// span or part of an image.
+/// span, part of an image or inside math.
 fn find_markup(s: &str, target: char) -> Option<usize> {
     let (mut escaped, mut in_code, mut skip_to) = (false, false, 0);
     for (i, c) in s.char_indices() {
@@ -326,7 +326,44 @@ fn find_markup(s: &str, target: char) -> Option<usize> {
             '\\' if !in_code => escaped = true,
             '`' => in_code = !in_code,
             '!' if !in_code => skip_to = image_len(&s[i..]).map_or(0, |len| i + len),
+            '$' if !in_code => skip_to = math_len(&s[i..]).map_or(0, |len| i + len),
             c if c == target && !in_code => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Byte length of `$…$` or `$$…$$` math at the start of `s`. As in Pandoc, a single `$`
+/// opens only before a non-space and closes only after a non-space and before a
+/// non-digit, so prices like `$5 and $10` stay text. Inside, `\` escapes the next
+/// character. Kept in step with `mathLength` in `web/src/lib/markdown.ts`.
+pub fn math_len(s: &str) -> Option<usize> {
+    let display = s.starts_with("$$");
+    let body = s.strip_prefix(if display { "$$" } else { "$" })?;
+    if body.is_empty() || (!display && body.starts_with(char::is_whitespace)) {
+        return None;
+    }
+    let mut escaped = false;
+    for (i, c) in body.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '$' if display => {
+                if body[i..].starts_with("$$") && i > 0 {
+                    return Some(i + 4);
+                }
+            }
+            '$' => {
+                let before = body[..i].chars().next_back();
+                let after = body[i + 1..].chars().next();
+                if i > 0 && !before.is_some_and(char::is_whitespace) && !after.is_some_and(|c| c.is_ascii_digit()) {
+                    return Some(i + 2);
+                }
+            }
             _ => {}
         }
     }
@@ -589,5 +626,21 @@ mod tests {
         assert_eq!(set_card_tag(source, 6, SUSPENDED_TAG, true), None);
         // A deck tag cannot be removed from one card.
         assert_eq!(set_card_tag(source, 5, "x", false), None);
+    }
+
+    #[test]
+    fn math_is_not_a_deletion() {
+        assert_eq!(math_len("$x$ rest"), Some(3));
+        assert_eq!(math_len("$$\\frac{a}{b}$$ rest"), Some(15));
+        assert_eq!(math_len(r"$a \$ b$"), Some(8));
+        // Prices stay text.
+        assert_eq!(math_len("$5 and $10"), None);
+        assert_eq!(math_len("$ x$"), None);
+        assert_eq!(math_len("$47.5 billion"), None);
+
+        let r = parse("C: The interval $[0, 1]$ has [length $1$|size] and $|x|$ is [absolute].");
+        assert_eq!(r.cards.len(), 2);
+        assert_eq!(r.cards[0].front, "The interval $[0, 1]$ has **[size]** and $|x|$ is absolute.");
+        assert_eq!(r.cards[0].back, "The interval $[0, 1]$ has **length $1$** and $|x|$ is absolute.");
     }
 }

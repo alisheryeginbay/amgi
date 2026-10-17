@@ -1,3 +1,4 @@
+import katex from "katex";
 import { Marked } from "marked";
 
 /** File extensions shown as sounds rather than images. Anki's `[sound:…]` also takes
@@ -27,35 +28,93 @@ export type Block =
 const escapes: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 export const escapeHTML = (s: string) => s.replace(/[&<>"']/g, (c) => escapes[c]);
 
-// Inline Markdown only. Card text is never HTML: tags are shown as typed.
-const inline = new Marked({ gfm: true, async: false });
-inline.use({
-  // `**…**` is bold wherever it is, even inside a word next to punctuation, as in a
-  // cloze gap `시**[…]**요`. Markdown's own rule would leave those stars showing.
-  extensions: [
-    {
-      name: "strongAnywhere",
-      level: "inline",
-      start: (src: string) => {
-        const i = src.indexOf("**");
-        return i < 0 ? undefined : i;
-      },
-      tokenizer(src: string) {
-        const match = /^\*\*(?!\s)((?:\\.|[^\\])+?)(?<!\s)\*\*(?!\*)/.exec(src);
-        if (!match) return undefined;
-        return { type: "strong", raw: match[0], text: match[1], tokens: this.lexer.inlineTokens(match[1]) };
-      },
-    },
-  ],
-  renderer: {
-    html: ({ text }) => escapeHTML(text),
-    // Images are taken out before rendering; any left (inside a link) show their alt text.
-    image: ({ text }) => escapeHTML(text),
-  },
-});
+/** Index of the first `needle` in `src` not escaped with a backslash. */
+function unescapedIndex(src: string, needle: string): number | undefined {
+  for (let i = src.indexOf(needle); i >= 0; i = src.indexOf(needle, i + 1)) {
+    let slashes = 0;
+    while (src[i - 1 - slashes] === "\\") slashes++;
+    if (slashes % 2 === 0) return i;
+  }
+  return undefined;
+}
 
-export function renderInline(source: string): string {
-  return inline.parseInline(source) as string;
+/** Length of `$…$` or `$$…$$` math at the start of `src`, or null. As in Pandoc, a single
+ *  `$` opens only before a non-space and closes only after a non-space and before a
+ *  non-digit, so prices like `$5 and $10` stay text. Kept in step with `math_len` in
+ *  `core/src/parser.rs`, which decides what a cloze treats as math. */
+export function mathLength(src: string): number | null {
+  const display = src.startsWith("$$");
+  const body = src.slice(display ? 2 : 1);
+  if (!src.startsWith("$") || body === "" || (!display && /^\s/.test(body))) return null;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === "\\") {
+      i++;
+    } else if (c === "$" && i > 0) {
+      if (display) {
+        if (body[i + 1] === "$") return i + 4;
+      } else if (!/\s/.test(body[i - 1]) && !/\d/.test(body[i + 1] ?? "")) {
+        return i + 2;
+      }
+    }
+  }
+  return null;
+}
+
+/** Inline Markdown only. Card text is never HTML: tags are shown as typed. Math is
+ *  rendered with KaTeX; with `compact`, display math stays on the line, as in a table cell. */
+function renderer(compact: boolean): Marked {
+  const marked = new Marked({ gfm: true, async: false });
+  marked.use({
+    extensions: [
+      // `**…**` is bold wherever it is, even inside a word next to punctuation, as in a
+      // cloze gap `시**[…]**요`. Markdown's own rule would leave those stars showing.
+      {
+        name: "strongAnywhere",
+        level: "inline",
+        start: (src: string) => unescapedIndex(src, "**"),
+        tokenizer(src: string) {
+          const match = /^\*\*(?!\s)((?:\\.|[^\\])+?)(?<!\s)\*\*(?!\*)/.exec(src);
+          if (!match) return undefined;
+          return { type: "strong", raw: match[0], text: match[1], tokens: this.lexer.inlineTokens(match[1]) };
+        },
+      },
+      {
+        name: "math",
+        level: "inline",
+        start: (src: string) => unescapedIndex(src, "$"),
+        tokenizer(src: string) {
+          const length = mathLength(src);
+          if (length === null) return undefined;
+          const display = src.startsWith("$$");
+          const delimiter = display ? 2 : 1;
+          return { type: "math", raw: src.slice(0, length), tex: src.slice(delimiter, length - delimiter), display };
+        },
+        renderer(token) {
+          return katex.renderToString(token.tex as string, {
+            displayMode: (token.display as boolean) && !compact,
+            // Mistakes show in red with the TeX as written, rather than failing the card.
+            throwOnError: false,
+            output: "html",
+          });
+        },
+      },
+    ],
+    renderer: {
+      html: ({ text }) => escapeHTML(text),
+      // Images are taken out before rendering; any left (inside a link) show their alt text.
+      image: ({ text }) => escapeHTML(text),
+    },
+  });
+  return marked;
+}
+
+const card = renderer(false);
+const cell = renderer(true);
+
+/** Card Markdown as HTML. `compact` keeps display math on the line, for table cells. */
+export function renderInline(source: string, compact = false): string {
+  return (compact ? cell : card).parseInline(source) as string;
 }
 
 /** `![alt](path)` or `![alt](<path>)`; alt text may hold balanced brackets. */

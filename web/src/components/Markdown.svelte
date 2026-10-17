@@ -35,12 +35,23 @@
   }
 
   .text {
+    /* Full width, so display math centers on the card. */
+    align-self: stretch;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     line-height: 1.45;
     -webkit-user-select: text;
     user-select: text;
     cursor: text;
+  }
+
+  /* KaTeX lays out its own spacing. */
+  .text :global(.katex) {
+    white-space: normal;
+  }
+
+  .text :global(.katex-display) {
+    margin: 0.4em 0;
   }
 
   .emphasis :global(strong) {

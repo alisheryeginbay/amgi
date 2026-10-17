@@ -27,6 +27,10 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
   `wav`, `flac` and other formats macOS can play) show as play buttons. A card's sounds
   play when it appears, and the answer's when it is shown; press <kbd>R</kbd> to replay.
   Turn autoplay off in **Settings** (<kbd>⌘,</kbd>).
+- Math: `$…$` inline and `$$…$$` for display, in TeX, rendered with
+  [KaTeX](https://katex.org). Brackets and `|` inside math are literal, so they never
+  start a cloze. A `$` only starts math before a non-space (`$5 and $10` stays text);
+  write `\$` for a literal one.
 - A card ends at a blank line or the next `Q:` / `C:`. Every other line is ignored.
 
 A card's identity comes from its text (the question for basic cards, the whole text
@@ -73,6 +77,8 @@ the root, and note tags become `#tag` lines.
   `C:` cards, with `Back Extra` kept as a note under the card. Anki can test several
   deletions together (`c1` used twice); amgi gives each its own card.
 - Review history is replayed through amgi's FSRS scheduler, and due dates follow Anki's.
+- MathJax `\(…\)` and `\[…\]` become `$…$` and `$$…$$`. A cloze inside math is
+  taken out of it, so the gap holds its own math.
 - `[sound:…]` references become sound links. Text-to-speech (`{{tts:…}}`) is left out.
 - Suspended cards are imported with the `#suspended` tag and keep their history. amgi
   suspends a cloze as a whole, so when only some of a cloze's deletions were suspended in

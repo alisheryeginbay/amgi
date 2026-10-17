@@ -115,13 +115,15 @@ pub struct Media {
 
 /// Stands in for `[sound:…]` between finding sounds and reading tags.
 const SOUND_TAG: &str = "amgi-sound";
+/// Stands in for MathJax `\(…\)` and `\[…\]` between finding math and reading tags.
+const MATH_TAG: &str = "amgi-math";
 
 /// Convert Anki field HTML to inline Markdown on as few lines as needed. Text is
 /// escaped so it renders literally, including `[` and `]` (cloze markup in amgi).
 /// Cloze markers `{{c1::…}}` pass through unchanged. Images and sounds link into the
 /// media folder, both as `![](path)`; the app tells them apart by extension.
 pub fn html_to_markdown(html: &str, media: &mut Media) -> String {
-    let html = mark_sounds(html);
+    let html = mark_math(&mark_sounds(html));
     let mut out = String::new();
     let mut in_code = false;
     // Raw-text elements whose content is never shown.
@@ -186,6 +188,11 @@ pub fn html_to_markdown(html: &str, media: &mut Media) -> String {
                     out.push_str(&image);
                 }
             }
+            MATH_TAG => {
+                if let Some(tex) = attribute(tag, "tex") {
+                    out.push_str(&math_markdown(&clean_tex(&tex), attribute(tag, "display").as_deref() == Some("1")));
+                }
+            }
             SOUND_TAG => {
                 // Sounds are always files in the package.
                 let sound = attribute(tag, "src")
@@ -245,6 +252,68 @@ fn media_markdown(src: &str, used: &mut BTreeSet<String>, prefix: &str) -> Optio
     Some(if path.contains([' ', '(', ')']) { format!("![](<{path}>)") } else { format!("![]({path})") })
 }
 
+/// Replace MathJax `\(…\)` and `\[…\]` with a tag holding the TeX, so it is written
+/// as `$…$` or `$$…$$` without the escaping text gets.
+fn mark_math(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    loop {
+        let open = [("\\(", "\\)", false), ("\\[", "\\]", true)]
+            .into_iter()
+            .filter_map(|(open, close, display)| rest.find(open).map(|i| (i, close, display)))
+            .min_by_key(|(i, ..)| *i);
+        let Some((start, close, display)) = open else { break };
+        let Some(len) = rest[start + 2..].find(close) else { break };
+        out.push_str(&rest[..start]);
+        let tex = attribute_escape(&rest[start + 2..start + 2 + len]);
+        out.push_str(&format!(r#"<{MATH_TAG} display="{}" tex="{tex}">"#, u8::from(display)));
+        rest = &rest[start + 2 + len + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn attribute_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// TeX as typed in Anki's editor: drop any HTML and entities, on one line.
+fn clean_tex(html: &str) -> String {
+    let mut text = String::new();
+    let mut rest = html;
+    while let Some(lt) = rest.find('<') {
+        text.push_str(&rest[..lt]);
+        text.push(' ');
+        rest = rest[lt..].find('>').map_or("", |gt| &rest[lt + gt + 1..]);
+    }
+    text.push_str(rest);
+    decode_entities(&text).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `$tex$`, or `$$tex$$` for display math. A cloze inside the math is taken out of it,
+/// holding math of its own, as amgi's brackets are literal inside math:
+/// `\(a = {{c1::b}}\)` becomes `$a =$ {{c1::$b$}}`.
+fn math_markdown(tex: &str, display: bool) -> String {
+    let delimiter = if display { "$$" } else { "$" };
+    let wrap = |t: &str| {
+        let t = t.trim();
+        if t.is_empty() { String::new() } else { format!("{delimiter}{t}{delimiter}") }
+    };
+    let mut pieces = Vec::new();
+    let mut rest = tex;
+    while let Some((start, number, body_start)) = find_cloze(rest) {
+        let Some(len) = cloze_end(&rest[body_start..]) else { break };
+        pieces.push(wrap(&rest[..start]));
+        let (answer, hint) = split_hint(&rest[body_start..body_start + len]);
+        let hint = hint.map(|h| format!("::{h}")).unwrap_or_default();
+        pieces.push(format!("{{{{c{number}::{}{hint}}}}}", wrap(answer)));
+        rest = &rest[body_start + len + 2..];
+    }
+    pieces.push(wrap(rest));
+    pieces.retain(|p| !p.is_empty());
+    pieces.join(" ")
+}
+
 /// Replace `[sound:file.mp3]` with a tag read like `<img>`, so the file name is
 /// checked the same way.
 fn mark_sounds(html: &str) -> String {
@@ -285,7 +354,8 @@ fn push_text(out: &mut String, raw: &str, in_code: bool) {
 
 fn needs_escape(c: char, before: Option<&char>, after: Option<&char>) -> bool {
     match c {
-        '\\' | '*' | '`' | '[' | ']' | '~' => true,
+        // `$` would otherwise start math.
+        '\\' | '*' | '`' | '[' | ']' | '~' | '$' => true,
         // `_` only emphasizes at word boundaries, so `snake_case` stays readable.
         '_' => !(before.is_some_and(|c| c.is_alphanumeric()) && after.is_some_and(|c| c.is_alphanumeric())),
         _ => false,
@@ -459,12 +529,15 @@ fn flatten_clozes(s: &str) -> String {
 
 /// `|` separates a hint in amgi; escape it unless already escaped or in code.
 fn escape_bar(s: &str) -> String {
-    let (mut out, mut escaped, mut in_code) = (String::new(), false, false);
-    for c in s.chars() {
+    let (mut out, mut escaped, mut in_code, mut skip_to) = (String::new(), false, false, 0);
+    for (i, c) in s.char_indices() {
         match c {
+            // Math keeps `|` as TeX, such as `|x|`.
+            _ if i < skip_to => {}
             _ if escaped => escaped = false,
             '\\' if !in_code => escaped = true,
             '`' => in_code = !in_code,
+            '$' if !in_code => skip_to = crate::parser::math_len(&s[i..]).map_or(0, |len| i + len),
             '|' if !in_code => out.push('\\'),
             _ => {}
         }
@@ -512,6 +585,22 @@ mod tests {
         assert_eq!(html_to_markdown(html, &mut media), r#"![](<../media/my "word" & x.mp3>) \[sound:"#);
         assert_eq!(media.sounds.iter().collect::<Vec<_>>(), ["a.mp3", r#"my "word" & x.mp3"#]);
         assert_eq!(md("<img src=https://x.org/a.png>"), "![](https://x.org/a.png)");
+    }
+
+    #[test]
+    fn math() {
+        // MathJax becomes `$…$`, unescaped; plain dollars are escaped.
+        assert_eq!(md(r"For \(T \in \mathcal{L}(V, W)\) and x_1 * 2"), r"For $T \in \mathcal{L}(V, W)$ and x_1 \* 2");
+        assert_eq!(md(r"\[\sum_{i=1}^n i\]"), r"$$\sum_{i=1}^n i$$");
+        assert_eq!(md(r"\(a&nbsp;&lt;&nbsp;b<br>\)"), r"$a < b$");
+        assert_eq!(md("$47.5 billion"), r"\$47.5 billion");
+        // A cloze inside math holds math of its own.
+        let html = r"\(\alpha + \beta = {{c1::-\frac{b}{a} }}\) and {{c2::\(|x|\)::abs}}";
+        let (text, numbers) = convert_clozes(&md(html), |_| true);
+        assert_eq!(text, r"$\alpha + \beta =$ [$-\frac{b}{a}$] and [$|x|$|abs]");
+        assert_eq!(numbers, [1, 2]);
+        let cards = crate::parser::parse(&format!("C: {text}")).cards;
+        assert_eq!(cards[0].front, r"$\alpha + \beta =$ **[…]** and $|x|$");
     }
 
     #[test]

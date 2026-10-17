@@ -199,7 +199,7 @@
     let html = cache.get(source);
     if (html === undefined) {
       if (cache.size > 20_000) cache.clear();
-      html = renderInline(source.replace(/\s*\n\s*/g, " "));
+      html = renderInline(source.replace(/\s*\n\s*/g, " "), true);
       cache.set(source, html);
     }
     return html;
