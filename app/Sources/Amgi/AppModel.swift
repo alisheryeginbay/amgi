@@ -324,7 +324,11 @@ final class AppModel {
 extension ImportSummary {
     var message: String {
         let decks = files.count == 1 ? "1 deck" : "\(files.count) decks"
-        var lines = ["\(cards) cards from \(notes) notes were written to \(decks). \(reviewedCards) kept their review history."]
+        var first = "\(cards) cards from \(notes) notes were written to \(decks)."
+        if reviewedCards > 0 { first += " \(reviewedCards) kept their review history." }
+        if existingHistory > 0 { first += " \(existingHistory) already had review history here, which was kept." }
+        if newCards > 0 { first += newCards == 1 ? " 1 is new." : " \(newCards) are new." }
+        var lines = [first]
         if suspendedCards > 0 { lines.append("\(suspendedCards) suspended cards were left out.") }
         if skippedNotes > 0 { lines.append("\(skippedNotes) notes could not be converted, such as image occlusions.") }
         if images > 0 { lines.append("\(images) images were copied to the media folder.") }

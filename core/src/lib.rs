@@ -155,6 +155,10 @@ pub struct ImportSummary {
     pub cards: u32,
     /// Cards that kept their Anki review history.
     pub reviewed_cards: u32,
+    /// Cards that already had review history in this collection, which was kept.
+    pub existing_history: u32,
+    /// Cards never reviewed, in Anki or here.
+    pub new_cards: u32,
     /// Notes that produced no card, such as image occlusion notes.
     pub skipped_notes: u32,
     /// Suspended Anki cards, which are left out.
@@ -639,11 +643,22 @@ impl Inner {
         self.states.extend(imported.into_iter().map(|(id, _, state)| (id, state)));
         self.reload()?;
 
+        // Every card written, once each: a package can hold the same card twice.
+        let written: HashSet<String> = conversion
+            .decks
+            .iter()
+            .flat_map(|(_, markdown)| parser::parse(markdown).cards)
+            .map(|card| card.id)
+            .collect();
+        let studied = written.iter().filter(|id| self.states.contains_key(*id)).count() as u32;
+
         Ok(ImportSummary {
             files,
             notes: conversion.notes,
             cards: conversion.cards,
             reviewed_cards,
+            existing_history: studied.saturating_sub(reviewed_cards),
+            new_cards: written.len() as u32 - studied,
             skipped_notes: conversion.skipped_notes,
             suspended_cards: conversion.suspended_cards,
             images: 0,
@@ -994,6 +1009,7 @@ mod tests {
         let summary = c.import_anki(package.to_string_lossy().into_owned()).unwrap();
         assert_eq!(summary.files, ["Default 2.md", "Lang/Kazakh-Verbs.md"]);
         assert_eq!((summary.cards, summary.reviewed_cards, summary.skipped_notes), (4, 2, 1));
+        assert_eq!((summary.existing_history, summary.new_cards), (0, 2));
         assert_eq!((summary.images, summary.missing_images), (1, 0));
         assert_eq!((summary.sounds, summary.missing_sounds), (1, 1));
         assert_eq!(fs::read(dir.join("media/hi.png")).unwrap(), b"png bytes");
@@ -1010,6 +1026,10 @@ mod tests {
         assert_eq!((state.reps, state.last_review, state.due), (2, 1_700_086_400, 1_700_086_400 + 3 * DAY_SECS));
         assert_eq!(inner.store.state(&card.parsed.id).unwrap(), Some(state));
         drop(inner);
+
+        // Importing again keeps the history already here and says so.
+        let again = c.import_anki(package.to_string_lossy().into_owned()).unwrap();
+        assert_eq!((again.reviewed_cards, again.existing_history, again.new_cards), (0, 2, 2));
         fs::remove_dir_all(dir).unwrap();
     }
 
