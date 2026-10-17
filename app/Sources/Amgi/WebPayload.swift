@@ -14,6 +14,8 @@ struct WebState {
     /// Only while browsing, so other panes never copy the card list.
     var browse: BrowseSource?
     var search: String
+    /// Whether browsing shows the selected card beside the table.
+    var preview: Bool
 }
 
 enum WebPane: String, Encodable {

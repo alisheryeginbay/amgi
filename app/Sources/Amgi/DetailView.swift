@@ -2,14 +2,18 @@ import AmgiCore
 import AppKit
 import SwiftUI
 
+/// Whether browsing shows the selected card beside the table.
+private let browsePreviewKey = "browsePreview"
+
 /// The detail column: the shared web view for every pane, under native titles and
 /// toolbar items, with the glass answer buttons floating over study cards.
 struct DetailView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(autoplaySoundsKey) private var autoplay = true
+    @AppStorage(browsePreviewKey) private var preview = true
 
     var body: some View {
-        WebContent(host: model.web, state: model.webState(autoplay: autoplay))
+        WebContent(host: model.web, state: model.webState(autoplay: autoplay, preview: preview))
             // Glass lives only on the floating controls, above the content.
             .safeAreaInset(edge: .bottom) {
                 if model.selection == .review, let card = model.current {
@@ -52,6 +56,7 @@ struct DetailView: View {
 
 private struct DetailToolbar: ToolbarContent {
     @Environment(AppModel.self) private var model
+    @AppStorage(browsePreviewKey) private var preview = true
 
     var body: some ToolbarContent {
         switch model.selection {
@@ -96,6 +101,14 @@ private struct DetailToolbar: ToolbarContent {
                 }
                 .disabled(card == nil)
                 .help(card.map { "Open \($0.path), line \($0.line)" } ?? "Edit Card")
+            }
+            ToolbarItem {
+                Button {
+                    preview.toggle()
+                } label: {
+                    Label(preview ? "Hide Card" : "Show Card", systemImage: "rectangle.righthalf.inset.filled")
+                }
+                .help(preview ? "Hide the selected card" : "Show the selected card beside the table")
             }
             ToolbarItem {
                 @Bindable var model = model

@@ -1,8 +1,7 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
   import { fade } from "svelte/transition";
-  import Markdown from "../components/Markdown.svelte";
-  import TagPills from "../components/TagPills.svelte";
+  import CardView from "../components/CardView.svelte";
   import { app, commands, post } from "../lib/app.svelte";
   import { player } from "../lib/audio.svelte";
   import { soundSources } from "../lib/markdown";
@@ -78,26 +77,7 @@
 {#if card}
   {#key card.id}
     <main in:fade={{ duration: 200 }}>
-      <article>
-        <header>
-          <span class="deck">{card.deck}</span>
-          <TagPills tags={card.tags} />
-        </header>
-
-        {#if card.kind === "basic"}
-          <div class="front"><Markdown source={card.front} cardPath={card.path} /></div>
-          {#if revealed}
-            <div class="answer" in:fade={{ duration: 250 }}>
-              <hr />
-              <div class="back"><Markdown source={card.back} cardPath={card.path} /></div>
-            </div>
-          {/if}
-        {:else}
-          <div class="front">
-            <Markdown source={revealed ? card.back : card.front} cardPath={card.path} emphasis />
-          </div>
-        {/if}
-      </article>
+      <CardView {card} {revealed} />
     </main>
   {/key}
 {/if}
@@ -107,38 +87,5 @@
     height: 100%;
     overflow-y: auto;
     padding: 72px 48px 32px;
-  }
-
-  article {
-    max-width: 600px;
-    margin: 0 auto;
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 20px;
-    font-size: 11px;
-  }
-
-  .deck {
-    flex: none;
-    color: var(--tertiary-label);
-  }
-
-  .front {
-    font-size: var(--font-title);
-  }
-
-  hr {
-    margin: 28px 0;
-    border: none;
-    border-top: 1px solid var(--separator);
-  }
-
-  .back {
-    font-size: var(--font-title2);
-    color: var(--secondary-label);
   }
 </style>

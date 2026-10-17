@@ -195,7 +195,7 @@ final class AppModel {
 
     /// What the web panes show. Read while rendering the detail column, so any change
     /// here updates the page.
-    func webState(autoplay: Bool) -> WebState {
+    func webState(autoplay: Bool, preview: Bool) -> WebState {
         let pane: WebPane = switch selection {
         case .dashboard: .dashboard
         case .review: .study
@@ -217,7 +217,8 @@ final class AppModel {
             study: StudyPayload(card: current, revealed: revealed, autoplay: autoplay),
             dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDue, today: today) } : nil,
             browse: browse,
-            search: search
+            search: search,
+            preview: preview
         )
     }
 

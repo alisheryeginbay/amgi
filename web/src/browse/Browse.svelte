@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import CardView from "../components/CardView.svelte";
   import TagPills from "../components/TagPills.svelte";
   import { app, commands, post } from "../lib/app.svelte";
   import { renderInline } from "../lib/markdown";
@@ -206,8 +207,41 @@
   }
 
   const dueFormat = $derived(new Intl.DateTimeFormat(app.environment.locale, { day: "numeric", month: "short", year: "numeric" }));
+
+  // MARK: Preview
+
+  /** The card shown beside the table, when exactly one is selected. */
+  const selected = $derived.by(() => {
+    if (selection.size !== 1) return null;
+    const index = rowIndex.get([...selection][0]);
+    return index === undefined ? null : rows[index];
+  });
+
+  const PREVIEW_MIN = 240;
+  const TABLE_MIN = 320;
+  let layoutWidth = $state(0);
+  let previewWidth = $state(load<{ value: number }>("browse.preview", { value: 360 }).value);
+  const shownPreviewWidth = $derived(Math.max(PREVIEW_MIN, Math.min(previewWidth, layoutWidth - TABLE_MIN)));
+
+  /** Dragging the divider resizes the preview; the table takes the rest. */
+  function startPreviewResize(event: PointerEvent) {
+    event.preventDefault();
+    const handle = event.currentTarget as HTMLElement;
+    handle.setPointerCapture(event.pointerId);
+    const start = { x: event.clientX, width: shownPreviewWidth };
+    const move = (e: PointerEvent) => {
+      previewWidth = Math.max(PREVIEW_MIN, Math.min(start.width - (e.clientX - start.x), layoutWidth - TABLE_MIN));
+    };
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      save("browse.preview", { value: previewWidth });
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end, { once: true });
+  }
 </script>
 
+<div class="browse" bind:clientWidth={layoutWidth}>
 <div
   class="scroller"
   class:focused
@@ -299,9 +333,42 @@
   {/if}
 </div>
 
+{#if app.preview}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="divider" onpointerdown={startPreviewResize}></div>
+  <aside class="preview" style:width="{shownPreviewWidth}px" aria-label="Selected card">
+    {#if selected}
+      <div class="card">
+        <CardView card={selected} revealed preview />
+      </div>
+      <footer class="tabular">
+        {#if selected.suspended}
+          <span>Suspended</span>
+        {:else if selected.due === null}
+          <span>New</span>
+        {:else}
+          <span>Due {dueFormat.format(new Date(selected.due * 1000))}</span>
+        {/if}
+        <span>{selected.reps === 1 ? "1 review" : `${selected.reps} reviews`}</span>
+        <span>{selected.lapses === 1 ? "1 lapse" : `${selected.lapses} lapses`}</span>
+      </footer>
+    {:else}
+      <p class="empty">{selection.size > 1 ? `${selection.size} cards selected` : "No card selected"}</p>
+    {/if}
+  </aside>
+{/if}
+</div>
+
 <style>
+  .browse {
+    display: flex;
+    height: 100%;
+  }
+
   .scroller {
     position: relative;
+    flex: 1;
+    min-width: 0;
     height: 100%;
     overflow: auto;
     outline: none;
@@ -457,6 +524,51 @@
 
   .tertiary {
     color: var(--tertiary-label);
+  }
+
+  .divider {
+    flex: none;
+    width: 1px;
+    background: var(--separator);
+    position: relative;
+    cursor: col-resize;
+  }
+
+  /* A wider target than the line itself. */
+  .divider::after {
+    content: "";
+    position: absolute;
+    inset: 0 -4px;
+  }
+
+  .preview {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: 0;
+  }
+
+  .preview .card {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 24px 16px;
+  }
+
+  .preview footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    padding: 10px 24px;
+    border-top: 1px solid var(--separator);
+    font-size: var(--font-callout);
+    color: var(--secondary-label);
+  }
+
+  .empty {
+    margin: auto;
+    color: var(--tertiary-label);
+    font-size: var(--font-title3);
   }
 
   .no-results {

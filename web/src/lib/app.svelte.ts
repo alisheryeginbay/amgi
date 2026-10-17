@@ -8,6 +8,8 @@ class AppState {
   dashboard = $state.raw<DashboardState | null>(null);
   browse = $state.raw<BrowseState | null>(null);
   search = $state.raw("");
+  /** Whether browsing shows the selected card beside the table. */
+  preview = $state.raw(true);
   /** Lowercased tag → icon, such as an emoji. */
   icons = $state.raw<Record<string, string>>({});
   environment = $state.raw<Environment>({ locale: navigator.language, firstWeekday: 1 });
@@ -15,7 +17,7 @@ class AppState {
 
 export const app = new AppState();
 
-type Part = "pane" | "study" | "dashboard" | "browse" | "search" | "icons" | "environment";
+type Part = "pane" | "study" | "dashboard" | "browse" | "search" | "preview" | "icons" | "environment";
 
 /** Commands from the app, such as `replay`. */
 export const commands = new EventTarget();

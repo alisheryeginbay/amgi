@@ -31,6 +31,7 @@ final class WebHost: NSObject {
     private var sentDashboard: DashboardPayload?
     private var sentBrowse: BrowseSource?
     private var sentSearch: String?
+    private var sentPreview: Bool?
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -75,6 +76,7 @@ final class WebHost: NSObject {
         send("environment", state.environment, &sentEnvironment)
         send("icons", state.icons, &sentIcons)
         send("search", state.search, &sentSearch)
+        send("preview", state.preview, &sentPreview)
         send("study", state.study, &sentStudy)
         if let dashboard = state.dashboard {
             send("dashboard", dashboard, &sentDashboard)
@@ -151,6 +153,7 @@ final class WebHost: NSObject {
             sentDashboard = nil
             sentBrowse = nil
             sentSearch = nil
+            sentPreview = nil
             if let state {
                 self.state = nil
                 apply(state)
