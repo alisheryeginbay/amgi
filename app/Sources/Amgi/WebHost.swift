@@ -271,9 +271,9 @@ final class AmgiWebView: WKWebView {
 final class ActionMenuItem: NSMenuItem {
     private let handler: () -> Void
 
-    init(_ title: String, handler: @escaping () -> Void) {
+    init(_ title: String, keyEquivalent: String = "", handler: @escaping () -> Void) {
         self.handler = handler
-        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        super.init(title: title, action: #selector(run), keyEquivalent: keyEquivalent)
         target = self
     }
 

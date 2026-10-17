@@ -57,7 +57,6 @@ struct DetailView: View {
 private struct DetailToolbar: ToolbarContent {
     @Environment(AppModel.self) private var model
     @AppStorage(browsePreviewKey) private var preview = true
-
     var body: some ToolbarContent {
         switch model.selection {
         case .review:
@@ -73,14 +72,14 @@ private struct DetailToolbar: ToolbarContent {
                     }
                 }
                 ToolbarItem {
+                    // ⌘K and ⌘S are caught by `AppModel`, so they work from any focus.
                     Button {
-                        model.setSuspended([card.id], true)
+                        model.showMoreMenu()
                     } label: {
-                        Label("Suspend Card", systemImage: "pause.circle")
+                        Label("More", systemImage: "ellipsis")
                     }
-                    .help(card.kind == .cloze
-                        ? "Suspend Card: tags it #suspended, so none of this cloze's gaps come up"
-                        : "Suspend Card: tags it #suspended, so it doesn't come up")
+                    .background(MenuAnchorView { model.moreMenuAnchor = $0 })
+                    .help("More (⌘K)")
                 }
                 ToolbarItem {
                     Button {
@@ -127,6 +126,21 @@ private struct DetailToolbar: ToolbarContent {
         case .dashboard:
             ToolbarItem { EmptyView() }
         }
+    }
+}
+
+/// Hands over a toolbar button's own view, for a popup menu to open under.
+private struct MenuAnchorView: NSViewRepresentable {
+    let onView: (NSView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        onView(view)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        onView(view)
     }
 }
 

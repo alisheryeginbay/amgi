@@ -118,10 +118,14 @@ final class AppModel {
     private var collection: CardCollection?
     /// The web view behind every detail pane.
     let web = WebHost()
+    /// The toolbar's More button, which its menu opens under.
+    @ObservationIgnored weak var moreMenuAnchor: NSView?
+    @ObservationIgnored private var keyMonitor: Any?
 
     init() {
         web.onMessage = { [weak self] in self?.handle($0) }
         web.contextMenu = { [weak self] ids in self?.menuItems(for: ids) ?? [] }
+        monitorReviewShortcuts()
         if let path = UserDefaults.standard.string(forKey: Self.folderKey) {
             open(URL(fileURLWithPath: path))
         }
@@ -268,6 +272,56 @@ final class AppModel {
             self.current = nil
         }
         refresh()
+    }
+
+    /// ⌘S suspends the card being studied and ⌘K opens the More menu. Caught before
+    /// any view, so they work whether the web view, sidebar or nothing has focus.
+    private func monitorReviewShortcuts() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            let key = event.charactersIgnoringModifiers?.lowercased()
+            let window = event.window
+            let handled = MainActor.assumeIsolated { () -> Bool in
+                guard let self, flags == .command, key == "s" || key == "k",
+                      self.selection == .review, self.current != nil,
+                      let window, window.attachedSheet == nil,
+                      window === self.web.webView.window
+                else { return false }
+                if key == "s" {
+                    if !event.isARepeat { self.suspendCurrent() }
+                } else {
+                    self.showMoreMenu()
+                }
+                return true
+            }
+            return handled ? nil : event
+        }
+    }
+
+    func suspendCurrent() {
+        guard let card = current else { return }
+        setSuspended([card.id], true)
+    }
+
+    /// The review toolbar's More menu, native so ⌘K can open it as well as a click.
+    func showMoreMenu() {
+        guard let card = current else { return }
+        let menu = NSMenu()
+        let suspend = ActionMenuItem("Suspend Card", keyEquivalent: "s") { [weak self] in
+            self?.suspendCurrent()
+        }
+        suspend.image = NSImage(systemSymbolName: "pause.circle", accessibilityDescription: nil)
+        suspend.toolTip = card.kind == .cloze
+            ? "Suspend Card (⌘S): tags it #suspended, so none of this cloze's gaps come up"
+            : "Suspend Card (⌘S): tags it #suspended, so it doesn't come up"
+        menu.addItem(suspend)
+        if let view = moreMenuAnchor, view.window != nil {
+            let below = NSPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 6 : -6)
+            menu.popUp(positioning: nil, at: below, in: view)
+        } else {
+            // The button is in the toolbar's overflow menu, so open at the pointer instead.
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        }
     }
 
     /// Right-click items for browse rows.
