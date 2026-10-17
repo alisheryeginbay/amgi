@@ -2,7 +2,7 @@ import type { BrowseCard } from "../lib/types";
 
 // The browse search. Words must all match; see the README for the syntax.
 
-/** Forgotten this many times or more; matches `LEECH_LAPSES` in the core. */
+/** Forgotten this many times or more, as in Anki. */
 const LEECH_LAPSES = 8;
 const DAY_SECS = 86_400;
 
@@ -64,6 +64,8 @@ function tokenize(query: string): Token[] {
       i++;
     }
     const start = i;
+    // A tag is never a filter, so tags like `lang::korean` keep their colons.
+    const tag = query[i] === "#";
     let key: string | null = null;
     let operator = "";
     let value = "";
@@ -75,7 +77,7 @@ function tokenize(query: string): Token[] {
         i = stop + 1;
         continue;
       }
-      if (key === null) {
+      if (key === null && !tag) {
         const op = /^(<=|>=|[<>=:])/.exec(query.slice(i));
         if (op && value) {
           key = value;

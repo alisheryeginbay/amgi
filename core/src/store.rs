@@ -6,6 +6,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
+use crate::SavedView;
 use crate::scheduler::{Memory, Outcome, Rating};
 
 const MIGRATIONS: &[&str] = &[r#"
@@ -36,6 +37,14 @@ CREATE TABLE tag_icon (
     tag  TEXT PRIMARY KEY,
     icon TEXT NOT NULL
 );
+"#, r#"
+CREATE TABLE saved_view (
+    id    INTEGER PRIMARY KEY,
+    name  TEXT NOT NULL,
+    query TEXT NOT NULL,
+    icon  TEXT
+);
+INSERT INTO saved_view (name, query, icon) VALUES ('Leeches', 'is:leech', '🐞');
 "#];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -237,6 +246,30 @@ impl Store {
         };
         Ok(())
     }
+
+    pub fn saved_views(&self) -> rusqlite::Result<Vec<SavedView>> {
+        let mut stmt = self.conn.prepare("SELECT id, name, query, icon FROM saved_view ORDER BY id")?;
+        stmt.query_map([], |r| Ok(SavedView { id: r.get(0)?, name: r.get(1)?, query: r.get(2)?, icon: r.get(3)? }))?
+            .collect()
+    }
+
+    pub fn add_saved_view(&self, name: &str, query: &str) -> rusqlite::Result<i64> {
+        self.conn.execute("INSERT INTO saved_view (name, query) VALUES (?1, ?2)", [name, query])?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_saved_view(&self, view: &SavedView) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE saved_view SET name = ?2, query = ?3, icon = ?4 WHERE id = ?1",
+            params![view.id, view.name, view.query, view.icon],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_saved_view(&self, id: i64) -> rusqlite::Result<()> {
+        self.conn.execute("DELETE FROM saved_view WHERE id = ?1", [id])?;
+        Ok(())
+    }
 }
 
 fn insert_review(tx: &Transaction, card_id: &str, r: &LoggedReview) -> rusqlite::Result<()> {
@@ -282,6 +315,23 @@ fn upsert_state(tx: &Transaction, card_id: &str, state: &CardState) -> rusqlite:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_views() {
+        let store = Store::open_in_memory().unwrap();
+        let leeches = SavedView { id: 1, name: "Leeches".into(), query: "is:leech".into(), icon: Some("🐞".into()) };
+        assert_eq!(store.saved_views().unwrap(), [leeches.clone()]);
+
+        let id = store.add_saved_view("Due soon", "due<3").unwrap();
+        let mut due = SavedView { id, name: "Due soon".into(), query: "due<3".into(), icon: None };
+        assert_eq!(store.saved_views().unwrap(), [leeches.clone(), due.clone()]);
+
+        due.query = "due<7 -is:suspended".into();
+        due.icon = Some("⏰".into());
+        store.update_saved_view(&due).unwrap();
+        store.delete_saved_view(leeches.id).unwrap();
+        assert_eq!(store.saved_views().unwrap(), [due]);
+    }
 
     #[test]
     fn tag_icons() {

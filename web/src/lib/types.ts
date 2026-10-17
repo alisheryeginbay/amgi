@@ -61,8 +61,10 @@ export interface BrowseCard {
 }
 
 export interface BrowseState {
-  /** Changes when another deck or tag is browsed. */
+  /** Changes when another deck, tag or saved view is browsed. */
   scope: string;
+  /** The tag's or saved view's search, applied before the one typed. */
+  query: string;
   cards: BrowseCard[];
 }
 
@@ -80,4 +82,6 @@ export type Message =
   | { type: "answer"; rating: 1 | 2 | 3 | 4 }
   | { type: "open"; path: string; line: number }
   | { type: "select"; ids: string[] }
-  | { type: "contextCards"; ids: string[] };
+  | { type: "contextCards"; ids: string[] }
+  /** Cards matching the browse state's `query`, before the search typed. */
+  | { type: "count"; count: number };

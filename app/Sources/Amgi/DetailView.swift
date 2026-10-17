@@ -41,7 +41,7 @@ struct DetailView: View {
         case .review: model.folder?.lastPathComponent ?? "All Cards"
         case .tag(let tag): model.icon(forTag: tag).map { "\($0) \(tag)" } ?? "#\(tag)"
         case .deck(let name): model.deckNames.first { $0.name == name }?.title ?? deckTitle(name)
-        case .leeches: "Leeches"
+        case .view(let id): model.savedView(id).map { view in view.icon.map { "\($0) \(view.name)" } ?? view.name } ?? ""
         }
     }
 
@@ -49,7 +49,7 @@ struct DetailView: View {
         switch model.selection {
         case .dashboard: model.folder?.lastPathComponent ?? ""
         case .review: "\(model.totalDue) due · \(model.today.newAvailable) new"
-        case .deck, .tag, .leeches: model.browsed.count == 1 ? "1 card" : "\(model.browsed.count) cards"
+        case .deck, .tag, .view: model.browsedCount.map { $0 == 1 ? "1 card" : "\($0) cards" } ?? ""
         }
     }
 }
@@ -91,7 +91,7 @@ private struct DetailToolbar: ToolbarContent {
                     .help("Open \(card.path), line \(card.line)")
                 }
             }
-        case .deck, .tag, .leeches:
+        case .deck, .tag, .view:
             ToolbarItem {
                 let card = model.selectedBrowseCard
                 Button {
@@ -114,6 +114,15 @@ private struct DetailToolbar: ToolbarContent {
                 @Bindable var model = model
                 SearchField(text: $model.search, prompt: "Search Cards")
                     .frame(width: 200)
+            }
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    model.saveCurrentSearch()
+                } label: {
+                    Label("Save Search", systemImage: "plus.magnifyingglass")
+                }
+                .disabled(model.search.trimmingCharacters(in: .whitespaces).isEmpty)
+                .help("Save Search: add it to Saved Views in the sidebar")
             }
         case .dashboard:
             ToolbarItem { EmptyView() }

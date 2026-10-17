@@ -34,6 +34,10 @@ struct ContentView: View {
         } message: { summary in
             Text(summary.message)
         }
+        .sheet(item: Binding(get: { model.editingView }, set: { model.editingView = $0 })) { draft in
+            SavedViewEditor(draft: draft)
+                .environment(model)
+        }
     }
 }
 
@@ -63,6 +67,7 @@ private struct Sidebar: View {
     @State private var expanded: Set<String> = []
     @AppStorage("decksExpanded") private var decksExpanded = true
     @AppStorage("tagsExpanded") private var tagsExpanded = true
+    @AppStorage("viewsExpanded") private var viewsExpanded = true
 
     var body: some View {
         @Bindable var model = model
@@ -81,9 +86,12 @@ private struct Sidebar: View {
                     }
                 }
             }
-            Section("Saved Views") {
-                Label("Leeches", systemImage: "ladybug")
-                    .tag(SidebarItem.leeches)
+            if !model.savedViews.isEmpty {
+                Section("Saved Views", isExpanded: $viewsExpanded) {
+                    ForEach(model.savedViews, id: \.id) { view in
+                        SavedViewRow(view: view)
+                    }
+                }
             }
             if !model.tags.isEmpty {
                 Section("Tags", isExpanded: $tagsExpanded) {
@@ -217,21 +225,90 @@ private struct TagRow: View {
             }
         }
         .popover(isPresented: $choosingIcon, arrowEdge: .trailing) {
-            // Popovers are hosted outside the window's view tree.
-            TagIconPicker(tag: tag)
-                .environment(model)
+            IconPicker(current: icon) { model.setIcon($0, forTag: tag) }
         }
     }
 }
 
+private struct SavedViewRow: View {
+    @Environment(AppModel.self) private var model
+    let view: SavedView
+    @State private var choosingIcon = false
+
+    var body: some View {
+        Label {
+            Text(view.name)
+        } icon: {
+            if let icon = view.icon { Text(icon) } else { Image(systemName: "line.3.horizontal.decrease.circle") }
+        }
+        .lineLimit(1)
+        .help(view.query)
+        .tag(SidebarItem.view(view.id))
+        .contextMenu {
+            Button("Edit View…") { model.editSavedView(view) }
+            Button("Choose Icon…") { choosingIcon = true }
+            if view.icon != nil {
+                Button("Remove Icon") { model.setIcon(nil, for: view) }
+            }
+            Divider()
+            Button("Delete View") { model.deleteSavedView(view) }
+        }
+        .popover(isPresented: $choosingIcon, arrowEdge: .trailing) {
+            IconPicker(current: view.icon) { model.setIcon($0, for: view) }
+        }
+    }
+}
+
+/// Names a saved view and its search.
+private struct SavedViewEditor: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State var draft: SavedViewDraft
+
+    private var complete: Bool {
+        !draft.name.trimmingCharacters(in: .whitespaces).isEmpty
+            && !draft.query.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(draft.id == nil ? "New Saved View" : "Edit Saved View")
+                .font(.headline)
+            Form {
+                TextField("Name:", text: $draft.name, prompt: Text("Due this week"))
+                TextField("Search:", text: $draft.query, prompt: Text("due<7 -is:suspended"))
+                    .font(.body.monospaced())
+            }
+            Text("Searches work as in the browse search field, such as `#verbs`, `deck:french`, `is:due` or `lapses>3`.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(draft.id == nil ? "Add" : "Save") {
+                    model.commit(draft)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!complete)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
+    }
+}
+
 /// Common emoji to pick from, with the system emoji picker for everything else.
-private struct TagIconPicker: View {
+/// Popovers are hosted outside the window's view tree, so it takes no environment.
+private struct IconPicker: View {
     private static let suggestions = Array("📚📝🧠💡🔬🧪🧮📐🌍🗺️🏛️🎨🎵💻⚙️🩺💊🌱🐾🍎⭐️🔥❤️✅")
         .map(String.init)
 
-    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    let tag: String
+    let current: String?
+    let onChoose: (String?) -> Void
     @State private var custom = ""
     @FocusState private var fieldFocused: Bool
 
@@ -246,7 +323,7 @@ private struct TagIconPicker: View {
                             .font(.title2)
                             .frame(width: 28, height: 28)
                             .background(
-                                model.icon(forTag: tag) == emoji ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
+                                current == emoji ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear),
                                 in: .rect(cornerRadius: 6)
                             )
                             .contentShape(.rect)
@@ -271,17 +348,17 @@ private struct TagIconPicker: View {
                 .help("Show Emoji & Symbols")
                 Spacer()
                 Button("Remove") {
-                    model.setIcon(nil, forTag: tag)
+                    onChoose(nil)
                     dismiss()
                 }
-                .disabled(model.icon(forTag: tag) == nil)
+                .disabled(current == nil)
             }
         }
         .padding(14)
     }
 
     private func choose(_ icon: String) {
-        model.setIcon(icon, forTag: tag)
+        onChoose(icon)
         dismiss()
     }
 }

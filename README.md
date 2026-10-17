@@ -119,8 +119,12 @@ cards in a table: search, sort by any column, and double-click a card to open it
 The selected card shows beside the table as it looks when studied; drag the divider to
 resize it, or hide it with **Hide Card** in the toolbar.
 
-**Saved Views ▸ Leeches** lists cards you have forgotten 8 or more times, across all decks:
-they usually need rewording or splitting.
+**Saved Views** are searches with a name. Type a search and click **Save Search**
+(the magnifier with a plus, next to the search field) to add one; the deck, tag or view
+you're browsing is part of it. Right-click a view to edit its search, give it an icon or
+delete it. Views are kept in `.amgi.sqlite`. Every collection starts with **Leeches**
+(`is:leech`): cards you have forgotten 8 or more times, which usually need rewording or
+splitting.
 
 ### Searching
 

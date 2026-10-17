@@ -197,31 +197,34 @@ pub struct Dashboard {
 }
 
 const MATURE_SECS: i64 = 21 * DAY_SECS;
-/// Cards forgotten this many times are leeches, as in Anki.
-pub const LEECH_LAPSES: u32 = 8;
 const FORECAST_DAYS: usize = 14;
 
-/// Which cards to study.
+/// Which cards to study or browse. Tags and saved views are searches, run by the browse pane.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum StudyScope {
     All,
     /// A deck and its subdecks.
     Deck { name: String },
-    /// Cards with a tag, compared case-insensitively.
-    Tag { name: String },
-    /// Cards forgotten at least `LEECH_LAPSES` times.
-    Leeches,
 }
 
 impl StudyScope {
-    fn contains(&self, card: &Card, state: Option<&CardState>) -> bool {
+    fn contains(&self, card: &Card) -> bool {
         match self {
             StudyScope::All => true,
             StudyScope::Deck { name } => contains(name, &card.deck),
-            StudyScope::Tag { name } => card.parsed.tags.iter().any(|t| t.eq_ignore_ascii_case(name)),
-            StudyScope::Leeches => state.is_some_and(|s| s.lapses >= LEECH_LAPSES),
         }
     }
+}
+
+/// A named browse search, listed under Saved Views.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SavedView {
+    pub id: i64,
+    pub name: String,
+    /// In the browse search syntax, such as `is:leech`.
+    pub query: String,
+    /// Such as an emoji.
+    pub icon: Option<String>,
 }
 
 struct Card {
@@ -312,6 +315,31 @@ impl CardCollection {
     pub fn set_tag_icon(&self, tag: String, icon: Option<String>) -> Result<()> {
         let icon = icon.as_deref().map(str::trim).filter(|i| !i.is_empty());
         Ok(self.lock().store.set_tag_icon(&tag, icon)?)
+    }
+
+    /// Saved views in the order they were added.
+    pub fn saved_views(&self) -> Result<Vec<SavedView>> {
+        Ok(self.lock().store.saved_views()?)
+    }
+
+    /// Adds a view and returns its id.
+    pub fn add_saved_view(&self, name: String, query: String) -> Result<i64> {
+        Ok(self.lock().store.add_saved_view(name.trim(), query.trim())?)
+    }
+
+    /// Changes the name, search and icon of the view with `view.id`. An empty icon removes it.
+    pub fn update_saved_view(&self, view: SavedView) -> Result<()> {
+        let view = SavedView {
+            name: view.name.trim().to_string(),
+            query: view.query.trim().to_string(),
+            icon: view.icon.map(|i| i.trim().to_string()).filter(|i| !i.is_empty()),
+            ..view
+        };
+        Ok(self.lock().store.update_saved_view(&view)?)
+    }
+
+    pub fn delete_saved_view(&self, id: i64) -> Result<()> {
+        Ok(self.lock().store.delete_saved_view(id)?)
     }
 
     pub fn answer(&self, card_id: String, rating: Rating) -> Result<()> {
@@ -442,9 +470,7 @@ impl Inner {
     }
 
     fn in_scope<'a, 's>(&'a self, scope: &'s StudyScope) -> impl Iterator<Item = &'a Card> + use<'a, 's> {
-        self.cards
-            .iter()
-            .filter(move |c| scope.contains(c, self.states.get(&c.parsed.id)))
+        self.cards.iter().filter(move |c| scope.contains(c))
     }
 
     fn tags(&self) -> Vec<String> {
@@ -945,22 +971,6 @@ mod tests {
     }
 
     #[test]
-    fn leeches_have_many_lapses() {
-        let (dir, c) = collection(&[("a.md", "Q: 1\nA: one\n\nQ: 2\nA: two\n")]);
-        let mut inner = c.lock();
-        let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
-        inner.answer(&ids[1], Rating::Again, T0).unwrap();
-        // The first answer of a new card is not a lapse.
-        for i in 0..=LEECH_LAPSES {
-            inner.answer(&ids[0], Rating::Again, T0 + i64::from(i) * 60).unwrap();
-            let leeches = inner.browse(&StudyScope::Leeches).len();
-            assert_eq!(leeches, usize::from(i == LEECH_LAPSES));
-        }
-        drop(inner);
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn decks_contain_subdecks() {
         let (dir, c) = collection(&[
             ("lang.md", "Q: l\nA: 1\n"),
@@ -1018,10 +1028,7 @@ mod tests {
         assert_eq!(inner.tags(), ["lang", "Verbs"]);
         let titles: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.title).collect();
         assert_eq!(titles, ["en", "Korean"]);
-        let verbs = StudyScope::Tag { name: "VERBS".into() };
-        let fronts: Vec<_> = inner.in_scope(&verbs).map(|c| c.parsed.front.as_str()).collect();
-        assert_eq!(fronts, ["run", "가다"]);
-        let card = inner.next_card(&verbs, T0).unwrap().unwrap();
+        let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
         assert_eq!(card.tags, ["Verbs", "lang"]);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();

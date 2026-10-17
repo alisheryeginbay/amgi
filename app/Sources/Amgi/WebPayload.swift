@@ -83,17 +83,21 @@ struct DashboardPayload: Encodable, Equatable {
 /// The cards browsed, kept as the core's records so comparing them is cheap; they
 /// are only converted when they change.
 struct BrowseSource: Equatable {
-    /// Changes when another deck or tag is browsed.
+    /// Changes when another deck, tag or saved view is browsed.
     let scope: String
+    /// The tag's or saved view's search, run by the page before the one typed.
+    let query: String
     let cards: [BrowseCard]
 }
 
 struct BrowsePayload: Encodable {
     let scope: String
+    let query: String
     let cards: [CardPayload]
 
     init(_ source: BrowseSource) {
         scope = source.scope
+        query = source.query
         cards = source.cards.map(CardPayload.init)
     }
 }
@@ -180,6 +184,8 @@ enum WebMessage {
     case select(ids: [String])
     /// The cards a right-click acts on.
     case contextCards(ids: [String])
+    /// How many cards match the browsed tag or saved view.
+    case count(Int)
 
     init?(_ body: Any) {
         guard let body = body as? [String: Any], let type = body["type"] as? String else { return nil }
@@ -196,6 +202,9 @@ enum WebMessage {
             self = .select(ids: body["ids"] as? [String] ?? [])
         case "contextCards":
             self = .contextCards(ids: body["ids"] as? [String] ?? [])
+        case "count":
+            guard let count = body["count"] as? Int else { return nil }
+            self = .count(count)
         default:
             return nil
         }

@@ -16,7 +16,7 @@ function card(id: string, fields: Partial<BrowseCard>): BrowseCard {
 const CARDS = [
   card("paris", { front: "Capital of France?", back: "Paris", tags: ["europe", "capitals"], due: NOW - DAY, reps: 4 }),
   card("cafe", { front: "What does café mean?", back: "coffee", deck: "lang/french/words", tags: ["food"], due: NOW + 3 * DAY, reps: 2 }),
-  card("water", { front: "Formula for water", back: "H2O", deck: "science", kind: "cloze" }),
+  card("water", { front: "Formula for water", back: "H2O", deck: "science", kind: "cloze", tags: ["chem::basics"] }),
   card("leech", { front: "Boiling point at 12:30 altitude", back: "less than 100", deck: "science/physics", lapses: 9, reps: 12, due: NOW - 60, suspended: true, tags: ["suspended"] }),
 ];
 
@@ -60,6 +60,8 @@ test("#tag matches whole tags, with * for a prefix", () => {
   assert.deepEqual(search("#cap*"), ["paris"]);
   assert.deepEqual(search("-#suspended"), ["paris", "cafe", "water"]);
   assert.deepEqual(search("#"), ["paris", "cafe", "water", "leech"]);
+  assert.deepEqual(search("#chem::basics"), ["water"]);
+  assert.deepEqual(search("#chem::*"), ["water"]);
 });
 
 test("deck: matches a deck and its subdecks by any run of folders", () => {

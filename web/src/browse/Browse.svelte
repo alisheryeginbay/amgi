@@ -37,7 +37,13 @@
   );
 
   const collator = $derived(new Intl.Collator(app.environment.locale, { numeric: true, sensitivity: "base" }));
-  const cards = $derived(app.browse?.cards ?? []);
+  const cards = $derived.by(() => {
+    const browse = app.browse;
+    if (!browse) return [];
+    return browse.query ? browse.cards.filter(parseQuery(browse.query)) : browse.cards;
+  });
+  // The window subtitle counts them.
+  $effect(() => post({ type: "count", count: cards.length }));
   const query = $derived(app.search.trim());
   const rows = $derived.by(() => {
     const matches = parseQuery(query);

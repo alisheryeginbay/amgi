@@ -13,8 +13,16 @@ enum SidebarItem: Hashable {
     case deck(String)
     /// Browse cards with this tag, across all decks.
     case tag(String)
-    /// Browse cards forgotten many times.
-    case leeches
+    /// Browse a saved view's search, by its id.
+    case view(Int64)
+}
+
+/// A saved view being added (no `id`) or edited.
+struct SavedViewDraft: Identifiable {
+    var id: Int64?
+    var name: String
+    var query: String
+    var icon: String?
 }
 
 struct DeckName: Equatable {
@@ -38,13 +46,19 @@ final class AppModel {
     private(set) var tags: [String] = []
     /// Lowercased tag → icon, such as an emoji.
     private(set) var tagIcons: [String: String] = [:]
+    private(set) var savedViews: [SavedView] = []
+    /// The saved view shown in the add or edit sheet.
+    var editingView: SavedViewDraft?
     private(set) var warnings: [CollectionWarning] = []
     private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
     private(set) var current: StudyCard?
     private(set) var importing = false
     private(set) var dashboard: Dashboard?
-    /// Cards of the deck or tag being browsed.
+    /// Cards of the deck being browsed, or every card for a tag or saved view: the
+    /// browse pane runs their searches.
     private(set) var browsed: [BrowseCard] = []
+    /// How many browsed cards match the tag or saved view, as counted by the browse pane.
+    private(set) var browsedCount: Int?
     var revealed = false
     /// Cards selected in the browse table.
     var browseSelection: Set<String> = []
@@ -68,10 +82,11 @@ final class AppModel {
             guard oldValue != selection else { return }
             search = ""
             browseSelection = []
+            browsedCount = nil
             switch selection {
             case .dashboard: loadDashboard()
             case .review: loadNext()
-            case .deck, .tag, .leeches: loadBrowsed()
+            case .deck, .tag, .view: loadBrowsed()
             }
         }
     }
@@ -81,9 +96,21 @@ final class AppModel {
         switch selection {
         case .dashboard, .review: nil
         case .deck(let name): .deck(name: name)
-        case .tag(let name): .tag(name: name)
-        case .leeches: .leeches
+        case .tag, .view: .all
         }
+    }
+
+    /// The search a tag or saved view stands for, applied before the one typed.
+    var browseQuery: String {
+        switch selection {
+        case .dashboard, .review, .deck: ""
+        case .tag(let tag): "#\(tag)"
+        case .view(let id): savedView(id)?.query ?? ""
+        }
+    }
+
+    func savedView(_ id: Int64) -> SavedView? {
+        savedViews.first { $0.id == id }
     }
 
     private var collection: CardCollection?
@@ -165,6 +192,7 @@ final class AppModel {
             update(\.deckNames, decks.map { DeckName(name: $0.name, title: $0.title) })
             update(\.tags, collection.tags())
             update(\.tagIcons, try collection.tagIcons())
+            update(\.savedViews, try collection.savedViews())
             update(\.today, try collection.today())
             update(\.warnings, collection.warnings())
         }
@@ -199,16 +227,13 @@ final class AppModel {
         let pane: WebPane = switch selection {
         case .dashboard: .dashboard
         case .review: .study
-        case .deck, .tag, .leeches: .browse
+        case .deck, .tag, .view: .browse
         }
-        let browse = browseScope.map { scope in
-            let key = switch scope {
-            case .all: "all"
-            case .deck(let name): "deck:\(name)"
-            case .tag(let tag): "tag:\(tag)"
-            case .leeches: "leeches"
-            }
-            return BrowseSource(scope: key, cards: browsed)
+        let browse: BrowseSource? = switch selection {
+        case .dashboard, .review: nil
+        case .deck(let name): BrowseSource(scope: "deck:\(name)", query: "", cards: browsed)
+        case .tag(let tag): BrowseSource(scope: "tag:\(tag)", query: browseQuery, cards: browsed)
+        case .view(let id): BrowseSource(scope: "view:\(id)", query: browseQuery, cards: browsed)
         }
         return WebState(
             pane: pane,
@@ -276,11 +301,12 @@ final class AppModel {
         case .answer(let rating): answerWithAnimation(rating)
         case .open(let path): revealInEditor(path: path)
         case .select(let ids): update(\.browseSelection, Set(ids))
+        case .count(let count): update(\.browsedCount, count)
         case .ready, .contextCards: break
         }
     }
 
-    /// Card lists are only read while a deck or tag is showing.
+    /// Card lists are only read while a deck, tag or saved view is showing.
     func loadBrowsed() {
         guard let collection, let scope = browseScope else { return }
         update(\.browsed, collection.cards(scope: scope))
@@ -327,6 +353,59 @@ final class AppModel {
             try collection.setTagIcon(tag: tag, icon: icon)
             update(\.tagIcons, try collection.tagIcons())
         }
+    }
+
+    // MARK: Saved views
+
+    /// What's browsed and searched now, as one search to save.
+    var currentQuery: String {
+        let base = switch selection {
+        case .deck(let name): "deck:\"\(name)\""
+        default: browseQuery
+        }
+        return [base, search.trimmingCharacters(in: .whitespaces)].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// Opens the sheet to save the current search as a view.
+    func saveCurrentSearch() {
+        editingView = SavedViewDraft(name: search.trimmingCharacters(in: .whitespaces), query: currentQuery)
+    }
+
+    func editSavedView(_ view: SavedView) {
+        editingView = SavedViewDraft(id: view.id, name: view.name, query: view.query, icon: view.icon)
+    }
+
+    /// Adds or updates a view; a new one is then shown, with the search it came from cleared.
+    func commit(_ draft: SavedViewDraft) {
+        guard let collection else { return }
+        perform {
+            if let id = draft.id {
+                try collection.updateSavedView(view: SavedView(id: id, name: draft.name, query: draft.query, icon: draft.icon))
+                update(\.savedViews, try collection.savedViews())
+            } else {
+                let id = try collection.addSavedView(name: draft.name, query: draft.query)
+                update(\.savedViews, try collection.savedViews())
+                selection = .view(id)
+            }
+        }
+    }
+
+    /// `nil` removes the icon.
+    func setIcon(_ icon: String?, for view: SavedView) {
+        guard let collection else { return }
+        perform {
+            try collection.updateSavedView(view: SavedView(id: view.id, name: view.name, query: view.query, icon: icon))
+            update(\.savedViews, try collection.savedViews())
+        }
+    }
+
+    func deleteSavedView(_ view: SavedView) {
+        guard let collection else { return }
+        perform {
+            try collection.deleteSavedView(id: view.id)
+            update(\.savedViews, try collection.savedViews())
+        }
+        if selection == .view(view.id) { selection = .review }
     }
 
     /// Open a deck file, given relative to the collection root.
