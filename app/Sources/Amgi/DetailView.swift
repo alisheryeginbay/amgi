@@ -14,8 +14,9 @@ struct DetailView: View {
 
     var body: some View {
         WebContent(host: model.web, state: model.webState(autoplay: autoplay, preview: preview))
-            // Glass lives only on the floating controls, above the content.
-            .safeAreaInset(edge: .bottom) {
+            // Glass lives only on the floating controls, over the content, which scrolls
+            // beneath them. The page leaves room below for them.
+            .overlay(alignment: .bottom) {
                 if model.selection == .review, let card = model.current {
                     AnswerControls(card: card, revealed: model.revealed)
                         .padding(.bottom, 24)
