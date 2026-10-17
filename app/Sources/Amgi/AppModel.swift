@@ -25,6 +25,9 @@ struct DeckName: Equatable {
 @MainActor
 final class AppModel {
     private static let folderKey = "collectionPath"
+    private static let retentionKey = "desiredRetention"
+    /// The range the core accepts.
+    static let retentionRange = 0.7...0.99
 
     private(set) var folder: URL?
     private(set) var decks: [DeckInfo] = []
@@ -44,6 +47,16 @@ final class AppModel {
     var revealed = false
     var errorMessage: String?
     var importSummary: ImportSummary?
+
+    /// Target probability of recalling a card when it comes due. Applies to every collection.
+    var desiredRetention: Double = AppModel.savedRetention() {
+        didSet {
+            guard oldValue != desiredRetention else { return }
+            UserDefaults.standard.set(desiredRetention, forKey: Self.retentionKey)
+            collection?.setDesiredRetention(retention: Float(desiredRetention))
+            refreshIntervals()
+        }
+    }
 
     var selection: SidebarItem = .review {
         didSet {
@@ -92,6 +105,7 @@ final class AppModel {
         perform {
             let collection = try CardCollection.open(root: url.path)
             collection.setUtcOffset(seconds: Int32(TimeZone.current.secondsFromGMT()))
+            collection.setDesiredRetention(retention: Float(desiredRetention))
             self.collection = collection
             self.folder = url
             self.selection = .review
@@ -165,6 +179,21 @@ final class AppModel {
             update(\.current, try collection.nextCard(scope: .all))
             update(\.revealed, false)
         }
+    }
+
+    /// Recompute the answer button intervals of the card on screen, keeping it revealed.
+    private func refreshIntervals() {
+        guard let collection, let card = current else { return }
+        perform {
+            if let next = try collection.nextCard(scope: .all), next.id == card.id {
+                update(\.current, next)
+            }
+        }
+    }
+
+    private static func savedRetention() -> Double {
+        let saved = UserDefaults.standard.object(forKey: retentionKey) as? Double ?? 0.9
+        return min(max(saved, retentionRange.lowerBound), retentionRange.upperBound)
     }
 
     func answer(_ rating: Rating) {

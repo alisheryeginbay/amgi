@@ -30,6 +30,11 @@ struct AmgiApp: App {
                     .disabled(model.folder == nil || model.importing)
             }
         }
+
+        Settings {
+            SettingsView()
+                .environment(model)
+        }
     }
 }
 

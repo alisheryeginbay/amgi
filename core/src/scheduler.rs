@@ -167,6 +167,22 @@ mod tests {
     }
 
     #[test]
+    fn higher_retention_shortens_intervals() {
+        let m = Memory {
+            stability: 20.0,
+            difficulty: 5.0,
+        };
+        let good = |desired_retention| {
+            let s = Scheduler {
+                desired_retention,
+                ..Scheduler::default()
+            };
+            days(&s.schedule(Some(m), 20, Rating::Good).unwrap())
+        };
+        assert!(good(0.95) < good(0.9) && good(0.9) < good(0.8));
+    }
+
+    #[test]
     fn intervals_strictly_increase() {
         let s = Scheduler::default();
         let m = Memory {
