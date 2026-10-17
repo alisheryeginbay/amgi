@@ -30,6 +30,23 @@ export const escapeHTML = (s: string) => s.replace(/[&<>"']/g, (c) => escapes[c]
 // Inline Markdown only. Card text is never HTML: tags are shown as typed.
 const inline = new Marked({ gfm: true, async: false });
 inline.use({
+  // `**…**` is bold wherever it is, even inside a word next to punctuation, as in a
+  // cloze gap `시**[…]**요`. Markdown's own rule would leave those stars showing.
+  extensions: [
+    {
+      name: "strongAnywhere",
+      level: "inline",
+      start: (src: string) => {
+        const i = src.indexOf("**");
+        return i < 0 ? undefined : i;
+      },
+      tokenizer(src: string) {
+        const match = /^\*\*(?!\s)((?:\\.|[^\\])+?)(?<!\s)\*\*(?!\*)/.exec(src);
+        if (!match) return undefined;
+        return { type: "strong", raw: match[0], text: match[1], tokens: this.lexer.inlineTokens(match[1]) };
+      },
+    },
+  ],
   renderer: {
     html: ({ text }) => escapeHTML(text),
     // Images are taken out before rendering; any left (inside a link) show their alt text.
