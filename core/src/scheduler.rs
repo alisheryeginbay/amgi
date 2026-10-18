@@ -28,6 +28,39 @@ impl Rating {
     }
 }
 
+/// A card's stage when it was reviewed, numbered as in the FSRS optimizer's
+/// review-log schema (https://github.com/open-spaced-repetition/fsrs-optimizer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewState {
+    New = 0,
+    Learning = 1,
+    Review = 2,
+    Relearning = 3,
+}
+
+impl ReviewState {
+    pub fn from_number(n: i64) -> Option<ReviewState> {
+        match n {
+            0 => Some(ReviewState::New),
+            1 => Some(ReviewState::Learning),
+            2 => Some(ReviewState::Review),
+            3 => Some(ReviewState::Relearning),
+            _ => None,
+        }
+    }
+
+    /// Stage of a review that follows one in stage `prev`, `elapsed_days` study days
+    /// later. With no learning steps, a card is only seen again on the same day after
+    /// Again: it is then still being learned, or relearned after a lapse.
+    pub fn after(prev: ReviewState, elapsed_days: u32) -> ReviewState {
+        match (elapsed_days, prev) {
+            (1.., _) => ReviewState::Review,
+            (0, ReviewState::New | ReviewState::Learning) => ReviewState::Learning,
+            (0, ReviewState::Review | ReviewState::Relearning) => ReviewState::Relearning,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Memory {
     pub stability: f64,
@@ -149,6 +182,22 @@ mod tests {
         assert_eq!(Rating::from_number(3), Some(Rating::Good));
         assert_eq!(Rating::from_number(0), None);
         assert_eq!(Rating::from_number(5), None);
+    }
+
+    #[test]
+    fn review_states() {
+        use ReviewState::*;
+        assert_eq!([New, Learning, Review, Relearning].map(|s| ReviewState::from_number(s as i64)), [
+            Some(New),
+            Some(Learning),
+            Some(Review),
+            Some(Relearning)
+        ]);
+        assert_eq!(ReviewState::from_number(4), None);
+        assert_eq!([New, Learning, Review, Relearning].map(|s| ReviewState::after(s, 0)), [
+            Learning, Learning, Relearning, Relearning
+        ]);
+        assert_eq!([New, Learning, Relearning].map(|s| ReviewState::after(s, 3)), [Review; 3]);
     }
 
     #[test]

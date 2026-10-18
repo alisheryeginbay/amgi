@@ -68,6 +68,9 @@ pub struct Revlog {
     pub kind: u8,
     /// Days if positive, seconds if negative.
     pub interval: i64,
+    /// Ease in permille, or difficulty under FSRS. 0 on a filtered-deck review with
+    /// rescheduling off, which left the card's schedule alone.
+    pub factor: i64,
 }
 
 impl Revlog {
@@ -168,7 +171,7 @@ impl Package {
             })?
             .collect::<rusqlite::Result<_>>()?;
         let mut revlog: HashMap<i64, Vec<Revlog>> = HashMap::new();
-        let mut stmt = conn.prepare("SELECT cid, id, ease, type, ivl FROM revlog ORDER BY id")?;
+        let mut stmt = conn.prepare("SELECT cid, id, ease, type, ivl, factor FROM revlog ORDER BY id")?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
             revlog.entry(r.get(0)?).or_default().push(Revlog {
@@ -176,6 +179,7 @@ impl Package {
                 ease: r.get(2)?,
                 kind: r.get(3)?,
                 interval: r.get(4)?,
+                factor: r.get(5)?,
             });
         }
         Ok(Package {
@@ -710,7 +714,7 @@ pub(crate) mod tests {
             "CREATE TABLE col (decks TEXT, models TEXT);
              CREATE TABLE notes (id INTEGER, mid INTEGER, flds TEXT, tags TEXT);
              CREATE TABLE cards (id INTEGER, nid INTEGER, did INTEGER, odid INTEGER, ord INTEGER, type INTEGER, queue INTEGER);
-             CREATE TABLE revlog (id INTEGER, cid INTEGER, ease INTEGER, type INTEGER, ivl INTEGER);",
+             CREATE TABLE revlog (id INTEGER, cid INTEGER, ease INTEGER, type INTEGER, ivl INTEGER, factor INTEGER);",
         )
         .unwrap();
         conn.execute("INSERT INTO col VALUES (?1, ?2)", [decks, models]).unwrap();
@@ -726,9 +730,9 @@ pub(crate) mod tests {
                (1020, 102, 1, 0, 0, 0, 0),
                (1030, 103, 1, 0, 0, 2, -1);
              INSERT INTO revlog VALUES
-               (1700000000000, 1000, 3, 0, 1), (1700086400000, 1000, 3, 1, 3),
-               (1700000000000, 1010, 1, 0, -600),
-               (1700000000000, 1030, 3, 0, 1);",
+               (1700000000000, 1000, 3, 0, 1, 2500), (1700086400000, 1000, 3, 1, 3, 2500),
+               (1700000000000, 1010, 1, 0, -600, 2500),
+               (1700000000000, 1030, 3, 0, 1, 2500);",
         )
         .unwrap();
         conn
@@ -761,7 +765,7 @@ pub(crate) mod tests {
         assert_eq!(out.histories.len(), 3);
         assert_eq!(out.histories[0].0, all[0].id);
         assert_eq!(out.histories[0].1.len(), 2);
-        assert_eq!(out.histories[0].1[1], Revlog { time: 1_700_086_400, ease: 3, kind: 1, interval: 3 });
+        assert_eq!(out.histories[0].1[1], Revlog { time: 1_700_086_400, ease: 3, kind: 1, interval: 3, factor: 2500 });
         // The cloze history belongs to the `c1` deletion only.
         let cloze = parser::parse(&out.decks[0].1).cards;
         assert_eq!(out.histories[1].0, cloze[0].id);

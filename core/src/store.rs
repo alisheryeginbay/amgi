@@ -7,7 +7,7 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::SavedView;
-use crate::scheduler::{Memory, Outcome, Rating};
+use crate::scheduler::{Memory, Outcome, Rating, ReviewState};
 
 const MIGRATIONS: &[&str] = &[r#"
 CREATE TABLE card_state (
@@ -45,6 +45,10 @@ CREATE TABLE saved_view (
     icon  TEXT
 );
 INSERT INTO saved_view (name, query, icon) VALUES ('Leeches', 'is:leech', '🐞');
+"#, r#"
+-- `ReviewState`: 0 New, 1 Learning, 2 Review, 3 Relearning; NULL for reviews logged
+-- before this column. A row with rating 0 is a reset: the card became new again.
+ALTER TABLE review_log ADD COLUMN review_state INTEGER;
 "#];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -67,6 +71,16 @@ pub struct LoggedReview {
     pub memory: Memory,
     pub interval_secs: i64,
     pub was_new: bool,
+    /// `None` for reviews logged before amgi recorded it.
+    pub state: Option<ReviewState>,
+}
+
+/// An entry to write to the review log.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LogEntry {
+    Review(LoggedReview),
+    /// The card was reset to new at this time (Unix seconds).
+    Reset(i64),
 }
 
 pub struct Store {
@@ -144,7 +158,7 @@ impl Store {
     /// A card's review log, oldest first. Rows with an unknown rating are skipped.
     pub fn reviews(&self, card_id: &str) -> rusqlite::Result<Vec<LoggedReview>> {
         let mut stmt = self.conn.prepare(
-            "SELECT reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new
+            "SELECT reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new, review_state
              FROM review_log WHERE card_id = ?1 ORDER BY reviewed_at, id",
         )?;
         let rows = stmt.query_map([card_id], |r| {
@@ -159,18 +173,36 @@ impl Store {
                 },
                 interval_secs: r.get(5)?,
                 was_new: r.get(6)?,
+                state: r.get::<_, Option<i64>>(7)?.and_then(ReviewState::from_number),
             }))
         })?;
         rows.filter_map(Result::transpose).collect()
     }
 
+    /// Stage of the card's latest review; `None` if it has none or it predates the
+    /// `review_state` column.
+    pub fn last_review_state(&self, card_id: &str) -> rusqlite::Result<Option<ReviewState>> {
+        let state: Option<Option<i64>> = self
+            .conn
+            .query_row(
+                "SELECT review_state FROM review_log WHERE card_id = ?1 AND rating > 0
+                 ORDER BY reviewed_at DESC, id DESC LIMIT 1",
+                [card_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(state.flatten().and_then(ReviewState::from_number))
+    }
+
     /// Persist a review: append to the log and upsert the card's state atomically.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_review(
         &mut self,
         card_id: &str,
         now: i64,
         rating: Rating,
         elapsed_days: f64,
+        review_state: ReviewState,
         prev: Option<CardState>,
         outcome: Outcome,
     ) -> rusqlite::Result<CardState> {
@@ -193,6 +225,7 @@ impl Store {
                 memory: state.memory,
                 interval_secs: outcome.interval_secs,
                 was_new: prev.is_none(),
+                state: Some(review_state),
             },
         )?;
         upsert_state(&tx, card_id, &state)?;
@@ -201,11 +234,14 @@ impl Store {
     }
 
     /// Persist the history and resulting state of many cards in one transaction.
-    pub fn import(&mut self, cards: &[(String, Vec<LoggedReview>, CardState)]) -> rusqlite::Result<()> {
+    pub fn import(&mut self, cards: &[(String, Vec<LogEntry>, CardState)]) -> rusqlite::Result<()> {
         let tx = self.conn.transaction()?;
-        for (card_id, reviews, state) in cards {
-            for review in reviews {
-                insert_review(&tx, card_id, review)?;
+        for (card_id, entries, state) in cards {
+            for entry in entries {
+                match entry {
+                    LogEntry::Review(review) => insert_review(&tx, card_id, review)?,
+                    LogEntry::Reset(at) => insert_reset(&tx, card_id, *at)?,
+                }
             }
             upsert_state(&tx, card_id, state)?;
         }
@@ -226,7 +262,7 @@ impl Store {
     pub fn reviews_per_day(&self, since: i64, shift: i64) -> rusqlite::Result<Vec<(i64, u32)>> {
         let mut stmt = self.conn.prepare(
             "SELECT (reviewed_at + ?2) / 86400 AS day, COUNT(*) FROM review_log
-             WHERE reviewed_at >= ?1 GROUP BY day ORDER BY day",
+             WHERE rating > 0 AND reviewed_at >= ?1 GROUP BY day ORDER BY day",
         )?;
         stmt.query_map([since, shift], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
     }
@@ -236,7 +272,7 @@ impl Store {
     pub fn recall_since(&self, since: i64) -> rusqlite::Result<(u32, u32)> {
         self.conn.query_row(
             "SELECT COUNT(*), COALESCE(SUM(rating > 1), 0) FROM review_log
-             WHERE NOT was_new AND elapsed_days >= 1 AND reviewed_at >= ?1",
+             WHERE rating > 0 AND NOT was_new AND elapsed_days >= 1 AND reviewed_at >= ?1",
             [since],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -244,7 +280,7 @@ impl Store {
 
     pub fn reviews_since(&self, since: i64) -> rusqlite::Result<u32> {
         self.conn.query_row(
-            "SELECT COUNT(*) FROM review_log WHERE reviewed_at >= ?1",
+            "SELECT COUNT(*) FROM review_log WHERE rating > 0 AND reviewed_at >= ?1",
             [since],
             |r| r.get(0),
         )
@@ -298,8 +334,8 @@ impl Store {
 fn insert_review(tx: &Transaction, card_id: &str, r: &LoggedReview) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT INTO review_log
-           (card_id, reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+           (card_id, reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new, review_state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             card_id,
             r.reviewed_at,
@@ -309,7 +345,18 @@ fn insert_review(tx: &Transaction, card_id: &str, r: &LoggedReview) -> rusqlite:
             r.memory.difficulty,
             r.interval_secs,
             r.was_new,
+            r.state.map(|s| s as i64),
         ],
+    )?;
+    Ok(())
+}
+
+fn insert_reset(tx: &Transaction, card_id: &str, at: i64) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT INTO review_log
+           (card_id, reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new)
+         VALUES (?1, ?2, 0, 0, 0, 0, 0, 0)",
+        params![card_id, at],
     )?;
     Ok(())
 }
@@ -377,12 +424,12 @@ mod tests {
             interval_secs: 86_400,
         };
         let s1 = store
-            .record_review("abc", 1000, Rating::Good, 0.0, None, outcome)
+            .record_review("abc", 1000, Rating::Good, 0.0, ReviewState::New, None, outcome)
             .unwrap();
         assert_eq!((s1.reps, s1.lapses, s1.due), (1, 0, 87_400));
 
         let s2 = store
-            .record_review("abc", 90_000, Rating::Again, 1.0, Some(s1), outcome)
+            .record_review("abc", 90_000, Rating::Again, 1.0, ReviewState::Review, Some(s1), outcome)
             .unwrap();
         assert_eq!((s2.reps, s2.lapses), (2, 1));
         assert_eq!(store.state("abc").unwrap(), Some(s2));
@@ -393,6 +440,52 @@ mod tests {
         let log = store.reviews("abc").unwrap();
         assert_eq!(log.iter().map(|r| r.rating).collect::<Vec<_>>(), [Rating::Good, Rating::Again]);
         assert!(log[0].was_new && !log[1].was_new);
+        assert_eq!(log.iter().map(|r| r.state).collect::<Vec<_>>(), [Some(ReviewState::New), Some(ReviewState::Review)]);
+        assert_eq!(store.last_review_state("abc").unwrap(), Some(ReviewState::Review));
+        assert_eq!(store.last_review_state("other").unwrap(), None);
         assert!(store.reviews("other").unwrap().is_empty());
+    }
+
+    #[test]
+    fn resets_are_logged_but_not_counted() {
+        let mut store = Store::open_in_memory().unwrap();
+        let review = LoggedReview {
+            reviewed_at: 1000,
+            rating: Rating::Good,
+            elapsed_days: 0.0,
+            memory: Memory { stability: 2.0, difficulty: 5.0 },
+            interval_secs: 86_400,
+            was_new: true,
+            state: Some(ReviewState::New),
+        };
+        let relearned = LoggedReview { reviewed_at: 3000, ..review };
+        let state = CardState { memory: review.memory, due: 89_400, last_review: 3000, reps: 1, lapses: 0 };
+        let entries = vec![LogEntry::Review(review), LogEntry::Reset(2000), LogEntry::Review(relearned)];
+        store.import(&[("abc".into(), entries, state)]).unwrap();
+
+        let rows: i64 = store.conn.query_row("SELECT COUNT(*) FROM review_log", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 3);
+        assert_eq!(store.reviews("abc").unwrap(), [review, relearned]);
+        assert_eq!(store.reviews_since(0).unwrap(), 2);
+        assert_eq!(store.new_cards_since(0).unwrap(), 2);
+        assert_eq!(store.reviews_per_day(0, 0).unwrap(), [(0, 2)]);
+        assert_eq!(store.last_review_state("abc").unwrap(), Some(ReviewState::New));
+    }
+
+    #[test]
+    fn older_reviews_have_no_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.execute(
+            "INSERT INTO review_log
+               (card_id, reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new)
+             VALUES ('abc', 1000, 3, 0, 2, 5, 86400, 1)",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        let store = Store::init(conn).unwrap();
+        assert_eq!(store.reviews("abc").unwrap()[0].state, None);
+        assert_eq!(store.last_review_state("abc").unwrap(), None);
     }
 }

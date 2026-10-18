@@ -17,8 +17,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub use parser::CardKind;
 pub use scheduler::Rating;
 use parser::ParsedCard;
-use scheduler::{Memory, Scheduler};
-use store::{CardState, LoggedReview, Store};
+use scheduler::{Memory, ReviewState, Scheduler};
+use store::{CardState, LogEntry, LoggedReview, Store};
 
 uniffi::setup_scaffolding!();
 
@@ -701,9 +701,17 @@ impl Inner {
         let prev = self.states.get(card_id).copied();
         let (memory, elapsed) = self.elapsed(prev.as_ref(), now);
         let outcome = self.scheduler.schedule(memory, elapsed, rating)?;
+        // Reviews logged before `review_state` existed count as plain reviews.
+        let review_state = match prev {
+            None => ReviewState::New,
+            Some(_) => ReviewState::after(
+                self.store.last_review_state(card_id)?.unwrap_or(ReviewState::Review),
+                elapsed,
+            ),
+        };
         let state = self
             .store
-            .record_review(card_id, now, rating, elapsed.into(), prev, outcome)?;
+            .record_review(card_id, now, rating, elapsed.into(), review_state, prev, outcome)?;
         self.states.insert(card_id.to_string(), state);
         Ok(())
     }
@@ -842,10 +850,12 @@ impl Inner {
 
     /// Rebuild a card's memory state by replaying its Anki reviews through the
     /// scheduler. Due dates follow Anki's intervals so the existing schedule is kept.
-    /// `None` if the card ends up new.
-    fn replay(&self, log: &[anki::Revlog]) -> Result<Option<(Vec<LoggedReview>, CardState)>> {
-        let mut reviews = Vec::new();
+    /// Filtered-deck reviews with rescheduling off left Anki's schedule alone, so they
+    /// are skipped. `None` if the card ends up new.
+    fn replay(&self, log: &[anki::Revlog]) -> Result<Option<(Vec<LogEntry>, CardState)>> {
+        let mut entries = Vec::new();
         let mut state: Option<CardState> = None;
+        let mut last_review_state = ReviewState::New;
         for entry in log {
             let rating = match entry.ease {
                 1 => Some(Rating::Again),
@@ -855,21 +865,34 @@ impl Inner {
                 _ => None,
             };
             match (rating, entry.kind) {
+                (Some(_), 3) if entry.factor == 0 => {}
                 (Some(rating), 0..=3) => {
                     let (memory, elapsed) = self.elapsed(state.as_ref(), entry.time);
+                    // A history that starts mid-way has no New review, which tells the
+                    // optimizer to leave it out.
+                    let review_state = match (entry.kind, state) {
+                        (0, None) => ReviewState::New,
+                        (0, Some(_)) => ReviewState::Learning,
+                        (1, _) => ReviewState::Review,
+                        (2, _) => ReviewState::Relearning,
+                        (_, None) => ReviewState::Review,
+                        (_, Some(_)) => ReviewState::after(last_review_state, elapsed),
+                    };
+                    last_review_state = review_state;
                     let outcome = self.scheduler.schedule(memory, elapsed, rating)?;
                     let interval_secs = match entry.interval {
                         0 => outcome.interval_secs,
                         _ => entry.interval_secs(),
                     };
-                    reviews.push(LoggedReview {
+                    entries.push(LogEntry::Review(LoggedReview {
                         reviewed_at: entry.time,
                         rating,
                         elapsed_days: elapsed.into(),
                         memory: outcome.memory,
                         interval_secs,
                         was_new: state.is_none(),
-                    });
+                        state: Some(review_state),
+                    }));
                     let lapse = u32::from(state.is_some() && rating == Rating::Again);
                     state = Some(CardState {
                         memory: outcome.memory,
@@ -881,7 +904,11 @@ impl Inner {
                 }
                 // Manual entries: "Forget" resets the card, "Set Due Date" and FSRS
                 // rescheduling move the due date.
-                (None, 4) if entry.interval == 0 => state = None,
+                (None, 4) if entry.interval == 0 => {
+                    if state.take().is_some() {
+                        entries.push(LogEntry::Reset(entry.time));
+                    }
+                }
                 (None, 4 | 5) => {
                     if let Some(s) = state.as_mut() {
                         s.due = entry.time + entry.interval_secs();
@@ -890,7 +917,7 @@ impl Inner {
                 _ => {}
             }
         }
-        Ok(state.map(|s| (reviews, s)))
+        Ok(state.map(|s| (entries, s)))
     }
 
     fn today(&self, now: i64) -> Result<TodayStats> {
@@ -1089,6 +1116,12 @@ mod tests {
         assert!((info.retrievability.unwrap() - 1.0).abs() < 1e-6);
         let later = inner.card_info(&id, T0 + 10 * DAY_SECS).unwrap().unwrap();
         assert!(later.retrievability.unwrap() < 1.0);
+
+        // Review stages: a lapse seen again the same day is relearned.
+        inner.answer(&id, Rating::Good, T0 + 3 * DAY_SECS + 600).unwrap();
+        let states: Vec<_> = inner.store.reviews(&id).unwrap().iter().map(|r| r.state).collect();
+        use ReviewState::*;
+        assert_eq!(states, [Some(New), Some(Review), Some(Relearning)]);
         assert!(inner.card_info("nope", T0).unwrap().is_none());
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
@@ -1252,19 +1285,56 @@ mod tests {
     fn replay_follows_anki_schedule() {
         let (dir, c) = collection(&[("a.md", "")]);
         let inner = c.lock();
-        let entry = |day: i64, ease, kind, interval| anki::Revlog { time: T0 + day * DAY_SECS, ease, kind, interval };
+        let entry = |day: i64, ease, kind, interval| anki::Revlog {
+            time: T0 + day * DAY_SECS,
+            ease,
+            kind,
+            interval,
+            factor: 2500,
+        };
+        let reviews = |entries: Vec<LogEntry>| -> Vec<LoggedReview> {
+            entries.into_iter().filter_map(|e| if let LogEntry::Review(r) = e { Some(r) } else { None }).collect()
+        };
         let log = [entry(0, 1, 0, -600), entry(0, 3, 0, 1), entry(1, 3, 1, 4), entry(5, 1, 1, -600), entry(5, 3, 2, 2)];
-        let (reviews, state) = inner.replay(&log).unwrap().unwrap();
-        assert_eq!(reviews.len(), 5);
-        assert!(reviews[0].was_new && !reviews[1].was_new);
-        assert_eq!(reviews.iter().map(|r| r.elapsed_days).collect::<Vec<_>>(), [0.0, 0.0, 1.0, 4.0, 0.0]);
+        let (entries, state) = inner.replay(&log).unwrap().unwrap();
+        let logged = reviews(entries);
+        assert_eq!(logged.len(), 5);
+        assert!(logged[0].was_new && !logged[1].was_new);
+        assert_eq!(logged.iter().map(|r| r.elapsed_days).collect::<Vec<_>>(), [0.0, 0.0, 1.0, 4.0, 0.0]);
+        use ReviewState::*;
+        assert_eq!(logged.iter().map(|r| r.state).collect::<Vec<_>>(), [
+            Some(New),
+            Some(Learning),
+            Some(Review),
+            Some(Review),
+            Some(Relearning)
+        ]);
         assert_eq!((state.reps, state.lapses, state.due), (5, 1, T0 + 7 * DAY_SECS));
         assert!(state.memory.stability > 0.0);
 
-        // Set Due Date moves the card; Forget makes it new again.
+        // A history that starts mid-way has no New review.
+        let (entries, _) = inner.replay(&log[2..]).unwrap().unwrap();
+        let logged = reviews(entries);
+        assert!(logged[0].was_new);
+        assert_eq!(logged[0].state, Some(Review));
+
+        // Filtered-deck reviews count unless rescheduling was off.
+        let filtered = entry(3, 3, 3, 5);
+        let practice = anki::Revlog { factor: 0, ..filtered };
+        let (entries, state) = inner.replay(&[log[1], filtered, practice]).unwrap().unwrap();
+        assert_eq!(reviews(entries).iter().map(|r| r.state).collect::<Vec<_>>(), [Some(New), Some(Review)]);
+        assert_eq!((state.reps, state.due), (2, T0 + 8 * DAY_SECS));
+
+        // Set Due Date moves the card; Forget makes it new again and is logged.
         let (_, moved) = inner.replay(&[log[1], entry(1, 0, 4, 10)]).unwrap().unwrap();
         assert_eq!(moved.due, T0 + 11 * DAY_SECS);
         assert!(inner.replay(&[log[1], entry(1, 0, 4, 0)]).unwrap().is_none());
+        let (entries, state) = inner.replay(&[log[1], entry(1, 0, 4, 0), entry(2, 3, 0, 1)]).unwrap().unwrap();
+        assert_eq!(entries[1], LogEntry::Reset(T0 + DAY_SECS));
+        let logged = reviews(entries);
+        assert!(logged[1].was_new);
+        assert_eq!(logged[1].state, Some(New));
+        assert_eq!(state.reps, 1);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
