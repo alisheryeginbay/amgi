@@ -22,7 +22,8 @@ let package = Package(
             linkerSettings: [.unsafeFlags([coreLibrary])]
         ),
         // `Web` holds the Svelte panes, built by `scripts/build-web.sh`; `Emoji.tsv` the emoji
-        // picker's data, written by `scripts/build-emoji.py`.
-        .executableTarget(name: "Amgi", dependencies: ["AmgiCore"], resources: [.copy("Web"), .copy("Emoji.tsv")]),
+        // picker's data, written by `scripts/build-emoji.py`; `Amgi.svg` the welcome screen's
+        // handwriting, written by `scripts/readme-svg.mjs`.
+        .executableTarget(name: "Amgi", dependencies: ["AmgiCore"], resources: [.copy("Web"), .copy("Emoji.tsv"), .copy("Amgi.svg")]),
     ]
 )

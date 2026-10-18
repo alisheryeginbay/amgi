@@ -1,4 +1,4 @@
-// Builds media/amgi.svg for the README: "Amgi" is written by hand, fades, then 암기
+// Builds media/amgi.svg for the README, and the copy the app's welcome screen shows: "Amgi" is written by hand, fades, then 암기
 // is written, fades, and the loop starts over. Each word comes from the tegaki CLI
 // (https://github.com/gkurt/tegaki); this script puts both on one timeline.
 //
@@ -9,7 +9,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "media", "amgi.svg");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const OUTS = [join(ROOT, "media", "amgi.svg"), join(ROOT, "app", "Sources", "Amgi", "Amgi.svg")];
 const TEGAKI = "tegaki@1.1.0"; // pinned: the script parses this version's output
 const LIGHT = "#1a1a1a";
 const DARK = "#e6edf3";
@@ -84,6 +85,8 @@ ${groups.join("\n")}
 </svg>
 `;
 
-mkdirSync(dirname(OUT), { recursive: true });
-writeFileSync(OUT, svg);
-console.log(`wrote ${OUT} (${(svg.length / 1024).toFixed(1)} KB, ${total.toFixed(2)}s loop)`);
+for (const out of OUTS) {
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, svg);
+}
+console.log(`wrote ${OUTS.join(", ")} (${(svg.length / 1024).toFixed(1)} KB, ${total.toFixed(2)}s loop)`);

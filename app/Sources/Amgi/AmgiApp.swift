@@ -11,12 +11,13 @@ struct AmgiApp: App {
         Window("Amgi", id: "main") {
             ContentView()
                 .environment(model)
-                .frame(minWidth: 720, minHeight: 460)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     // Pick up edits made in a text editor while the app was in the background.
                     model.reload()
                 }
         }
+        // The welcome screen is a fixed size; the collection's window resizes freely.
+        .windowResizability(.contentSize)
         .commands {
             HelpCommands()
             CommandGroup(replacing: .newItem) {
