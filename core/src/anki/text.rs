@@ -39,6 +39,29 @@ pub fn render_template(template: &str, fields: &HashMap<&str, &str>) -> String {
     out
 }
 
+/// An answer template with each typing box (`{{type:Back}}`, `{{type:nc:Back}}`)
+/// replaced by its field: on the answer side Anki shows the correct answer there,
+/// and it is often the only place the template shows it.
+pub fn answer_template(template: &str) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        let Some(len) = rest[start + 2..].find("}}") else { break };
+        let tag = rest[start + 2..start + 2 + len].trim();
+        out.push_str(&rest[..start]);
+        match tag.strip_prefix("type:") {
+            Some(field) => {
+                let field = field.strip_prefix("nc:").unwrap_or(field);
+                out.push_str(&format!("{{{{{field}}}}}"));
+            }
+            None => out.push_str(&rest[start..start + 2 + len + 2]),
+        }
+        rest = &rest[start + 2 + len + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `Field` or `filter:filter:Field`.
 fn field_reference(tag: &str, fields: &HashMap<&str, &str>) -> String {
     let mut parts = tag.rsplit(':');
@@ -563,6 +586,9 @@ mod tests {
         assert_eq!(render_template("{{^Extra}}none{{/Extra}}", &fields), "none");
         assert_eq!(render_template("{{#Front}}{{^Back}}x{{/Back}}y{{/Front}}", &fields), "y");
         assert_eq!(render_template("{{type:Back}}{{Missing}}", &fields), "");
+        // On the answer side, the typing box shows the correct answer.
+        assert_eq!(answer_template("{{Front}}<hr id=answer>{{type:Back}}"), "{{Front}}<hr id=answer>{{Back}}");
+        assert_eq!(answer_template("{{ type:nc:Back }}{{type:cloze:Text}}"), "{{Back}}{{cloze:Text}}");
         assert_eq!(render_template("{{kana:F}}|{{kanji:F}}", &HashMap::from([("F", "日本[にほん] 語[ご]")])), "にほんご|日本語");
     }
 

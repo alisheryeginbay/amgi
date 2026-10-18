@@ -680,7 +680,7 @@ fn basic_block(qfmt: &str, afmt: &str, fields: &HashMap<&str, &str>, media: &mut
     // same fields above `<hr id=answer>`; amgi already shows the question above it.
     let mut back_fields = fields.clone();
     back_fields.insert("FrontSide", "");
-    let back_html = text::render_template(afmt, &back_fields);
+    let back_html = text::render_template(&text::answer_template(afmt), &back_fields);
     let back = text::html_to_markdown(answer_part(&back_html), media);
     let back = match back.strip_prefix(&front) {
         Some(rest) if !rest.trim().is_empty() => rest.trim().to_string(),
@@ -908,6 +908,8 @@ pub(crate) mod tests {
         assert_eq!(block("{{Front}}<HR id=\"answer\">{{Back}}"), "Q: q\nA: a");
         assert_eq!(block("{{Front}}<br>{{Back}}"), "Q: q\nA: a");
         assert_eq!(block("{{Front}}"), "Q: q\nA: q");
+        // Anki's "type in the answer" note type shows the answer only in the typing box.
+        assert_eq!(block("{{Front}}<hr id=answer>{{type:Back}}"), "Q: q\nA: a");
     }
 
     #[test]
