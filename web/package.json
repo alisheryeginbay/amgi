@@ -19,6 +19,11 @@
     "vite": "^8.3.4"
   },
   "dependencies": {
+    "@fontsource-variable/noto-serif-jp": "^5.3.1",
+    "@fontsource-variable/noto-serif-kr": "^5.3.1",
+    "@fontsource-variable/noto-serif-sc": "^5.3.1",
+    "@fontsource-variable/noto-serif-tc": "^5.3.1",
+    "@fontsource-variable/source-serif-4": "^5.3.1",
     "marked": "^18.1.1",
     "shiki": "^4.5.0",
     "temml": "^0.14.0"

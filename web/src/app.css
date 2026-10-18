@@ -26,6 +26,24 @@
   --font-title: 22px;
   --font-title2: 17px;
   --font-title3: 15px;
+
+  /* Card text. Source Serif's optical sizes suit both the large study card and the small
+     preview. Hangul, kana and Han characters come from Noto Serif CJK (Source Han Serif),
+     Korean forms first unless `main.ts` finds another CJK language. */
+  --font-han: "Noto Serif KR Variable", "Noto Serif JP Variable", "Noto Serif SC Variable", "Noto Serif TC Variable";
+  --font-serif: "Source Serif 4 Variable", var(--font-han), ui-serif, Georgia, serif;
+}
+
+:root[data-han="ja"] {
+  --font-han: "Noto Serif JP Variable", "Noto Serif KR Variable", "Noto Serif SC Variable", "Noto Serif TC Variable";
+}
+
+:root[data-han="zh-hans"] {
+  --font-han: "Noto Serif SC Variable", "Noto Serif TC Variable", "Noto Serif JP Variable", "Noto Serif KR Variable";
+}
+
+:root[data-han="zh-hant"] {
+  --font-han: "Noto Serif TC Variable", "Noto Serif SC Variable", "Noto Serif JP Variable", "Noto Serif KR Variable";
 }
 
 @media (prefers-color-scheme: dark) {
@@ -91,6 +109,12 @@ button {
 }
 
 /* Card text, rendered from Markdown. */
+.markdown {
+  font-family: var(--font-serif);
+  font-optical-sizing: auto;
+  font-kerning: normal;
+}
+
 .markdown code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.9em;
