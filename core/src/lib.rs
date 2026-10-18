@@ -15,9 +15,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use parser::CardKind;
-pub use scheduler::Rating;
+pub use scheduler::{Rating, ReviewState};
 use parser::ParsedCard;
-use scheduler::{Memory, ReviewState, Scheduler};
+use scheduler::{Memory, Scheduler};
 use store::{CardState, LogEntry, LoggedReview, Store};
 
 uniffi::setup_scaffolding!();
@@ -43,14 +43,6 @@ pub enum AmgiError {
     Scheduler { message: String },
     #[error("import failed: {message}")]
     Import { message: String },
-}
-
-impl From<anki::Error> for AmgiError {
-    fn from(e: anki::Error) -> Self {
-        AmgiError::Import {
-            message: e.to_string(),
-        }
-    }
 }
 
 impl From<std::io::Error> for AmgiError {
@@ -196,30 +188,45 @@ pub struct TodayStats {
     pub new_available: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct ImportSummary {
+/// Decks brought in from another app, with the review history it kept.
+#[derive(Debug, Default)]
+pub struct Import {
+    /// Deck path relative to the root, without `.md`, and its Markdown.
+    pub decks: Vec<(String, String)>,
+    /// Card id and its history, oldest first.
+    pub histories: Vec<(String, Vec<HistoryEntry>)>,
+}
+
+/// One event in a card's imported history.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HistoryEntry {
+    /// The card was studied at `time` (Unix seconds).
+    Review {
+        time: i64,
+        rating: Rating,
+        /// The card's stage, if the other app knows it. `Learning` on a card with no
+        /// history yet makes it the first review.
+        state: Option<ReviewState>,
+        /// When the other app scheduled the card next; `None` lets the scheduler decide.
+        interval_secs: Option<i64>,
+    },
+    /// The card was made new again.
+    Reset { time: i64 },
+    /// The card's due date was moved to `interval_secs` after `time`.
+    Reschedule { time: i64, interval_secs: i64 },
+}
+
+/// What [`CardCollection::import`] did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Imported {
     /// Deck files written, relative to the collection root.
     pub files: Vec<String>,
-    pub notes: u32,
-    pub cards: u32,
-    /// Cards that kept their Anki review history.
+    /// Cards that kept their imported history.
     pub reviewed_cards: u32,
     /// Cards that already had review history in this collection, which was kept.
     pub existing_history: u32,
-    /// Cards never reviewed, in Anki or here.
+    /// Cards never reviewed, there or here.
     pub new_cards: u32,
-    /// Notes that produced no card, such as image occlusion notes.
-    pub skipped_notes: u32,
-    /// Suspended Anki cards, imported with the `#suspended` tag.
-    pub suspended_cards: u32,
-    /// Images now in the collection's `media` folder.
-    pub images: u32,
-    /// Images cards refer to that the package does not contain.
-    pub missing_images: u32,
-    /// Sounds now in the collection's `media` folder.
-    pub sounds: u32,
-    /// Sounds cards refer to that the package does not contain.
-    pub missing_sounds: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -418,27 +425,20 @@ impl CardCollection {
     pub fn warnings(&self) -> Vec<CollectionWarning> {
         self.lock().warnings.clone()
     }
-
-    /// Import an Anki package (`.apkg` or `.colpkg`) as Markdown decks in this
-    /// collection, keeping review history. Images and sounds go to a `media` folder
-    /// at the root. Existing files are never overwritten.
-    pub fn import_anki(&self, path: String) -> Result<ImportSummary> {
-        let package = anki::Package::read(Path::new(&path))?;
-        let conversion = package.convert();
-        let root = self.lock().root.clone();
-        let media_dir = root.join(MEDIA_DIR);
-        let images = package.write_media(&conversion.media.images, &media_dir)?;
-        let sounds = package.write_media(&conversion.media.sounds, &media_dir)?;
-        let mut summary = self.lock().import_anki(conversion)?;
-        summary.missing_images -= images;
-        summary.images = images;
-        summary.missing_sounds -= sounds;
-        summary.sounds = sounds;
-        Ok(summary)
-    }
 }
 
 impl CardCollection {
+    /// The folder holding the collection's decks.
+    pub fn root(&self) -> PathBuf {
+        self.lock().root.clone()
+    }
+
+    /// Write decks from another app and replay their review history. Existing files are
+    /// never overwritten, and history already here is kept.
+    pub fn import(&self, import: Import) -> Result<Imported> {
+        self.lock().import(import)
+    }
+
     fn with_store(root: PathBuf, store: Store) -> Result<Self> {
         let states = store.states()?;
         let mut inner = Inner {
@@ -796,9 +796,9 @@ impl Inner {
         })
     }
 
-    fn import_anki(&mut self, conversion: anki::Conversion) -> Result<ImportSummary> {
+    fn import(&mut self, import: Import) -> Result<Imported> {
         let mut files = Vec::new();
-        for (deck, markdown) in &conversion.decks {
+        for (deck, markdown) in &import.decks {
             let path = unused_path(&self.root, deck);
             if let Some(dir) = path.parent() {
                 fs::create_dir_all(dir)?;
@@ -810,7 +810,7 @@ impl Inner {
         // History never replaces what was already studied in amgi.
         let mut seen = HashSet::new();
         let mut imported = Vec::new();
-        for (id, log) in &conversion.histories {
+        for (id, log) in &import.histories {
             if self.states.contains_key(id) || !seen.insert(id) {
                 continue;
             }
@@ -824,7 +824,7 @@ impl Inner {
         self.reload()?;
 
         // Every card written, once each: a package can hold the same card twice.
-        let written: HashSet<String> = conversion
+        let written: HashSet<String> = import
             .decks
             .iter()
             .flat_map(|(_, markdown)| parser::parse(markdown).cards)
@@ -832,60 +832,43 @@ impl Inner {
             .collect();
         let studied = written.iter().filter(|id| self.states.contains_key(*id)).count() as u32;
 
-        Ok(ImportSummary {
+        Ok(Imported {
             files,
-            notes: conversion.notes,
-            cards: conversion.cards,
             reviewed_cards,
             existing_history: studied.saturating_sub(reviewed_cards),
             new_cards: written.len() as u32 - studied,
-            skipped_notes: conversion.skipped_notes,
-            suspended_cards: conversion.suspended_cards,
-            images: 0,
-            missing_images: conversion.media.images.len() as u32,
-            sounds: 0,
-            missing_sounds: conversion.media.sounds.len() as u32,
         })
     }
 
-    /// Rebuild a card's memory state by replaying its Anki reviews through the
-    /// scheduler. Due dates follow Anki's intervals so the existing schedule is kept.
-    /// Filtered-deck reviews with rescheduling off left Anki's schedule alone, so they
-    /// are skipped. `None` if the card ends up new.
-    fn replay(&self, log: &[anki::Revlog]) -> Result<Option<(Vec<LogEntry>, CardState)>> {
+    /// Rebuild a card's memory state by replaying its imported history through the
+    /// scheduler. Due dates follow the other app's intervals so its schedule is kept.
+    /// `None` if the card ends up new.
+    fn replay(&self, log: &[HistoryEntry]) -> Result<Option<(Vec<LogEntry>, CardState)>> {
         let mut entries = Vec::new();
         let mut state: Option<CardState> = None;
         let mut last_review_state = ReviewState::New;
         for entry in log {
-            let rating = match entry.ease {
-                1 => Some(Rating::Again),
-                2 => Some(Rating::Hard),
-                3 => Some(Rating::Good),
-                4 => Some(Rating::Easy),
-                _ => None,
-            };
-            match (rating, entry.kind) {
-                (Some(_), 3) if entry.factor == 0 => {}
-                (Some(rating), 0..=3) => {
-                    let (memory, elapsed) = self.elapsed(state.as_ref(), entry.time);
+            match *entry {
+                HistoryEntry::Review {
+                    time,
+                    rating,
+                    state: stage,
+                    interval_secs,
+                } => {
+                    let (memory, elapsed) = self.elapsed(state.as_ref(), time);
                     // A history that starts mid-way has no New review, which tells the
                     // optimizer to leave it out.
-                    let review_state = match (entry.kind, state) {
-                        (0, None) => ReviewState::New,
-                        (0, Some(_)) => ReviewState::Learning,
-                        (1, _) => ReviewState::Review,
-                        (2, _) => ReviewState::Relearning,
-                        (_, None) => ReviewState::Review,
-                        (_, Some(_)) => ReviewState::after(last_review_state, elapsed),
+                    let review_state = match (stage, state) {
+                        (Some(ReviewState::New | ReviewState::Learning), None) => ReviewState::New,
+                        (Some(stage), _) => stage,
+                        (None, None) => ReviewState::Review,
+                        (None, Some(_)) => ReviewState::after(last_review_state, elapsed),
                     };
                     last_review_state = review_state;
                     let outcome = self.scheduler.schedule(memory, elapsed, rating)?;
-                    let interval_secs = match entry.interval {
-                        0 => outcome.interval_secs,
-                        _ => entry.interval_secs(),
-                    };
+                    let interval_secs = interval_secs.unwrap_or(outcome.interval_secs);
                     entries.push(LogEntry::Review(LoggedReview {
-                        reviewed_at: entry.time,
+                        reviewed_at: time,
                         rating,
                         elapsed_days: elapsed.into(),
                         memory: outcome.memory,
@@ -896,25 +879,22 @@ impl Inner {
                     let lapse = u32::from(state.is_some() && rating == Rating::Again);
                     state = Some(CardState {
                         memory: outcome.memory,
-                        due: entry.time + interval_secs,
-                        last_review: entry.time,
+                        due: time + interval_secs,
+                        last_review: time,
                         reps: state.map_or(0, |s| s.reps) + 1,
                         lapses: state.map_or(0, |s| s.lapses) + lapse,
                     });
                 }
-                // Manual entries: "Forget" resets the card, "Set Due Date" and FSRS
-                // rescheduling move the due date.
-                (None, 4) if entry.interval == 0 => {
+                HistoryEntry::Reset { time } => {
                     if state.take().is_some() {
-                        entries.push(LogEntry::Reset(entry.time));
+                        entries.push(LogEntry::Reset(time));
                     }
                 }
-                (None, 4 | 5) => {
+                HistoryEntry::Reschedule { time, interval_secs } => {
                     if let Some(s) = state.as_mut() {
-                        s.due = entry.time + entry.interval_secs();
+                        s.due = time + interval_secs;
                     }
                 }
-                _ => {}
             }
         }
         Ok(state.map(|s| (entries, s)))
@@ -1250,6 +1230,40 @@ mod tests {
     }
 
     #[test]
+    fn import_writes_decks_and_keeps_history() {
+        let (dir, c) = collection(&[("Default.md", "Q: mine\nA: kept\n")]);
+        let studied = "Q: studied\nA: yes\n";
+        let id = parser::parse(studied).cards[0].id.clone();
+        let review = |day, interval_days| HistoryEntry::Review {
+            time: T0 + day * DAY_SECS,
+            rating: Rating::Good,
+            state: Some(ReviewState::Learning),
+            interval_secs: Some(interval_days * DAY_SECS),
+        };
+        let import = || Import {
+            decks: vec![("Default".into(), studied.into()), ("Lang/Verbs".into(), "Q: fresh\nA: no\n".into())],
+            histories: vec![(id.clone(), vec![review(0, 1), review(1, 3)]), (id.clone(), vec![review(0, 1)])],
+        };
+        let imported = c.import(import()).unwrap();
+        assert_eq!(imported.files, ["Default 2.md", "Lang/Verbs.md"]);
+        assert_eq!((imported.reviewed_cards, imported.existing_history, imported.new_cards), (1, 0, 1));
+        assert_eq!(fs::read_to_string(dir.join("Default.md")).unwrap(), "Q: mine\nA: kept\n");
+
+        let inner = c.lock();
+        let names: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.name).collect();
+        assert_eq!(names, ["Default", "Default 2", "Lang", "Lang/Verbs"]);
+        let state = inner.states[&id];
+        assert_eq!((state.reps, state.last_review, state.due), (2, T0 + DAY_SECS, T0 + 4 * DAY_SECS));
+        assert_eq!(inner.store.state(&id).unwrap(), Some(state));
+        drop(inner);
+
+        // Importing again keeps the history already here and says so.
+        let again = c.import(import()).unwrap();
+        assert_eq!((again.reviewed_cards, again.existing_history, again.new_cards), (0, 1, 1));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn import_anki_package() {
         let (dir, c) = collection(&[("Default.md", "Q: mine\nA: kept\n")]);
         let package = dir.join("deck.apkg");
@@ -1282,26 +1296,32 @@ mod tests {
     }
 
     #[test]
-    fn replay_follows_anki_schedule() {
+    fn replay_follows_imported_schedule() {
         let (dir, c) = collection(&[("a.md", "")]);
         let inner = c.lock();
-        let entry = |day: i64, ease, kind, interval| anki::Revlog {
+        let review = |day: i64, rating, state, interval_secs| HistoryEntry::Review {
             time: T0 + day * DAY_SECS,
-            ease,
-            kind,
-            interval,
-            factor: 2500,
+            rating,
+            state,
+            interval_secs: Some(interval_secs),
         };
         let reviews = |entries: Vec<LogEntry>| -> Vec<LoggedReview> {
             entries.into_iter().filter_map(|e| if let LogEntry::Review(r) = e { Some(r) } else { None }).collect()
         };
-        let log = [entry(0, 1, 0, -600), entry(0, 3, 0, 1), entry(1, 3, 1, 4), entry(5, 1, 1, -600), entry(5, 3, 2, 2)];
+        use Rating::{Again, Good};
+        use ReviewState::*;
+        let log = [
+            review(0, Again, Some(Learning), 600),
+            review(0, Good, Some(Learning), DAY_SECS),
+            review(1, Good, Some(Review), 4 * DAY_SECS),
+            review(5, Again, Some(Review), 600),
+            review(5, Good, Some(Relearning), 2 * DAY_SECS),
+        ];
         let (entries, state) = inner.replay(&log).unwrap().unwrap();
         let logged = reviews(entries);
         assert_eq!(logged.len(), 5);
         assert!(logged[0].was_new && !logged[1].was_new);
         assert_eq!(logged.iter().map(|r| r.elapsed_days).collect::<Vec<_>>(), [0.0, 0.0, 1.0, 4.0, 0.0]);
-        use ReviewState::*;
         assert_eq!(logged.iter().map(|r| r.state).collect::<Vec<_>>(), [
             Some(New),
             Some(Learning),
@@ -1318,18 +1338,24 @@ mod tests {
         assert!(logged[0].was_new);
         assert_eq!(logged[0].state, Some(Review));
 
-        // Filtered-deck reviews count unless rescheduling was off.
-        let filtered = entry(3, 3, 3, 5);
-        let practice = anki::Revlog { factor: 0, ..filtered };
-        let (entries, state) = inner.replay(&[log[1], filtered, practice]).unwrap().unwrap();
+        // With no stage given, it follows from the reviews before; with no interval, the
+        // scheduler picks one.
+        let unknown = review(3, Good, None, 5 * DAY_SECS);
+        let (entries, state) = inner.replay(&[log[1], unknown]).unwrap().unwrap();
         assert_eq!(reviews(entries).iter().map(|r| r.state).collect::<Vec<_>>(), [Some(New), Some(Review)]);
         assert_eq!((state.reps, state.due), (2, T0 + 8 * DAY_SECS));
+        let unscheduled = HistoryEntry::Review { time: T0, rating: Good, state: None, interval_secs: None };
+        let (entries, state) = inner.replay(&[unscheduled]).unwrap().unwrap();
+        assert_eq!(state.due, T0 + reviews(entries)[0].interval_secs);
 
-        // Set Due Date moves the card; Forget makes it new again and is logged.
-        let (_, moved) = inner.replay(&[log[1], entry(1, 0, 4, 10)]).unwrap().unwrap();
-        assert_eq!(moved.due, T0 + 11 * DAY_SECS);
-        assert!(inner.replay(&[log[1], entry(1, 0, 4, 0)]).unwrap().is_none());
-        let (entries, state) = inner.replay(&[log[1], entry(1, 0, 4, 0), entry(2, 3, 0, 1)]).unwrap().unwrap();
+        // Rescheduling moves the card; a reset makes it new again and is logged.
+        let moved = HistoryEntry::Reschedule { time: T0 + DAY_SECS, interval_secs: 10 * DAY_SECS };
+        let (_, state) = inner.replay(&[log[1], moved]).unwrap().unwrap();
+        assert_eq!(state.due, T0 + 11 * DAY_SECS);
+        let reset = HistoryEntry::Reset { time: T0 + DAY_SECS };
+        assert!(inner.replay(&[log[1], reset]).unwrap().is_none());
+        let (entries, state) =
+            inner.replay(&[log[1], reset, review(2, Good, Some(Learning), DAY_SECS)]).unwrap().unwrap();
         assert_eq!(entries[1], LogEntry::Reset(T0 + DAY_SECS));
         let logged = reviews(entries);
         assert!(logged[1].was_new);

@@ -4,6 +4,9 @@
 //! (zstd-compressed, schema 18, current Anki) or `collection.anki21` / `collection.anki2`
 //! (legacy schema 11, where note types and decks are JSON in the `col` table).
 //! Images and sounds used by cards are copied to a `media` folder.
+//!
+//! This module only uses the collection's public API: it converts a package to
+//! Markdown and plain review history, and hands both to [`CardCollection::import`].
 
 mod text;
 
@@ -14,8 +17,74 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::parser;
+use crate::{parser, AmgiError, CardCollection, HistoryEntry, Import, Rating, ReviewState, MEDIA_DIR};
 pub use text::Media;
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ImportSummary {
+    /// Deck files written, relative to the collection root.
+    pub files: Vec<String>,
+    pub notes: u32,
+    pub cards: u32,
+    /// Cards that kept their Anki review history.
+    pub reviewed_cards: u32,
+    /// Cards that already had review history in this collection, which was kept.
+    pub existing_history: u32,
+    /// Cards never reviewed, in Anki or here.
+    pub new_cards: u32,
+    /// Notes that produced no card, such as image occlusion notes.
+    pub skipped_notes: u32,
+    /// Suspended Anki cards, imported with the `#suspended` tag.
+    pub suspended_cards: u32,
+    /// Images now in the collection's `media` folder.
+    pub images: u32,
+    /// Images cards refer to that the package does not contain.
+    pub missing_images: u32,
+    /// Sounds now in the collection's `media` folder.
+    pub sounds: u32,
+    /// Sounds cards refer to that the package does not contain.
+    pub missing_sounds: u32,
+}
+
+#[uniffi::export]
+impl CardCollection {
+    /// Import an Anki package (`.apkg` or `.colpkg`) as Markdown decks in this
+    /// collection, keeping review history. Images and sounds go to a `media` folder
+    /// at the root. Existing files are never overwritten.
+    pub fn import_anki(&self, path: String) -> Result<ImportSummary, AmgiError> {
+        let package = Package::read(Path::new(&path))?;
+        let conversion = package.convert();
+        let media_dir = self.root().join(MEDIA_DIR);
+        let images = package.write_media(&conversion.media.images, &media_dir)?;
+        let sounds = package.write_media(&conversion.media.sounds, &media_dir)?;
+        let histories = conversion
+            .histories
+            .iter()
+            .map(|(id, log)| (id.clone(), log.iter().filter_map(Revlog::history).collect()))
+            .collect();
+        let imported = self.import(Import { decks: conversion.decks, histories })?;
+        Ok(ImportSummary {
+            files: imported.files,
+            notes: conversion.notes,
+            cards: conversion.cards,
+            reviewed_cards: imported.reviewed_cards,
+            existing_history: imported.existing_history,
+            new_cards: imported.new_cards,
+            skipped_notes: conversion.skipped_notes,
+            suspended_cards: conversion.suspended_cards,
+            images,
+            missing_images: conversion.media.images.len() as u32 - images,
+            sounds,
+            missing_sounds: conversion.media.sounds.len() as u32 - sounds,
+        })
+    }
+}
+
+impl From<Error> for AmgiError {
+    fn from(e: Error) -> Self {
+        AmgiError::Import { message: e.to_string() }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -76,6 +145,39 @@ pub struct Revlog {
 impl Revlog {
     pub fn interval_secs(&self) -> i64 {
         if self.interval < 0 { -self.interval } else { self.interval * 86_400 }
+    }
+
+    /// The entry as amgi history. `None` for entries that left the schedule alone,
+    /// such as filtered-deck reviews with rescheduling off.
+    pub fn history(&self) -> Option<HistoryEntry> {
+        let rating = match self.ease {
+            1 => Some(Rating::Again),
+            2 => Some(Rating::Hard),
+            3 => Some(Rating::Good),
+            4 => Some(Rating::Easy),
+            _ => None,
+        };
+        let time = self.time;
+        match (rating, self.kind) {
+            (Some(_), 3) if self.factor == 0 => None,
+            (Some(rating), 0..=3) => Some(HistoryEntry::Review {
+                time,
+                rating,
+                // A filtered-deck review doesn't say which stage the card was in.
+                state: match self.kind {
+                    0 => Some(ReviewState::Learning),
+                    1 => Some(ReviewState::Review),
+                    2 => Some(ReviewState::Relearning),
+                    _ => None,
+                },
+                interval_secs: (self.interval != 0).then(|| self.interval_secs()),
+            }),
+            // Manual entries: "Forget" resets the card, "Set Due Date" and FSRS
+            // rescheduling move the due date.
+            (None, 4) if self.interval == 0 => Some(HistoryEntry::Reset { time }),
+            (None, 4 | 5) => Some(HistoryEntry::Reschedule { time, interval_secs: self.interval_secs() }),
+            _ => None,
+        }
     }
 }
 
@@ -769,6 +871,23 @@ pub(crate) mod tests {
         // The cloze history belongs to the `c1` deletion only.
         let cloze = parser::parse(&out.decks[0].1).cards;
         assert_eq!(out.histories[1].0, cloze[0].id);
+    }
+
+    #[test]
+    fn revlog_becomes_history() {
+        let entry = |ease, kind, interval, factor| Revlog { time: 100, ease, kind, interval, factor };
+        let review = |rating, state, interval_secs| Some(HistoryEntry::Review { time: 100, rating, state, interval_secs });
+        assert_eq!(entry(1, 0, -600, 2500).history(), review(Rating::Again, Some(ReviewState::Learning), Some(600)));
+        assert_eq!(entry(3, 1, 4, 2500).history(), review(Rating::Good, Some(ReviewState::Review), Some(4 * 86_400)));
+        assert_eq!(entry(4, 2, 0, 2500).history(), review(Rating::Easy, Some(ReviewState::Relearning), None));
+        // Filtered decks: the stage is unknown, and with rescheduling off nothing changed.
+        assert_eq!(entry(2, 3, 5, 2500).history(), review(Rating::Hard, None, Some(5 * 86_400)));
+        assert_eq!(entry(2, 3, 5, 0).history(), None);
+        // Forget, Set Due Date, FSRS rescheduling.
+        assert_eq!(entry(0, 4, 0, 0).history(), Some(HistoryEntry::Reset { time: 100 }));
+        assert_eq!(entry(0, 4, 10, 0).history(), Some(HistoryEntry::Reschedule { time: 100, interval_secs: 10 * 86_400 }));
+        assert_eq!(entry(0, 5, 3, 0).history(), Some(HistoryEntry::Reschedule { time: 100, interval_secs: 3 * 86_400 }));
+        assert_eq!(entry(3, 4, 3, 0).history(), None);
     }
 
     #[test]
