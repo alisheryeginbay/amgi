@@ -57,11 +57,7 @@ impl CardCollection {
         let media_dir = self.root().join(MEDIA_DIR);
         let images = package.write_media(&conversion.media.images, &media_dir)?;
         let sounds = package.write_media(&conversion.media.sounds, &media_dir)?;
-        let histories = conversion
-            .histories
-            .iter()
-            .map(|(id, log)| (id.clone(), log.iter().filter_map(Revlog::history).collect()))
-            .collect();
+        let histories = conversion.histories.iter().map(History::entries).collect();
         let imported = self.import(Import { decks: conversion.decks, histories })?;
         Ok(ImportSummary {
             files: imported.files,
@@ -124,6 +120,8 @@ struct AnkiCard {
     ord: u32,
     is_new: bool,
     suspended: bool,
+    /// When Anki has the card due next (Unix seconds); `None` for new cards.
+    due: Option<i64>,
 }
 
 /// One entry of Anki's review log.
@@ -255,20 +253,25 @@ impl Package {
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
-        // Cards in a filtered deck remember their home deck in `odid`.
+        let timing = Timing::read(conn, modern)?;
+        // Cards in a filtered deck remember their home deck in `odid` and their own
+        // due date in `odue`.
         let cards = conn
             .prepare(
-                "SELECT id, nid, CASE WHEN odid != 0 THEN odid ELSE did END, ord, type, queue
+                "SELECT id, nid, CASE WHEN odid != 0 THEN odid ELSE did END, ord, type, queue,
+                        CASE WHEN odid != 0 AND odue != 0 THEN odue ELSE due END
                  FROM cards ORDER BY nid, ord",
             )?
             .query_map([], |r| {
+                let kind: i64 = r.get(4)?;
                 Ok(AnkiCard {
                     id: r.get(0)?,
                     note: r.get(1)?,
                     deck: r.get(2)?,
                     ord: r.get(3)?,
-                    is_new: r.get::<_, i64>(4)? == 0,
+                    is_new: kind == 0,
                     suspended: r.get::<_, i64>(5)? == -1,
+                    due: timing.due(kind, r.get(6)?),
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
@@ -487,14 +490,100 @@ impl Drop for TempFile {
     }
 }
 
+/// An amgi card's history, from the Anki card it came from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct History {
+    /// amgi card id.
+    pub id: String,
+    pub log: Vec<Revlog>,
+    /// When Anki has the card due (Unix seconds).
+    pub due: Option<i64>,
+}
+
+impl History {
+    /// The log as amgi history, ending at Anki's due date. Anki can move a due date
+    /// without logging it, as rescheduling after optimizing FSRS does, so the card's
+    /// own date is the one to keep.
+    fn entries(&self) -> (String, Vec<HistoryEntry>) {
+        let mut entries: Vec<HistoryEntry> = self.log.iter().filter_map(Revlog::history).collect();
+        if let (Some(due), Some(last)) = (self.due, self.log.last()) {
+            entries.push(HistoryEntry::Reschedule { time: last.time, interval_secs: due - last.time });
+        }
+        (self.id.clone(), entries)
+    }
+}
+
+/// What Anki's day numbers mean: review cards are due on a day counted from the
+/// collection's creation, and a day starts at the rollover hour.
+struct Timing {
+    /// Collection creation, Unix seconds.
+    created: i64,
+    /// Minutes west of UTC when the collection was created and now; absent in
+    /// collections from before Anki 2.1.
+    offsets: Option<(i64, i64)>,
+    rollover_hour: i64,
+}
+
+impl Timing {
+    fn read(conn: &Connection, modern: bool) -> Result<Self> {
+        let created: i64 = conn.query_row("SELECT crt FROM col", [], |r| r.get(0))?;
+        let config: HashMap<String, serde_json::Value> = if modern {
+            let mut stmt = conn.prepare(
+                "SELECT key, val FROM config WHERE key IN ('creationOffset', 'localOffset', 'rollover')",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+            let mut config = HashMap::new();
+            for row in rows {
+                let (key, val) = row?;
+                config.insert(key, serde_json::from_slice(&val)?);
+            }
+            config
+        } else {
+            let conf: String = conn.query_row("SELECT conf FROM col", [], |r| r.get(0))?;
+            serde_json::from_str(&conf)?
+        };
+        let int = |key: &str| config.get(key).and_then(serde_json::Value::as_i64);
+        Ok(Timing {
+            created,
+            offsets: int("creationOffset").zip(int("localOffset")),
+            rollover_hour: int("rollover").unwrap_or(4),
+        })
+    }
+
+    /// A card's `due` as Unix seconds: a time for cards in learning, a day number
+    /// otherwise. `None` for new cards.
+    fn due(&self, kind: i64, due: i64) -> Option<i64> {
+        match kind {
+            0 => None,
+            // Learning cards due later than today hold a day number too.
+            1 | 3 if due > 1_000_000_000 => Some(due),
+            _ => Some(self.day_start(due)),
+        }
+    }
+
+    /// When Anki's day `day` starts.
+    fn day_start(&self, day: i64) -> i64 {
+        let rollover = self.rollover_hour * 3600;
+        match self.offsets {
+            // The day count runs from the creation date in the time zone of the time.
+            Some((created_west, local_west)) => {
+                let first = (self.created - created_west * 60 - rollover).div_euclid(86_400);
+                (first + day) * 86_400 + rollover + local_west * 60
+            }
+            // Older collections start their days at creation time.
+            None => self.created + day * 86_400,
+        }
+    }
+}
+
 /// A converted package: Markdown per deck, plus the review history of each card.
 #[derive(Debug, Default)]
 pub struct Conversion {
     /// Deck path (`Languages/Kazakh`) and Markdown, in Anki deck order.
     pub decks: Vec<(String, String)>,
-    /// amgi card id and the Anki review log of the card it came from. Cards that
+    /// The review history of each card, from the Anki card it came from. Cards that
     /// were new in Anki are absent.
-    pub histories: Vec<(String, Vec<Revlog>)>,
+    pub histories: Vec<History>,
     pub notes: u32,
     pub cards: u32,
     /// Notes that produced no card, such as image occlusion or empty templates.
@@ -595,7 +684,7 @@ impl Package {
         for card in cards.iter().filter(|c| !c.is_new) {
             if let Some(log) = self.revlog.get(&card.id) {
                 for id in ids(card.ord) {
-                    out.histories.push((id, log.clone()));
+                    out.histories.push(History { id, log: log.clone(), due: card.due });
                 }
             }
         }
@@ -813,13 +902,14 @@ pub(crate) mod tests {
         }"#;
         let decks = r#"{"1": {"name": "Default"}, "10": {"name": "Lang::Kazakh/Verbs"}}"#;
         conn.execute_batch(
-            "CREATE TABLE col (decks TEXT, models TEXT);
+            "CREATE TABLE col (crt INTEGER, conf TEXT, decks TEXT, models TEXT);
              CREATE TABLE notes (id INTEGER, mid INTEGER, flds TEXT, tags TEXT);
-             CREATE TABLE cards (id INTEGER, nid INTEGER, did INTEGER, odid INTEGER, ord INTEGER, type INTEGER, queue INTEGER);
+             CREATE TABLE cards (id INTEGER, nid INTEGER, did INTEGER, odid INTEGER, ord INTEGER, type INTEGER, queue INTEGER, due INTEGER, odue INTEGER);
              CREATE TABLE revlog (id INTEGER, cid INTEGER, ease INTEGER, type INTEGER, ivl INTEGER, factor INTEGER);",
         )
         .unwrap();
-        conn.execute("INSERT INTO col VALUES (?1, ?2)", [decks, models]).unwrap();
+        // No time zones in `conf`: days count from `crt`, as in collections from before Anki 2.1.
+        conn.execute("INSERT INTO col VALUES (1699920000, '{}', ?1, ?2)", [decks, models]).unwrap();
         conn.execute_batch(
             "INSERT INTO notes VALUES
                (100, 1, 'сәлем' || char(31) || 'hello<img src=hi.png>', ''),
@@ -827,10 +917,10 @@ pub(crate) mod tests {
                (102, 2, 'no deletions' || char(31) || '', ''),
                (103, 1, 'Capital of Spain?' || char(31) || 'Madrid', 'geo');
              INSERT INTO cards VALUES
-               (1000, 100, 10, 0, 0, 2, 2), (1001, 100, 99, 10, 1, 0, 0),
-               (1010, 101, 1, 0, 0, 2, 2), (1011, 101, 1, 0, 1, 0, -1),
-               (1020, 102, 1, 0, 0, 0, 0),
-               (1030, 103, 1, 0, 0, 2, -1);
+               (1000, 100, 99, 10, 0, 2, 2, -100, 5), (1001, 100, 99, 10, 1, 0, 0, 7, 0),
+               (1010, 101, 1, 0, 0, 2, 2, 2, 0), (1011, 101, 1, 0, 1, 0, -1, 8, 0),
+               (1020, 102, 1, 0, 0, 0, 0, 9, 0),
+               (1030, 103, 1, 0, 0, 2, -1, 4, 0);
              INSERT INTO revlog VALUES
                (1700000000000, 1000, 3, 0, 1, 2500), (1700086400000, 1000, 3, 1, 3, 2500),
                (1700000000000, 1010, 1, 0, -600, 2500),
@@ -865,12 +955,36 @@ pub(crate) mod tests {
 
         let all = parser::parse(&out.decks[1].1).cards;
         assert_eq!(out.histories.len(), 3);
-        assert_eq!(out.histories[0].0, all[0].id);
-        assert_eq!(out.histories[0].1.len(), 2);
-        assert_eq!(out.histories[0].1[1], Revlog { time: 1_700_086_400, ease: 3, kind: 1, interval: 3, factor: 2500 });
+        assert_eq!(out.histories[0].id, all[0].id);
+        assert_eq!(out.histories[0].log.len(), 2);
+        assert_eq!(out.histories[0].log[1], Revlog { time: 1_700_086_400, ease: 3, kind: 1, interval: 3, factor: 2500 });
+        // Day 5 of the collection: the card was in a filtered deck, which keeps its
+        // own due date in `odue`.
+        assert_eq!(out.histories[0].due, Some(1_699_920_000 + 5 * 86_400));
         // The cloze history belongs to the `c1` deletion only.
         let cloze = parser::parse(&out.decks[0].1).cards;
-        assert_eq!(out.histories[1].0, cloze[0].id);
+        assert_eq!(out.histories[1].id, cloze[0].id);
+    }
+
+    #[test]
+    fn history_ends_at_anki_due_date() {
+        let review = Revlog { time: 1_000, ease: 3, kind: 1, interval: 3, factor: 2500 };
+        let history = History { id: "a".into(), log: vec![review], due: Some(1_000 + 10 * 86_400) };
+        let (_, entries) = history.entries();
+        // Anki moved the card from 3 days out to 10 without logging it.
+        assert_eq!(entries[1], HistoryEntry::Reschedule { time: 1_000, interval_secs: 10 * 86_400 });
+    }
+
+    #[test]
+    fn anki_days() {
+        // Created 2025-08-25 22:00 at UTC+4, now at UTC+5, days starting at 2 am.
+        let timing = Timing { created: 1_756_144_800, offsets: Some((-240, -300)), rollover_hour: 2 };
+        // Day 422 starts on 2026-10-21 at 2 am, UTC+5.
+        assert_eq!(timing.day_start(422), 1_792_530_000);
+        assert_eq!(timing.due(2, 422), Some(1_792_530_000));
+        assert_eq!(timing.due(1, 1_792_000_000), Some(1_792_000_000));
+        assert_eq!(timing.due(3, 422), Some(1_792_530_000));
+        assert_eq!(timing.due(0, 7), None);
     }
 
     #[test]

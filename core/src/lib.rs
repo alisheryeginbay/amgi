@@ -1285,7 +1285,8 @@ mod tests {
         assert_eq!(inner.tags(), ["geo", "suspended"]);
         let card = inner.cards.iter().find(|c| c.parsed.front == "сәлем").unwrap();
         let state = inner.states[&card.parsed.id];
-        assert_eq!((state.reps, state.last_review, state.due), (2, 1_700_086_400, 1_700_086_400 + 3 * DAY_SECS));
+        // Due on the card's day in Anki (day 5), not 3 days after its last review as logged.
+        assert_eq!((state.reps, state.last_review, state.due), (2, 1_700_086_400, 1_699_920_000 + 5 * DAY_SECS));
         assert_eq!(inner.store.state(&card.parsed.id).unwrap(), Some(state));
         drop(inner);
 
