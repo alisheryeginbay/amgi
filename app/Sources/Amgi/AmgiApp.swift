@@ -5,6 +5,7 @@ import SwiftUI
 struct AmgiApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
     @State private var model = AppModel()
+    @AppStorage(showMenuBarKey) private var showMenuBar = true
 
     var body: some Scene {
         // One main window: a collection is studied in a single place, so no tabs.
@@ -52,6 +53,15 @@ struct AmgiApp: App {
             SettingsView()
                 .environment(model)
         }
+
+        // Cards due at a glance, while the window is closed or behind others.
+        MenuBarExtra(isInserted: $showMenuBar) {
+            MenuBarMenu()
+                .environment(model)
+        } label: {
+            MenuBarLabel()
+                .environment(model)
+        }
     }
 }
 
@@ -79,7 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate()
     }
 
+    /// The menu bar item keeps the app running, so it can show what comes due.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        UserDefaults.standard.object(forKey: showMenuBarKey) as? Bool == false
     }
 }

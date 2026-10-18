@@ -7,6 +7,7 @@ let autoplaySoundsKey = "autoplaySounds"
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(autoplaySoundsKey) private var autoplaySounds = true
+    @AppStorage(showMenuBarKey) private var showMenuBar = true
 
     var body: some View {
         @Bindable var model = model
@@ -29,6 +30,13 @@ struct SettingsView: View {
                 Toggle("Play audio automatically", isOn: $autoplaySounds)
             } footer: {
                 Text("Sounds on the question play when a card appears, and the answer's when it is shown. Press R to replay them.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
+                Toggle("Show in menu bar", isOn: $showMenuBar)
+            } footer: {
+                Text("Shows how many cards are due. Amgi keeps running when its window is closed.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

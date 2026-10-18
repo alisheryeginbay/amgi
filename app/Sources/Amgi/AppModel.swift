@@ -126,11 +126,13 @@ final class AppModel {
     /// The toolbar's More button, which its menu opens under.
     @ObservationIgnored weak var moreMenuAnchor: NSView?
     @ObservationIgnored private var keyMonitor: Any?
+    @ObservationIgnored private var countsTimer: Timer?
 
     init() {
         web.onMessage = { [weak self] in self?.handle($0) }
         web.contextMenu = { [weak self] ids in self?.menuItems(for: ids) ?? [] }
         monitorReviewShortcuts()
+        refreshCountsPeriodically()
         if let path = UserDefaults.standard.string(forKey: Self.folderKey) {
             open(URL(fileURLWithPath: path))
         }
@@ -239,6 +241,24 @@ final class AppModel {
         if selection == .dashboard { loadDashboard() }
         if browseScope != nil { loadBrowsed() }
         if current == nil || !revealed { loadNext() }
+    }
+
+    /// Cards come due, and the study day rolls over, while the app is in the background:
+    /// keep the menu bar's counts current without touching the card being studied.
+    private func refreshCountsPeriodically() {
+        countsTimer = Timer.scheduledTimer(withTimeInterval: 5 * 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshCounts() }
+        }
+        countsTimer?.tolerance = 60
+    }
+
+    private func refreshCounts() {
+        guard let collection else { return }
+        perform {
+            let decks = try collection.decks()
+            update(\.decks, decks)
+            update(\.today, try collection.today())
+        }
     }
 
     /// The card Card Info is for here: the one studied, or the one selected in browse.
