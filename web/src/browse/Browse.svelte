@@ -318,8 +318,8 @@
         ondblclick={() => open(card)}
         oncontextmenu={() => onContextMenu(card)}
       >
-        <div class="cell">{@html line(card.front)}</div>
-        <div class="cell secondary">{@html line(card.back)}</div>
+        <div class="cell card-text">{@html line(card.front)}</div>
+        <div class="cell card-text secondary">{@html line(card.back)}</div>
         <div class="cell" title={card.deck}>{deckTitle(card.deck)}</div>
         <div class="cell"><TagPills tags={card.tags} /></div>
         {#if card.suspended}
@@ -536,6 +536,12 @@
     white-space: nowrap;
   }
 
+  /* Card text in the serif it's studied in, a size up to match the sans beside it. */
+  .card-text {
+    font-family: var(--font-serif);
+    font-size: 14px;
+  }
+
   .cell :global(code) {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
@@ -630,6 +636,7 @@
 
   .no-results h1 {
     margin: 8px 0 0;
+    font-family: var(--font-serif);
     font-size: var(--font-title2);
     font-weight: 600;
     color: var(--label);
