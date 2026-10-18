@@ -1,13 +1,12 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import Markdown from "../components/Markdown.svelte";
-  import TagPills from "../components/TagPills.svelte";
   import { clozeGap } from "../lib/markdown";
   import type { StudyCard } from "../lib/types";
 
-  /** A card to study. Once `revealed`, a basic card's question shrinks and rises to make
-   *  room for the answer, and a cloze's gap opens to its answer in the sentence. Clicking
-   *  the card reveals it. */
+  /** A card to study, set as text on the page. Once `revealed`, a basic card's answer
+   *  fades in below its question, which stays where it is, and a cloze's gap opens to its
+   *  answer in the sentence. Clicking the card reveals it. */
   let { card, revealed, onreveal }: { card: StudyCard; revealed: boolean; onreveal: () => void } = $props();
 
   const cloze = $derived(card.kind === "cloze");
@@ -67,15 +66,12 @@
       </div>
     {:else}
       <div class="question">
-        <Markdown source={card.front} cardPath={card.path} />
+        <Markdown source={card.front} cardPath={card.path} inlineSounds />
       </div>
-      <div class="reveal" inert={!shown}>
-        <div class="inner">
-          <hr />
-          <div class="answer">
-            <Markdown source={card.back} cardPath={card.path} />
-          </div>
-        </div>
+      <!-- Takes its room before it shows, so the question never moves. -->
+      <div class="answer" inert={!shown}>
+        <hr />
+        <Markdown source={card.back} cardPath={card.path} inlineSounds />
       </div>
     {/if}
   </div>
@@ -83,10 +79,6 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: Space reveals, handled by the page. -->
 <div class="card" class:revealed {onclick}>
-  <header>
-    <span class="deck">{card.deck}</span>
-    <TagPills tags={card.tags} />
-  </header>
 
   <!-- An unseen copy of the card answered holds its size, so nothing moves the card
        while the answer opens. -->
@@ -102,28 +94,10 @@
     display: flex;
     flex-direction: column;
     min-height: 340px;
-    padding: 18px 24px 36px;
-    border-radius: 22px;
-    background: var(--card-background);
-    box-shadow: var(--card-shadow);
   }
 
   .card:not(.revealed) {
     cursor: pointer;
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-height: 18px;
-    font-size: 11px;
-  }
-
-  .deck {
-    flex: none;
-    color: var(--tertiary-label);
   }
 
   .layers {
@@ -148,9 +122,8 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    padding: 28px 20px 10px;
+    padding: 36px 20px 10px;
     font-size: 26px;
-    letter-spacing: -0.01em;
     text-align: center;
   }
 
@@ -158,60 +131,26 @@
     align-items: center;
   }
 
-  /* Basic: the question settles small above the answer as it opens beneath. */
+  /* Basic: the question large, the answer a size down beneath a short rule. */
   .question {
-    transition:
-      font-size 0.45s var(--ease),
-      color 0.45s var(--ease);
-  }
-
-  .shown .question {
-    font-size: var(--font-title3);
-    letter-spacing: 0;
-    color: var(--secondary-label);
-  }
-
-  .reveal {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows 0.45s var(--ease);
-  }
-
-  .shown .reveal {
-    grid-template-rows: 1fr;
-  }
-
-  .inner {
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  hr {
-    margin: 22px 0;
-    border: none;
-    border-top: 1px solid var(--separator);
-    transform: scaleX(0);
-    transition: transform 0.55s var(--ease) 0.08s;
-  }
-
-  .shown hr {
-    transform: none;
+    font-size: 30px;
   }
 
   .answer {
+    font-size: 21px;
     opacity: 0;
-    transform: translateY(8px);
-    filter: blur(6px);
-    transition:
-      opacity 0.4s ease-out 0.12s,
-      transform 0.5s var(--ease) 0.12s,
-      filter 0.4s ease-out 0.12s;
+    transition: opacity 0.14s ease-out;
   }
 
   .shown .answer {
     opacity: 1;
-    transform: none;
-    filter: none;
+  }
+
+  hr {
+    width: 28px;
+    margin: 28px auto 22px;
+    border: none;
+    border-top: 1px solid var(--separator);
   }
 
   /* Cloze: the gap shows its hint, then its answer. */
@@ -258,22 +197,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .question,
-    .reveal,
-    hr {
-      transition: none;
-    }
-
-    hr,
-    .answer {
-      transform: none;
-      filter: none;
-    }
-
-    .answer {
-      transition: opacity 0.2s;
-    }
-
     .shown :global(.gap .fill) {
       animation: none;
     }

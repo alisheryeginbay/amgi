@@ -1,23 +1,51 @@
 <script lang="ts">
   import CardImage from "./CardImage.svelte";
   import SoundButton from "./SoundButton.svelte";
-  import { GAP, loadLanguage, parseBlocks } from "../lib/markdown";
+  import { GAP, loadLanguage, parseBlocks, type Block } from "../lib/markdown";
+
+  type Sound = Extract<Block, { type: "sounds" }>["sounds"][number];
 
   /** Card Markdown that keeps its line breaks, with images and sounds on rows of their
    *  own. With `emphasis`, bold runs (cloze gaps and answers) are tinted. A `gap`, as
    *  from `clozeGap`, fills the `GAP` in `source` with both its hint and its answer, for
-   *  the card to show one or the other. */
+   *  the card to show one or the other. With `inlineSounds`, sounds after text end its
+   *  last line as small speakers instead of taking a row. */
   let {
     source,
     cardPath,
     emphasis = false,
+    inlineSounds = false,
     gap,
-  }: { source: string; cardPath: string; emphasis?: boolean; gap?: { hint: string; answer: string } } = $props();
+  }: {
+    source: string;
+    cardPath: string;
+    emphasis?: boolean;
+    inlineSounds?: boolean;
+    gap?: { hint: string; answer: string };
+  } = $props();
   // Bumped when a code block's grammar arrives, so the block is highlighted again.
   let grammars = $state(0);
   const blocks = $derived.by(() => {
     void grammars;
     return parseBlocks(source, cardPath);
+  });
+  /** Blocks as rows. With `inlineSounds`, sounds join the text before them, and text
+   *  after such sounds continues on the next line of the same row. */
+  type Line = { html: string; sounds: Sound[] };
+  const rows = $derived.by(() => {
+    const rows: (Block | { type: "lines"; lines: Line[] })[] = [];
+    for (const block of blocks) {
+      const last = rows.at(-1);
+      if (!inlineSounds) rows.push(block);
+      else if (block.type === "text") {
+        const line: Line = { html: block.html, sounds: [] };
+        if (last?.type === "lines" && last.lines.at(-1)!.sounds.length) last.lines.push(line);
+        else rows.push({ type: "lines", lines: [line] });
+      } else if (block.type === "sounds" && last?.type === "lines") {
+        last.lines.at(-1)!.sounds.push(...block.sounds);
+      } else rows.push(block);
+    }
+    return rows;
   });
   $effect(() => {
     for (const block of blocks) {
@@ -35,10 +63,13 @@
 </script>
 
 <div class="markdown" class:emphasis>
-  {#each blocks as block, i (i)}
+  {#each rows as block, i (i)}
     {#if block.type === "text"}
       <!-- Escaped when rendered: card text never holds HTML. -->
       <div class="text">{@html html(block.html)}</div>
+    {:else if block.type === "lines"}
+      <!-- prettier-ignore -->
+      <div class="text">{#each block.lines as line, j (j)}{#if j > 0}{"\n"}{/if}{@html html(line.html)}{#each line.sounds as sound, k (k)}<SoundButton src={sound.src} path={sound.path} compact />{/each}{/each}</div>
     {:else if block.type === "code"}
       <!-- Escaped by the highlighter. -->
       <pre class="code"><code data-language={block.language || undefined}>{@html block.html}</code></pre>
@@ -68,6 +99,7 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     line-height: 1.45;
+    text-wrap-style: pretty;
     -webkit-user-select: text;
     user-select: text;
     cursor: text;

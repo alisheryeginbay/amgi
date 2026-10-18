@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
-  import { cubicOut } from "svelte/easing";
   import Flashcard from "./Flashcard.svelte";
   import { app, commands, post } from "../lib/app.svelte";
   import { player } from "../lib/audio.svelte";
@@ -23,33 +22,16 @@
     return dealt;
   });
 
-  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-
   /** The card on screen, as a list keyed by deal: a card leaving keeps what it showed. */
   const dealtCards = $derived(card ? [{ deal, card, revealed }] : []);
 
-  /** The next card settles into place. Under one leaving it lies there whole, so the two
-   *  never show through each other, and its face shows once the other has nearly gone. */
-  function dealIn(node: HTMLElement) {
-    const under = !reduceMotion && node.parentElement?.querySelector(".leaving") != null;
-    if (under) {
-      for (const part of node.querySelectorAll(".card > *")) {
-        part.animate([{ opacity: 0 }, { opacity: 1 }], { delay: 220, duration: 240, easing: "ease-out", fill: "backwards" });
-      }
-    }
-    return {
-      delay: reduceMotion ? 0 : 60,
-      duration: reduceMotion ? 150 : 460,
-      easing: cubicOut,
-      css: (t: number, u: number) =>
-        reduceMotion
-          ? `opacity: ${t}`
-          : `${under ? "" : `opacity: ${t};`} transform: translateY(${u * 14}px) scale(${0.97 + 0.03 * t})`,
-    };
-  }
+  // Cards cross-fade: the next one fades in once the last has gone, so their text never
+  // shows through each other.
+  const OUT = 100;
 
-  /** How far an answered card drifts aside as it leaves: left for Again, right for Easy. */
-  const DRIFT = [-24, -10, 10, 24];
+  function dealIn(_node: HTMLElement) {
+    return { delay: OUT, duration: 140, css: (t: number) => `opacity: ${t}` };
+  }
 
   /** Takes a leaving card out of the pile's layout, pinned where it stood, so the pile
    *  takes the next card's size and place at once instead of when this one is gone. */
@@ -70,19 +52,9 @@
     node.style.left = `${at.left - origin.left}px`;
   }
 
-  /** The card answered lifts off the pile and fades. */
-  function dealOut(node: HTMLElement, { answered }: { answered: boolean }) {
+  function dealOut(node: HTMLElement) {
     pinInPlace(node);
-    const rating = app.study?.answered;
-    const drift = answered && rating ? DRIFT[rating - 1] : 0;
-    return {
-      duration: reduceMotion ? 150 : 320,
-      easing: cubicOut,
-      css: (t: number, u: number) =>
-        reduceMotion
-          ? `opacity: ${t}`
-          : `opacity: ${t}; transform: translate(${drift * u}px, ${-12 * u}px) scale(${1 + 0.02 * u})`,
-    };
+    return { duration: OUT, css: (t: number) => `opacity: ${t}` };
   }
 
   /** Sounds on the side showing, and those the answer adds to the question. */
@@ -152,7 +124,7 @@
 <main>
   <div class="pile">
     {#each dealtCards as dealt (dealt.deal)}
-      <div class="stage" in:dealIn out:dealOut={{ answered: dealt.revealed }}>
+      <div class="stage" in:dealIn out:dealOut>
         <Flashcard card={dealt.card} revealed={dealt.revealed} onreveal={() => post({ type: "reveal" })} />
       </div>
     {/each}

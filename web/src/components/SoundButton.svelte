@@ -3,7 +3,8 @@
   import { player } from "../lib/audio.svelte";
   import { fileName } from "../lib/markdown";
 
-  let { src, path }: { src: string | null; path: string } = $props();
+  /** `compact` is a bare speaker glyph that sits in a line of text. */
+  let { src, path, compact = false }: { src: string | null; path: string; compact?: boolean } = $props();
 
   let missing = $state(false);
   // A missing file would only show up once played; ask the app up front.
@@ -24,13 +25,15 @@
 </script>
 
 <button
+  class:compact
+  class:playing
   class:unplayable
   disabled={missing}
   title={help}
   aria-label={help}
   onclick={() => src && player.play([src])}
 >
-  <Icon name={unplayable ? "speaker-slash" : playing ? "speaker-playing" : "speaker"} size={18} />
+  <Icon name={unplayable ? "speaker-slash" : playing ? "speaker-playing" : "speaker"} size={compact ? 15 : 18} />
 </button>
 
 <style>
@@ -57,5 +60,25 @@
 
   .unplayable {
     color: var(--secondary-label);
+  }
+
+  .compact {
+    display: inline-grid;
+    width: 1em;
+    height: 1em;
+    /* Hangs past the end of the line, so centred text stays centred. */
+    margin-left: 0.3em;
+    margin-right: -1.3em;
+    vertical-align: -0.1em;
+    border: none;
+    background: none;
+    color: var(--tertiary-label);
+    transition: color 0.15s;
+  }
+
+  .compact:hover:not(:disabled),
+  .compact.playing {
+    background: none;
+    color: var(--accent);
   }
 </style>
