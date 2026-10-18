@@ -612,9 +612,10 @@ impl Inner {
             seen().filter(|(s, _)| s.due <= limit).min_by_key(|(s, _)| s.due).map(|(_, c)| c)
         };
         // A failed card comes back within minutes, ahead of reviews, while the
-        // lapse is fresh.
+        // lapse is fresh. Its due date alone can't tell: a review due tomorrow
+        // starts at the day's rollover, which can be just hours away.
         let relearning = seen()
-            .filter(|(s, _)| s.due <= now && s.due - s.last_review < DAY_SECS)
+            .filter(|(s, _)| s.due <= now && s.interval_secs < DAY_SECS)
             .min_by_key(|(s, _)| s.due)
             .map(|(_, c)| c);
         // Reviews, most overdue day first. Within a day a fixed shuffle mixes decks,
@@ -897,6 +898,7 @@ impl Inner {
                         last_review: time,
                         reps: state.map_or(0, |s| s.reps) + 1,
                         lapses: state.map_or(0, |s| s.lapses) + lapse,
+                        interval_secs,
                     });
                 }
                 HistoryEntry::Reset { time } => {
@@ -1102,6 +1104,22 @@ mod tests {
         inner.answer(&expected[0], Rating::Again, later).unwrap();
         assert_eq!(next(&inner, later), expected[1]);
         assert_eq!(next(&inner, later + scheduler::AGAIN_DELAY_SECS), expected[0]);
+
+        // A review due at the next day's start, only hours after it was studied, is
+        // still a review: it doesn't jump ahead of one due days earlier.
+        let state = |due, last_review, interval_secs| CardState {
+            memory: Memory { stability: 1.0, difficulty: 5.0 },
+            due,
+            last_review,
+            reps: 1,
+            lapses: 0,
+            interval_secs,
+        };
+        let hour = 3600;
+        inner.states.clear();
+        inner.states.insert(ids[0].clone(), state(later + 3 * hour, later - 3 * hour, DAY_SECS));
+        inner.states.insert(ids[1].clone(), state(later - 3 * DAY_SECS, later - 4 * DAY_SECS, DAY_SECS));
+        assert_eq!(next(&inner, later + 4 * hour), ids[1]);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }

@@ -59,7 +59,15 @@ pub struct CardState {
     pub last_review: i64,
     pub reps: u32,
     pub lapses: u32,
+    /// The interval the latest review scheduled. Under a day while a failed card
+    /// waits to come back.
+    pub interval_secs: i64,
 }
+
+/// The interval of a card's latest review, for a `card_state` query.
+const LAST_INTERVAL: &str = "COALESCE((SELECT interval_secs FROM review_log l
+    WHERE l.card_id = card_state.card_id AND rating > 0
+    ORDER BY reviewed_at DESC, id DESC LIMIT 1), due - last_review)";
 
 /// One row of the review log.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -112,9 +120,9 @@ impl Store {
     }
 
     pub fn states(&self) -> rusqlite::Result<HashMap<String, CardState>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT card_id, stability, difficulty, due, last_review, reps, lapses FROM card_state",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT card_id, stability, difficulty, due, last_review, reps, lapses, {LAST_INTERVAL} FROM card_state"
+        ))?;
         stmt.query_map([], |r| {
             Ok((
                 r.get(0)?,
@@ -127,6 +135,7 @@ impl Store {
                     last_review: r.get(4)?,
                     reps: r.get(5)?,
                     lapses: r.get(6)?,
+                    interval_secs: r.get(7)?,
                 },
             ))
         })?
@@ -136,8 +145,10 @@ impl Store {
     pub fn state(&self, card_id: &str) -> rusqlite::Result<Option<CardState>> {
         self.conn
             .query_row(
-                "SELECT stability, difficulty, due, last_review, reps, lapses
-                 FROM card_state WHERE card_id = ?1",
+                &format!(
+                    "SELECT stability, difficulty, due, last_review, reps, lapses, {LAST_INTERVAL}
+                     FROM card_state WHERE card_id = ?1"
+                ),
                 [card_id],
                 |r| {
                     Ok(CardState {
@@ -149,6 +160,7 @@ impl Store {
                         last_review: r.get(3)?,
                         reps: r.get(4)?,
                         lapses: r.get(5)?,
+                        interval_secs: r.get(6)?,
                     })
                 },
             )
@@ -213,6 +225,7 @@ impl Store {
             last_review: now,
             reps: prev.map_or(0, |p| p.reps) + 1,
             lapses: prev.map_or(0, |p| p.lapses) + lapse,
+            interval_secs: outcome.interval_secs,
         };
         let tx = self.conn.transaction()?;
         insert_review(
@@ -459,7 +472,7 @@ mod tests {
             state: Some(ReviewState::New),
         };
         let relearned = LoggedReview { reviewed_at: 3000, ..review };
-        let state = CardState { memory: review.memory, due: 89_400, last_review: 3000, reps: 1, lapses: 0 };
+        let state = CardState { memory: review.memory, due: 89_400, last_review: 3000, reps: 1, lapses: 0, interval_secs: 86_400 };
         let entries = vec![LogEntry::Review(review), LogEntry::Reset(2000), LogEntry::Review(relearned)];
         store.import(&[("abc".into(), entries, state)]).unwrap();
 
