@@ -43,6 +43,9 @@ pub enum AmgiError {
     Scheduler { message: String },
     #[error("import failed: {message}")]
     Import { message: String },
+    /// A card that can't be added, with a sentence saying why.
+    #[error("{message}")]
+    InvalidCard { message: String },
 }
 
 impl From<std::io::Error> for AmgiError {
@@ -186,6 +189,20 @@ pub struct TodayStats {
     pub new_studied: u32,
     /// New cards still available today across the collection, capped by the daily limit.
     pub new_available: u32,
+}
+
+/// A card to add to a deck's file.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct NewCard {
+    /// As in `DeckInfo::name`; its file is created if needed.
+    pub deck: String,
+    pub kind: CardKind,
+    /// Markdown: the question, or a cloze's text.
+    pub front: String,
+    /// Markdown; ignored for a cloze.
+    pub back: String,
+    /// With or without `#`.
+    pub tags: Vec<String>,
 }
 
 /// Decks brought in from another app, with the review history it kept.
@@ -414,6 +431,12 @@ impl CardCollection {
     /// its deck's front matter cannot be unsuspended here.
     pub fn set_suspended(&self, card_ids: Vec<String>, suspended: bool) -> Result<u32> {
         self.lock().set_suspended(&card_ids, suspended)
+    }
+
+    /// Append a card to the end of its deck's file. Returns the ids of the cards it
+    /// makes: one for a basic card, one per gap for a cloze.
+    pub fn add_card(&self, card: NewCard) -> Result<Vec<String>> {
+        self.lock().add_card(&card)
     }
 
     pub fn today(&self) -> Result<TodayStats> {
@@ -758,6 +781,54 @@ impl Inner {
             .record_review(card_id, now, rating, elapsed.into(), review_state, prev, outcome)?;
         self.states.insert(card_id.to_string(), state);
         Ok(())
+    }
+
+    fn add_card(&mut self, card: &NewCard) -> Result<Vec<String>> {
+        let invalid = |message: &str| AmgiError::InvalidCard { message: message.into() };
+        let block = parser::write_card(card.kind, &card.front, &card.back, &card.tags)
+            .map_err(|message| AmgiError::InvalidCard { message })?;
+        let deck = card.deck.trim().trim_matches('/');
+        if deck.is_empty() || deck.split('/').any(|part| part.trim().is_empty() || part.starts_with('.')) {
+            return Err(invalid("Choose a deck for the card."));
+        }
+        let ids: Vec<String> = parser::parse(&block).cards.into_iter().map(|c| c.id).collect();
+        if let Some(existing) = ids.iter().find_map(|id| self.index.get(id)) {
+            let path = &self.cards[*existing].path;
+            return Err(AmgiError::InvalidCard { message: format!("This card is already in {path}.") });
+        }
+
+        let path = self.root.join(format!("{deck}.md"));
+        let before = match fs::read_to_string(&path) {
+            Ok(source) => Some(source),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        let mut source = before.clone().unwrap_or_default();
+        if !source.trim().is_empty() {
+            // A blank line ends the card before it.
+            let end = source.trim_end().len();
+            source.truncate(end);
+            source.push_str("\n\n");
+        }
+        source.push_str(&block);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, &source)?;
+        self.reload()?;
+
+        // The end of the file can swallow the card, as an unclosed code block would.
+        if ids.iter().all(|id| self.index.contains_key(id)) {
+            return Ok(ids);
+        }
+        match before {
+            Some(before) => fs::write(&path, before)?,
+            None => fs::remove_file(&path)?,
+        }
+        self.reload()?;
+        Err(AmgiError::InvalidCard {
+            message: format!("The end of {deck}.md would make the card part of something else, such as an unclosed code block."),
+        })
     }
 
     fn set_suspended(&mut self, ids: &[String], suspended: bool) -> Result<u32> {
@@ -1247,6 +1318,39 @@ mod tests {
         assert_eq!(fronts, ["k", "v"]);
         assert_eq!(inner.in_scope(&deck("lang")).count(), 3);
         drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn add_cards() {
+        let (dir, c) = collection(&[("a.md", "+++\ntags = [\"lang\"]\n+++\nQ: one\nA: 1\n   \n\n"), ("b.md", "```\nopen")]);
+        let new = |deck: &str, kind, front: &str| NewCard {
+            deck: deck.into(),
+            kind,
+            front: front.into(),
+            back: "2".into(),
+            tags: vec!["#numbers".into()],
+        };
+        let ids = c.add_card(new("a", CardKind::Basic, "two")).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("a.md")).unwrap(), "+++\ntags = [\"lang\"]\n+++\nQ: one\nA: 1\n\nQ: two\nA: 2\n#numbers\n");
+        let info = c.card_info(ids[0].clone()).unwrap().unwrap();
+        assert_eq!(info.tags, ["lang", "numbers"]);
+
+        // A new file in a new folder; a cloze makes a card per gap.
+        let ids = c.add_card(new("sub/deck", CardKind::Cloze, "[Seoul] is in [Korea].")).unwrap();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(fs::read_to_string(dir.join("sub/deck.md")).unwrap(), "C: [Seoul] is in [Korea].\n#numbers\n");
+
+        let err = |card| match c.add_card(card) {
+            Err(AmgiError::InvalidCard { message }) => message,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(err(new("b", CardKind::Basic, "two")), "This card is already in a.md.");
+        assert_eq!(err(new("../x", CardKind::Basic, "three")), "Choose a deck for the card.");
+        // An unclosed code block would take the card in; the file is left as it was.
+        assert!(err(new("b", CardKind::Basic, "three")).contains("unclosed code block"));
+        assert_eq!(fs::read_to_string(dir.join("b.md")).unwrap(), "```\nopen");
+        drop(c);
         fs::remove_dir_all(dir).unwrap();
     }
 

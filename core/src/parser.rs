@@ -248,6 +248,75 @@ fn take_tags(lines: &mut Vec<String>) -> Vec<String> {
     tags
 }
 
+/// A new card as Markdown, ending in a newline, or why it can't be written. A basic
+/// card takes `front` and `back`; a cloze only `front`. Blank lines outside code blocks
+/// are dropped, as they would end the card. The result reads back as this one card.
+pub fn write_card(kind: CardKind, front: &str, back: &str, tags: &[String]) -> Result<String, String> {
+    let mut out = String::new();
+    match kind {
+        CardKind::Basic => {
+            write_field(&mut out, "Q:", front, "question")?;
+            write_field(&mut out, "A:", back, "answer")?;
+        }
+        CardKind::Cloze => write_field(&mut out, "C:", front, "text")?,
+    }
+    let mut own: Vec<String> = Vec::new();
+    for tag in tags.iter().flat_map(|t| t.split_whitespace()).filter_map(clean_tag) {
+        if !own.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
+            own.push(tag);
+        }
+    }
+    if !own.is_empty() {
+        let line: Vec<String> = own.iter().map(|t| format!("#{t}")).collect();
+        writeln!(out, "{}", line.join(" ")).unwrap();
+    }
+
+    let parsed = parse(&out);
+    if let Some(warning) = parsed.warnings.first() {
+        return Err(sentence(&warning.message));
+    }
+    match parsed.cards.first() {
+        None => Err("A cloze needs at least one [gap].".into()),
+        Some(card) if card.tags != own => Err("Tags must be words without spaces.".into()),
+        Some(_) => Ok(out),
+    }
+}
+
+/// One field's lines after its marker, such as `Q:`.
+fn write_field(out: &mut String, marker_tag: &str, text: &str, name: &str) -> Result<(), String> {
+    let mut fence = Fences::default();
+    let mut lines: Vec<&str> = Vec::new();
+    for line in text.lines().map(str::trim_end) {
+        if fence.inside() || !line.trim().is_empty() {
+            lines.push(line);
+        }
+        fence.step(line);
+    }
+    let Some(first) = lines.first() else {
+        return Err(format!("The {name} is empty."));
+    };
+    for line in &lines[1..] {
+        if let Some(m) = ["Q:", "A:", "C:"].into_iter().find(|m| line.starts_with(m)) {
+            return Err(format!("A line of the {name} starts with `{m}`, which would start a new card."));
+        }
+    }
+    if lines.len() > 1 && !fence.inside() && lines.last().is_some_and(|l| tag_line(l).is_some()) {
+        return Err(format!("The {name}'s last line would be read as tags."));
+    }
+    writeln!(out, "{marker_tag} {}", first.trim_start()).unwrap();
+    for line in &lines[1..] {
+        writeln!(out, "{line}").unwrap();
+    }
+    Ok(())
+}
+
+/// A parser warning as a sentence: `card has…` → `Card has….`
+fn sentence(message: &str) -> String {
+    let mut chars = message.chars();
+    let first = chars.next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default();
+    format!("{first}{}.", chars.as_str())
+}
+
 /// Add or remove `#tag` on the card starting at 1-based `line`, in the card's own tag
 /// lines; the rest of the file is kept byte for byte. `None` when no card starts
 /// there or its own tags already say so (a front matter tag cannot be removed here).
@@ -624,6 +693,36 @@ pub(crate) fn stable_hash(parts: &[&str]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_card_round_trips() {
+        let tags = vec!["#verbs".to_string(), "motion verbs".to_string()];
+        let md = write_card(CardKind::Basic, "What is **2 + 2**?\n\n", "4\n\nbecause 2 + 2 = 4", &tags).unwrap();
+        assert_eq!(md, "Q: What is **2 + 2**?\nA: 4\nbecause 2 + 2 = 4\n#verbs #motion\n");
+        let card = &parse(&md).cards[0];
+        assert_eq!((card.front.as_str(), card.back.as_str()), ("What is **2 + 2**?", "4\nbecause 2 + 2 = 4"));
+        assert_eq!(card.tags, ["verbs", "motion"]);
+
+        // Blank lines stay inside code blocks.
+        let md = write_card(CardKind::Cloze, "Print it:\n```py\nx = 1\n\n{{print}}(x)\n```", "", &[]).unwrap();
+        assert!(md.contains("x = 1\n\n"));
+        assert_eq!(parse(&md).cards.len(), 1);
+
+        let md = write_card(CardKind::Cloze, "The capital of [France] is [Paris].", "ignored", &[]).unwrap();
+        assert_eq!(md, "C: The capital of [France] is [Paris].\n");
+        assert_eq!(parse(&md).cards.len(), 2);
+    }
+
+    #[test]
+    fn write_card_rejects() {
+        let err = |kind, front, back| write_card(kind, front, back, &[]).unwrap_err();
+        assert_eq!(err(CardKind::Basic, " \n", "x"), "The question is empty.");
+        assert_eq!(err(CardKind::Basic, "x", ""), "The answer is empty.");
+        assert!(err(CardKind::Cloze, "No gaps here.", "").starts_with("Cloze has no"));
+        assert!(err(CardKind::Basic, "x\nQ: y", "z").contains("`Q:`"));
+        assert!(err(CardKind::Basic, "x", "y\n#oops").contains("tags"));
+        assert!(err(CardKind::Basic, "```\ncode", "y").contains("closing fence"));
+    }
 
     #[test]
     fn basic_cards() {

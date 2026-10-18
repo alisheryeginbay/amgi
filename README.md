@@ -139,6 +139,12 @@ cards in a table: search, sort by any column, and double-click a card to open it
 The selected card shows beside the table as it looks when studied; drag the divider to
 resize it, or hide it with **Hide Card** in the toolbar.
 
+**Add Card** (<kbd>⌥⌘N</kbd> from any app, or <kbd>⌘N</kbd> in Amgi) opens a small panel
+over whatever you're doing: pick a deck, type a question and answer or a cloze, and press
+<kbd>⌘↩</kbd>. The card is appended to the end of the deck's file, which is created if
+needed. <kbd>Return</kbd> moves to the next field and <kbd>⌥↩</kbd> starts a new line; <kbd>Esc</kbd> puts the panel away and
+keeps what you typed. Turn the shortcut off in **Settings**.
+
 The menu bar shows how many cards are due. Its menu lists what's left today, the
 reviews done so far and each deck with cards to study; pick one to open it, or **Study
 Now** to start reviewing. While it's shown, Amgi keeps running when its window is closed.

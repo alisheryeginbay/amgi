@@ -34,6 +34,13 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Section {
+                Toggle("Add cards from any app with ⌥⌘N", isOn: $model.quickAddShortcut)
+            } footer: {
+                Text("Opens Add Card over the app you're using, while Amgi is running. Add Card is also in the File menu (⌘N).")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
                 Toggle("Show in menu bar", isOn: $showMenuBar)
             } footer: {
                 Text("Shows how many cards are due. Amgi keeps running when its window is closed.")

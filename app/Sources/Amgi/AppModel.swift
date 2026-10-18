@@ -1,5 +1,6 @@
 import AmgiCore
 import AppKit
+import Carbon.HIToolbox
 import Observation
 import SwiftUI
 import UniformTypeIdentifiers
@@ -35,6 +36,7 @@ struct DeckName: Equatable {
 final class AppModel {
     private static let folderKey = "collectionPath"
     private static let retentionKey = "desiredRetention"
+    private static let quickAddShortcutKey = "quickAddShortcut"
     /// The range the core accepts.
     static let retentionRange = 0.7...0.99
 
@@ -84,6 +86,15 @@ final class AppModel {
         }
     }
 
+    /// Whether ⌥⌘N opens Add Card from any app.
+    var quickAddShortcut: Bool = UserDefaults.standard.object(forKey: AppModel.quickAddShortcutKey) as? Bool ?? true {
+        didSet {
+            guard oldValue != quickAddShortcut else { return }
+            UserDefaults.standard.set(quickAddShortcut, forKey: Self.quickAddShortcutKey)
+            registerQuickAddShortcut()
+        }
+    }
+
     var selection: SidebarItem = .review {
         didSet {
             guard oldValue != selection else { return }
@@ -127,12 +138,15 @@ final class AppModel {
     @ObservationIgnored weak var moreMenuAnchor: NSView?
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var countsTimer: Timer?
+    @ObservationIgnored private let quickAdd = QuickAddPanel()
+    @ObservationIgnored private var quickAddHotKey: GlobalHotKey?
 
     init() {
         web.onMessage = { [weak self] in self?.handle($0) }
         web.contextMenu = { [weak self] ids in self?.menuItems(for: ids) ?? [] }
         monitorReviewShortcuts()
         refreshCountsPeriodically()
+        registerQuickAddShortcut()
         if let path = UserDefaults.standard.string(forKey: Self.folderKey) {
             open(URL(fileURLWithPath: path))
         }
@@ -547,6 +561,36 @@ final class AppModel {
             update(\.savedViews, try collection.savedViews())
         }
         if selection == .view(view.id) { selection = .review }
+    }
+
+    // MARK: Adding cards
+
+    /// Opens Add Card, or puts it away if it's showing.
+    func toggleQuickAdd() {
+        if quickAdd.isShown { quickAdd.close() } else { quickAdd.show(model: self) }
+    }
+
+    /// Appends the card to its deck's file. Returns why it couldn't be added, if it couldn't.
+    func addCard(_ card: NewCard) -> String? {
+        guard let collection else { return "Open a folder first." }
+        do {
+            _ = try collection.addCard(card: card)
+        } catch AmgiError.InvalidCard(let message) {
+            return message
+        } catch {
+            return error.localizedDescription
+        }
+        refresh()
+        return nil
+    }
+
+    private func registerQuickAddShortcut() {
+        quickAddHotKey?.unregister()
+        quickAddHotKey = nil
+        guard quickAddShortcut else { return }
+        quickAddHotKey = GlobalHotKey(keyCode: kVK_ANSI_N, modifiers: optionKey | cmdKey) { [weak self] in
+            self?.toggleQuickAdd()
+        }
     }
 
     /// Open a deck file, given relative to the collection root.

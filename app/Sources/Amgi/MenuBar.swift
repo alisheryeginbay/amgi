@@ -62,6 +62,8 @@ struct MenuBarMenu: View {
             }
         }
         Divider()
+        Button("Add Card…") { model.toggleQuickAdd() }
+            .keyboardShortcut("n", modifiers: model.quickAddShortcut ? [.option, .command] : .command)
         Button("Open Amgi") { showMainWindow() }
         Button("Quit Amgi") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
