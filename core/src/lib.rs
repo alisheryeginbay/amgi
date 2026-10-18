@@ -305,6 +305,9 @@ struct Inner {
     warnings: Vec<CollectionWarning>,
     new_per_day: u32,
     utc_offset_secs: i64,
+    /// Why the database was reopened while the collection was open, shown with the
+    /// warnings until the app restarts.
+    store_notice: Option<CollectionWarning>,
 }
 
 #[derive(uniffi::Object)]
@@ -423,7 +426,8 @@ impl CardCollection {
     }
 
     pub fn warnings(&self) -> Vec<CollectionWarning> {
-        self.lock().warnings.clone()
+        let inner = self.lock();
+        inner.warnings.iter().chain(&inner.store_notice).cloned().collect()
     }
 }
 
@@ -452,6 +456,7 @@ impl CardCollection {
             warnings: Vec::new(),
             new_per_day: 20,
             utc_offset_secs: 0,
+            store_notice: None,
         };
         inner.reload()?;
         Ok(CardCollection {
@@ -461,11 +466,35 @@ impl CardCollection {
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         // A panic mid-review leaves no partial state worth discarding: SQLite writes are transactional.
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.reopen_replaced_store();
+        inner
     }
 }
 
 impl Inner {
+    /// If the database file was deleted or replaced while open, switch to whatever is
+    /// at its path now, as a restart would: a new, empty database if it was deleted.
+    /// Otherwise writes would go to a file that is gone.
+    fn reopen_replaced_store(&mut self) {
+        let Some(path) = self.store.replaced().map(Path::to_path_buf) else { return };
+        let deleted = !path.exists();
+        let reopened = Store::open(&path).and_then(|store| Ok((store.states()?, store)));
+        let message = match reopened {
+            Ok((states, store)) => {
+                self.store = store;
+                self.states = states;
+                if deleted {
+                    "The review database was deleted, so a new one was started.".to_string()
+                } else {
+                    "The review database was replaced on disk, so it was opened again.".to_string()
+                }
+            }
+            Err(e) => format!("The review database was deleted or replaced and couldn't be opened again: {e}"),
+        };
+        self.store_notice = Some(CollectionWarning { path: relative(&self.root, &path), line: 0, message });
+    }
+
     fn reload(&mut self) -> Result<()> {
         let mut files = Vec::new();
         collect_markdown(&self.root, &mut files)?;
@@ -1121,6 +1150,35 @@ mod tests {
         inner.states.insert(ids[1].clone(), state(later - 3 * DAY_SECS, later - 4 * DAY_SECS, DAY_SECS));
         assert_eq!(next(&inner, later + 4 * hour), ids[1]);
         drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn database_deleted_or_replaced_while_open() {
+        let (dir, _) = collection(&[("a.md", "Q: 1\nA: one\n")]);
+        let c = CardCollection::open(dir.to_string_lossy().into_owned()).unwrap();
+        let db = dir.join(DB_FILE);
+        let id = c.cards(StudyScope::All)[0].id.clone();
+        c.answer(id.clone(), Rating::Good).unwrap();
+        let saved = dir.join("saved.sqlite");
+        fs::copy(&db, &saved).unwrap();
+        let reps = |c: &CardCollection| c.cards(StudyScope::All)[0].reps;
+        assert_eq!(reps(&c), 1);
+        assert!(c.warnings().is_empty());
+
+        // Deleted: a new database, as after a restart, and new reviews land in it.
+        fs::remove_file(&db).unwrap();
+        assert_eq!(reps(&c), 0);
+        assert!(c.warnings()[0].message.contains("deleted"));
+        c.answer(id.clone(), Rating::Good).unwrap();
+        assert_eq!(Store::open(&db).unwrap().reviews(&id).unwrap().len(), 1);
+
+        // Replaced, as by a sync or restore: its history is used.
+        c.answer(id.clone(), Rating::Good).unwrap();
+        assert_eq!(reps(&c), 2);
+        fs::rename(&saved, &db).unwrap();
+        assert_eq!(reps(&c), 1);
+        assert!(c.warnings()[0].message.contains("replaced"));
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -2,7 +2,8 @@
 //! scheduling state and the review log, keyed by content-derived card ids.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
@@ -93,15 +94,35 @@ pub enum LogEntry {
 
 pub struct Store {
     conn: Connection,
+    /// The database file and its identity when opened; `None` in memory.
+    file: Option<(PathBuf, FileId)>,
+}
+
+/// Device and inode: which file a path named when it was opened.
+type FileId = (u64, u64);
+
+fn file_id(path: &Path) -> Option<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
 }
 
 impl Store {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
-        Self::init(Connection::open(path)?)
+        let mut store = Self::init(Connection::open(path)?)?;
+        store.file = file_id(path).map(|id| (path.to_path_buf(), id));
+        Ok(store)
     }
 
     pub fn open_in_memory() -> rusqlite::Result<Self> {
         Self::init(Connection::open_in_memory()?)
+    }
+
+    /// The database's path, if the file there is no longer the one this store has
+    /// open: it was deleted, or replaced by a sync, restore or checkout. Writes would
+    /// go to the old file and be lost.
+    pub fn replaced(&self) -> Option<&Path> {
+        let (path, id) = self.file.as_ref()?;
+        (file_id(path) != Some(*id)).then_some(path.as_path())
     }
 
     fn init(conn: Connection) -> rusqlite::Result<Self> {
@@ -116,7 +137,7 @@ impl Store {
             tx.pragma_update(None, "user_version", i as i64 + 1)?;
             tx.commit()?;
         }
-        Ok(Store { conn })
+        Ok(Store { conn, file: None })
     }
 
     pub fn states(&self) -> rusqlite::Result<HashMap<String, CardState>> {
