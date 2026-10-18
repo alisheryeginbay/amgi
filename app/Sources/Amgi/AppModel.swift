@@ -164,6 +164,34 @@ final class AppModel {
         refresh()
     }
 
+    /// Close the collection and go back to the welcome screen, which stays on next launch.
+    func closeFolder() {
+        guard folder != nil, !importing else { return }
+        collection = nil
+        folder = nil
+        web.collectionRoot = nil
+        UserDefaults.standard.removeObject(forKey: Self.folderKey)
+        selection = .review
+        decks = []
+        deckNames = []
+        tags = []
+        tagIcons = [:]
+        savedViews = []
+        editingView = nil
+        warnings = []
+        today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
+        current = nil
+        revealed = false
+        lastRating = nil
+        dashboard = nil
+        browsed = []
+        browsedCount = nil
+        browseSelection = []
+        search = ""
+        infoCard = nil
+        infoCardID = nil
+    }
+
     /// Convert an Anki package into Markdown decks inside the open folder.
     func chooseAnkiPackage() {
         guard let collection else { return }

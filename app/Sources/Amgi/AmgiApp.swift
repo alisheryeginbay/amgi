@@ -22,6 +22,8 @@ struct AmgiApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") { model.chooseFolder() }
                     .keyboardShortcut("o")
+                Button("Close Folder") { model.closeFolder() }
+                    .disabled(model.folder == nil || model.importing)
                 Button("Reload Cards") { model.reload() }
                     .keyboardShortcut("r")
                     .disabled(model.folder == nil)
