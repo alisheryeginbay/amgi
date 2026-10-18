@@ -600,8 +600,12 @@ fn normalize(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// FNV-1a 64-bit: stable across Rust versions and platforms, unlike `DefaultHasher`.
 fn card_id(parts: &[&str]) -> String {
+    format!("{:016x}", stable_hash(parts))
+}
+
+/// FNV-1a 64-bit: stable across Rust versions and platforms, unlike `DefaultHasher`.
+pub(crate) fn stable_hash(parts: &[&str]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     for (i, part) in parts.iter().enumerate() {
         if i > 0 {
@@ -614,7 +618,7 @@ fn card_id(parts: &[&str]) -> String {
             hash = hash.wrapping_mul(0x100000001b3);
         }
     }
-    format!("{hash:016x}")
+    hash
 }
 
 #[cfg(test)]

@@ -607,15 +607,29 @@ impl Inner {
 
     fn next_card(&self, scope: &StudyScope, now: i64) -> Result<Option<StudyCard>> {
         let studied = || self.in_scope(scope).filter(|c| !c.suspended());
+        let seen = || studied().filter_map(|c| self.states.get(&c.parsed.id).map(|s| (s, c)));
         let earliest_due_before = |limit: i64| {
-            studied()
-                .filter_map(|c| self.states.get(&c.parsed.id).map(|s| (s.due, c)))
-                .filter(|(due, _)| *due <= limit)
-                .min_by_key(|(due, _)| *due)
+            seen().filter(|(s, _)| s.due <= limit).min_by_key(|(s, _)| s.due).map(|(_, c)| c)
+        };
+        // A failed card comes back within minutes, ahead of reviews, while the
+        // lapse is fresh.
+        let relearning = seen()
+            .filter(|(s, _)| s.due <= now && s.due - s.last_review < DAY_SECS)
+            .min_by_key(|(s, _)| s.due)
+            .map(|(_, c)| c);
+        // Reviews, most overdue day first. Within a day a fixed shuffle mixes decks,
+        // and keeps its order when the app restarts.
+        let review = || {
+            seen()
+                .filter(|(s, _)| s.due <= now)
+                .min_by_key(|(s, c)| {
+                    let last_review = s.last_review.to_string();
+                    (self.day_start(s.due), parser::stable_hash(&[&c.parsed.id, &last_review]))
+                })
                 .map(|(_, c)| c)
         };
 
-        let card = match earliest_due_before(now) {
+        let card = match relearning.or_else(review) {
             Some(c) => Some(c),
             None if self.new_remaining(now)? > 0 => studied()
                 .find(|c| !self.states.contains_key(&c.parsed.id))
@@ -1054,6 +1068,40 @@ mod tests {
             inner.answer("nope", Rating::Good, T0),
             Err(AmgiError::UnknownCard { .. })
         ));
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn review_order() {
+        let (dir, c) = collection(&[
+            ("a.md", "Q: 1\nA: -\n\nQ: 2\nA: -\n\nQ: 3\nA: -\n"),
+            ("b.md", "Q: 4\nA: -\n\nQ: 5\nA: -\n\nQ: 6\nA: -\n"),
+        ]);
+        let mut inner = c.lock();
+        let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
+        // Card 6 is studied a day before the others, so it falls due a day earlier.
+        inner.answer(&ids[5], Rating::Good, T0 - DAY_SECS).unwrap();
+        for id in &ids[..5] {
+            inner.answer(id, Rating::Good, T0).unwrap();
+        }
+        let later = T0 + 60 * DAY_SECS;
+        let next = |inner: &Inner, now| inner.next_card(&StudyScope::All, now).unwrap().unwrap().id;
+
+        // The most overdue day first, then a fixed shuffle within the day, the same
+        // each time it is asked.
+        assert_eq!(next(&inner, later), ids[5]);
+        inner.answer(&ids[5], Rating::Good, later).unwrap();
+        let key = |id: &String| parser::stable_hash(&[id, &T0.to_string()]);
+        let mut expected = ids[..5].to_vec();
+        expected.sort_by_key(key);
+        assert_eq!(next(&inner, later), expected[0]);
+        assert_eq!(next(&inner, later), expected[0]);
+
+        // A failed card comes back after its delay, ahead of the reviews still due.
+        inner.answer(&expected[0], Rating::Again, later).unwrap();
+        assert_eq!(next(&inner, later), expected[1]);
+        assert_eq!(next(&inner, later + scheduler::AGAIN_DELAY_SECS), expected[0]);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
