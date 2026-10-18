@@ -119,6 +119,7 @@ the root, and note tags become `#tag` lines.
 scripts/build-core.sh        # build Rust core + generate Swift bindings
 scripts/build-web.sh         # build the Svelte panes into the app (needs Node)
 cd app && swift run          # or: open app/Package.swift in Xcode
+scripts/bundle.sh            # or: build target/bundle/Amgi.app (release, signed ad-hoc)
 cargo test                   # core tests
 (cd web && npm test)         # search tests
 ```

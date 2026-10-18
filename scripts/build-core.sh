@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build the Rust core and generate Swift bindings for the SwiftUI app.
 #   scripts/build-core.sh [debug|release]   (default: release)
+# Honors CARGO_TARGET_DIR, so a build with other flags can keep its own directory.
 set -euo pipefail
 
 profile="${1:-release}"
@@ -14,7 +15,8 @@ flag=()
 [[ "$profile" == "release" ]] && flag=(--release)
 cargo build -p amgi-core "${flag[@]}"
 
-lib="target/$profile/libamgi_core.dylib"
+target="${CARGO_TARGET_DIR:-$root/target}"
+lib="$target/$profile/libamgi_core.dylib"
 out="target/bindings"
 cargo run -q -p uniffi-bindgen -- generate "$lib" --language swift --out-dir "$out"
 
@@ -23,5 +25,6 @@ cp "$out/amgi_core.swift" app/Sources/AmgiCore/
 cp "$out/amgi_coreFFI.h" app/Sources/amgi_coreFFI/include/
 
 # The app links the static library; point the package at the chosen profile.
-ln -sfn "$profile" target/amgi
+mkdir -p target
+ln -sfn "$target/$profile" target/amgi
 echo "Core built ($profile); bindings written to app/Sources."
