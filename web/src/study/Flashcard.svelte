@@ -4,7 +4,7 @@
   import { clozeGap } from "../lib/markdown";
   import type { StudyCard } from "../lib/types";
 
-  /** A card to study, set as text on the page. Once `revealed`, a basic card's answer
+  /** A card to study, plain as a box on a Wikipedia page. Once `revealed`, a basic card's answer
    *  fades in below its question, which stays where it is, and a cloze's gap opens to its
    *  answer in the sentence. Clicking the card reveals it. */
   let { card, revealed, onreveal }: { card: StudyCard; revealed: boolean; onreveal: () => void } = $props();
@@ -70,7 +70,6 @@
       </div>
       <!-- Takes its room before it shows, so the question never moves. -->
       <div class="answer" inert={!shown}>
-        <hr />
         <Markdown source={card.back} cardPath={card.path} inlineSounds />
       </div>
     {/if}
@@ -79,7 +78,6 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: Space reveals, handled by the page. -->
 <div class="card" class:revealed {onclick}>
-
   <!-- An unseen copy of the card answered holds its size, so nothing moves the card
        while the answer opens. -->
   <div class="layers">
@@ -94,6 +92,9 @@
     display: flex;
     flex-direction: column;
     min-height: 340px;
+    border: 1px solid var(--card-border);
+    border-radius: 2px;
+    background: var(--card-background);
   }
 
   .card:not(.revealed) {
@@ -122,7 +123,7 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    padding: 36px 20px 10px;
+    padding: 36px 36px;
     font-size: 26px;
     text-align: center;
   }
@@ -131,26 +132,36 @@
     align-items: center;
   }
 
-  /* Basic: the question large, the answer a size down beneath a short rule. */
+  /* Basic: the question set like a heading, ruled off from the answer below it. */
+  .question,
+  .answer {
+    text-align: left;
+  }
+
+  .question :global(.markdown),
+  .answer :global(.markdown) {
+    align-items: flex-start;
+  }
+
   .question {
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--card-border);
     font-size: 30px;
   }
 
+  .question :global(.text) {
+    line-height: 1.25;
+  }
+
   .answer {
-    font-size: 21px;
+    padding-top: 18px;
+    font-size: 20px;
     opacity: 0;
     transition: opacity 0.14s ease-out;
   }
 
   .shown .answer {
     opacity: 1;
-  }
-
-  hr {
-    width: 28px;
-    margin: 28px auto 22px;
-    border: none;
-    border-top: 1px solid var(--separator);
   }
 
   /* Cloze: the gap shows its hint, then its answer. */
