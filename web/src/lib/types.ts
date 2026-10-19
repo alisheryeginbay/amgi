@@ -21,8 +21,8 @@ export interface StudyState {
   card: StudyCard | null;
   revealed: boolean;
   autoplay: boolean;
-  /** The rating of the last answer, 1 for Again to 4 for Easy; null before any. */
-  answered: 1 | 2 | 3 | 4 | null;
+  /** Whether a key made the last change, which then shows without animating. */
+  instant: boolean;
 }
 
 export interface DashboardState {
@@ -77,11 +77,14 @@ export interface Environment {
   firstWeekday: number;
 }
 
+/** What showed an answer or rated a card. */
+export type Input = "key" | "pointer";
+
 /** What the page sends back. */
 export type Message =
   | { type: "ready" }
-  | { type: "reveal" }
-  | { type: "answer"; rating: 1 | 2 | 3 | 4 }
+  | { type: "reveal"; via: Input }
+  | { type: "answer"; rating: 1 | 2 | 3 | 4; via: Input }
   | { type: "open"; path: string; line: number }
   | { type: "select"; ids: string[] }
   | { type: "contextCards"; ids: string[] }

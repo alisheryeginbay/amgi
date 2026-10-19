@@ -194,7 +194,7 @@ private struct AnswerControls: View {
                 if revealed {
                     ForEach(Rating.allCases) { rating in
                         Button {
-                            model.answerWithAnimation(rating)
+                            model.answer(rating, via: .pointer)
                         } label: {
                             VStack(spacing: 1) {
                                 Text(rating.label)
@@ -213,7 +213,7 @@ private struct AnswerControls: View {
                     }
                 } else {
                     Button {
-                        model.revealWithAnimation()
+                        model.reveal(via: .pointer)
                     } label: {
                         Text("Show Answer")
                             .frame(width: 160, height: 44)

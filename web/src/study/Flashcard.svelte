@@ -4,16 +4,21 @@
   import { clozeGap } from "../lib/markdown";
   import type { StudyCard } from "../lib/types";
 
-  /** A card to study, plain as a box on a Wikipedia page. Once `revealed`, a basic card's answer
+  /** A card to study, a sheet lifted off the window. Once `revealed`, a basic card's answer
    *  fades in below its question, which stays where it is, and a cloze's gap opens to its
-   *  answer in the sentence. Clicking the card reveals it. */
-  let { card, revealed, onreveal }: { card: StudyCard; revealed: boolean; onreveal: () => void } = $props();
+   *  answer in the sentence. Clicking the card reveals it. An `instant` reveal, from a key,
+   *  shows the answer at once. */
+  let {
+    card,
+    revealed,
+    instant,
+    onreveal,
+  }: { card: StudyCard; revealed: boolean; instant: boolean; onreveal: () => void } = $props();
 
   const cloze = $derived(card.kind === "cloze");
   /** Null for a cloze answered with an image or sound, which swaps the whole card. */
   const gap = $derived(cloze ? clozeGap(card.front, card.back) : null);
 
-  const EASE = "cubic-bezier(0.2, 0.7, 0.2, 1)";
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function onclick() {
@@ -34,7 +39,7 @@
   $effect(() => {
     const now = revealed;
     untrack(() => {
-      if (now && !wasRevealed && gapWidth !== null && !reduceMotion) widenGap(gapWidth);
+      if (now && !wasRevealed && gapWidth !== null && !reduceMotion && !instant) widenGap(gapWidth);
       wasRevealed = now;
       gapWidth = null;
     });
@@ -47,7 +52,8 @@
     const to = gap.getBoundingClientRect().width;
     const done = () => gap.classList.remove("widening");
     if (Math.abs(to - from) < 1) return done();
-    gap.animate([{ width: `${from}px` }, { width: `${to}px` }], { duration: 450, easing: EASE }).finished.then(done, done);
+    const easing = getComputedStyle(gap).getPropertyValue("--ease-out");
+    gap.animate([{ width: `${from}px` }, { width: `${to}px` }], { duration: 200, easing }).finished.then(done, done);
   }
 </script>
 
@@ -68,7 +74,7 @@
       <div class="question">
         <Markdown source={card.front} cardPath={card.path} inlineSounds />
       </div>
-      <!-- Takes its room before it shows, so the question never moves. -->
+      <!-- Takes no room until it shows, so the card's size gives nothing away. -->
       <div class="answer" inert={!shown}>
         <Markdown source={card.back} cardPath={card.path} inlineSounds />
       </div>
@@ -77,24 +83,26 @@
 {/snippet}
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: Space reveals, handled by the page. -->
-<div class="card" class:revealed {onclick}>
-  <!-- An unseen copy of the card answered holds its size, so nothing moves the card
-       while the answer opens. -->
+<div class="card" class:revealed class:instant {onclick}>
   <div class="layers">
     <div class="layer" bind:this={live}>{@render content(revealed)}</div>
-    <div class="layer sizer" aria-hidden="true" inert>{@render content(true)}</div>
+    {#if cloze}
+      <!-- An unseen copy of the cloze answered holds its size, so the sentence doesn't
+           move while its gap opens. -->
+      <div class="layer sizer" aria-hidden="true" inert>{@render content(true)}</div>
+    {/if}
   </div>
 </div>
 
 <style>
   .card {
-    --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
     display: flex;
     flex-direction: column;
     min-height: 340px;
-    border: 1px solid var(--card-border);
-    border-radius: 2px;
+    /* Rounded to sit with the glass answer buttons below it. */
+    border-radius: 14px;
     background: var(--card-background);
+    box-shadow: var(--card-shadow);
   }
 
   .card:not(.revealed) {
@@ -117,12 +125,11 @@
     visibility: hidden;
   }
 
-  /* Short text sits in the middle of the card; long text grows it. */
+  /* Text starts at the top of the card; long text grows it downward. */
   .body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    justify-content: center;
     padding: 36px 36px;
     font-size: 26px;
     text-align: center;
@@ -145,7 +152,7 @@
 
   .question {
     padding-bottom: 10px;
-    border-bottom: 1px solid var(--card-border);
+    border-bottom: 1px solid var(--separator);
     font-size: 30px;
   }
 
@@ -154,14 +161,18 @@
   }
 
   .answer {
+    display: none;
     padding-top: 18px;
     font-size: 20px;
-    opacity: 0;
-    transition: opacity 0.14s ease-out;
   }
 
   .shown .answer {
-    opacity: 1;
+    display: block;
+    transition: opacity 0.14s var(--ease-out);
+
+    @starting-style {
+      opacity: 0;
+    }
   }
 
   /* Cloze: the gap shows its hint, then its answer. */
@@ -171,7 +182,7 @@
   }
 
   .shown :global(.gap .fill) {
-    animation: -global-gap-fill 0.45s var(--ease) both;
+    animation: -global-gap-fill 0.2s var(--ease-out) both;
   }
 
   /* While widening, the gap is one box, its answer fading out past the edge. */
@@ -197,14 +208,24 @@
   .side {
     grid-area: 1 / 1;
     transition:
-      opacity 0.3s ease-out,
-      visibility 0.3s;
+      opacity 0.2s var(--ease-out),
+      visibility 0.2s;
   }
 
   .shown .side:not(.answer-side),
   .body:not(.shown) .answer-side {
     opacity: 0;
     visibility: hidden;
+  }
+
+  /* Shown by a key: at once. */
+  .instant .answer,
+  .instant .side {
+    transition: none;
+  }
+
+  .instant :global(.gap .fill) {
+    animation: none;
   }
 
   @media (prefers-reduced-motion: reduce) {

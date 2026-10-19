@@ -39,18 +39,17 @@ struct StudyPayload: Encodable, Equatable {
     let card: StudyCard?
     let revealed: Bool
     let autoplay: Bool
-    /// The last answer, for the card leaving to drift its way.
-    let answered: Rating?
+    /// Whether a key made the last change, which the page then shows without animating.
+    let instant: Bool
 
-    enum CodingKeys: CodingKey { case card, revealed, autoplay, answered }
+    enum CodingKeys: CodingKey { case card, revealed, autoplay, instant }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(card.map(CardPayload.init), forKey: .card)
         try c.encode(revealed, forKey: .revealed)
         try c.encode(autoplay, forKey: .autoplay)
-        // 1 for Again through 4 for Easy, as the page sends ratings.
-        try c.encode(answered.map { $0.index + 1 }, forKey: .answered)
+        try c.encode(instant, forKey: .instant)
     }
 }
 
@@ -181,8 +180,8 @@ private extension CardKind {
 /// What a pane sends back.
 enum WebMessage {
     case ready
-    case reveal
-    case answer(Rating)
+    case reveal(StudyInput)
+    case answer(Rating, StudyInput)
     /// Open a card's deck file.
     case open(path: String)
     case select(ids: [String])
@@ -195,12 +194,13 @@ enum WebMessage {
 
     init?(_ body: Any) {
         guard let body = body as? [String: Any], let type = body["type"] as? String else { return nil }
+        let input = (body["via"] as? String).flatMap(StudyInput.init) ?? .pointer
         switch type {
         case "ready": self = .ready
-        case "reveal": self = .reveal
+        case "reveal": self = .reveal(input)
         case "answer":
             guard let n = body["rating"] as? Int, Rating.allCases.indices.contains(n - 1) else { return nil }
-            self = .answer(Rating.allCases[n - 1])
+            self = .answer(Rating.allCases[n - 1], input)
         case "open":
             guard let path = body["path"] as? String else { return nil }
             self = .open(path: path)

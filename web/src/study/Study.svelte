@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
+  import { cubicOut } from "svelte/easing";
   import Flashcard from "./Flashcard.svelte";
   import { app, commands, post } from "../lib/app.svelte";
   import { player } from "../lib/audio.svelte";
@@ -8,6 +9,7 @@
 
   const card = $derived(app.study?.card ?? null);
   const revealed = $derived(app.study?.revealed ?? false);
+  const instant = $derived(app.study?.instant ?? false);
 
   // Each card is dealt anew, even the same card again, rather than fading back to its
   // question in place. New intervals for the card on screen keep it where it is.
@@ -22,40 +24,18 @@
     return dealt;
   });
 
-  /** The card on screen, as a list keyed by deal: a card leaving keeps what it showed. */
-  const dealtCards = $derived(card ? [{ deal, card, revealed }] : []);
-
-  // Cards cross-fade: the next one fades in once the last has gone, so their text never
-  // shows through each other.
-  const OUT = 100;
-
+  // The next card replaces the last at once, so their text never shows through each
+  // other, and fades in quickly: even the same card again visibly changes.
   function dealIn(_node: HTMLElement) {
-    return { delay: OUT, duration: 140, css: (t: number) => `opacity: ${t}` };
+    return { duration: 120, easing: cubicOut, css: (t: number) => `opacity: ${t}` };
   }
 
-  /** Takes a leaving card out of the pile's layout, pinned where it stood, so the pile
-   *  takes the next card's size and place at once instead of when this one is gone. */
-  function pinInPlace(node: HTMLElement) {
-    const pile = node.parentElement!;
-    const scroller = pile.parentElement!;
-    // Where it stood before the next card joined the pile.
-    const next = [...pile.children].filter((c): c is HTMLElement => c !== node && !c.classList.contains("leaving"));
-    for (const c of next) c.style.display = "none";
-    const at = node.getBoundingClientRect();
-    for (const c of next) c.style.display = "";
-    node.style.width = `${node.offsetWidth}px`;
-    node.classList.add("leaving");
-    // The next card starts from its top, even after a long card was scrolled.
-    scroller.scrollTop = 0;
-    const origin = pile.getBoundingClientRect();
-    node.style.top = `${at.top - origin.top}px`;
-    node.style.left = `${at.left - origin.left}px`;
-  }
-
-  function dealOut(node: HTMLElement) {
-    pinInPlace(node);
-    return { duration: OUT, css: (t: number) => `opacity: ${t}` };
-  }
+  // The next card starts from its top, even after a long card was scrolled.
+  let scroller: HTMLElement;
+  $effect(() => {
+    deal;
+    untrack(() => scroller && (scroller.scrollTop = 0));
+  });
 
   /** Sounds on the side showing, and those the answer adds to the question. */
   function sounds(card: StudyCard, revealed: boolean) {
@@ -102,9 +82,9 @@
     if (!card) return false;
     key = key.toLowerCase();
     if (key === " " && !revealed) {
-      post({ type: "reveal" });
+      post({ type: "reveal", via: "key" });
     } else if (["1", "2", "3", "4"].includes(key) && revealed) {
-      post({ type: "answer", rating: Number(key) as 1 | 2 | 3 | 4 });
+      post({ type: "answer", rating: Number(key) as 1 | 2 | 3 | 4, via: "key" });
     } else if (key === "r") {
       replay();
     } else {
@@ -121,14 +101,16 @@
 
 <svelte:window {onkeydown} />
 
-<main>
-  <div class="pile">
-    {#each dealtCards as dealt (dealt.deal)}
-      <div class="stage" in:dealIn out:dealOut>
-        <Flashcard card={dealt.card} revealed={dealt.revealed} onreveal={() => post({ type: "reveal" })} />
-      </div>
-    {/each}
-  </div>
+<main bind:this={scroller}>
+  {#if card}
+    <div class="pile">
+      {#key deal}
+        <div class="stage" in:dealIn>
+          <Flashcard {card} {revealed} {instant} onreveal={() => post({ type: "reveal", via: "pointer" })} />
+        </div>
+      {/key}
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -138,27 +120,19 @@
     flex-direction: column;
     height: 100%;
     overflow-y: auto;
+    /* A scrollbar showing for a long answer doesn't nudge the card sideways. */
+    scrollbar-gutter: stable both-edges;
     padding: 64px 40px 104px;
   }
 
-  /* Auto margins center the card, and keep a tall one's top in view. Cards coming
-     and going share one cell. */
+  /* The card sits at the top, centered across, and grows downward. */
   .pile {
-    position: relative;
     display: grid;
     width: min(560px, 100%);
-    margin: auto;
+    margin: 0 auto;
   }
 
   .stage {
-    grid-area: 1 / 1;
     min-width: 0;
-  }
-
-  /* An answered card leaving lies over the pile without sizing it. */
-  .stage:global(.leaving) {
-    position: absolute;
-    z-index: 1;
-    pointer-events: none;
   }
 </style>

@@ -53,7 +53,12 @@ final class AppModel {
     var editingView: SavedViewDraft?
     private(set) var warnings: [CollectionWarning] = []
     private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
-    private(set) var current: StudyCard?
+    /// The card being studied, and whether its answer shows.
+    private(set) var study: StudyState = .none
+    /// What last showed an answer or rated a card, for whether the change animates.
+    private(set) var studyInput: StudyInput = .pointer
+    var current: StudyCard? { study.card }
+    var revealed: Bool { study.revealed }
     private(set) var importing = false
     private(set) var dashboard: Dashboard?
     /// Cards of the deck being browsed, or every card for a tag or saved view: the
@@ -61,14 +66,11 @@ final class AppModel {
     private(set) var browsed: [BrowseCard] = []
     /// How many browsed cards match the tag or saved view, as counted by the browse pane.
     private(set) var browsedCount: Int?
-    var revealed = false
     /// The card the Card Info window shows, kept current as cards are studied or edited.
     private(set) var infoCard: CardInfo?
     @ObservationIgnored private var infoCardID: String?
     /// Opens the Card Info window. Set by the main window's view, which can open windows.
     @ObservationIgnored var openCardInfoWindow: () -> Void = {}
-    /// The last answer given, which the study pane animates by.
-    private(set) var lastRating: Rating?
     /// Cards selected in the browse table.
     var browseSelection: Set<String> = []
     /// The browse search, as typed.
@@ -196,9 +198,7 @@ final class AppModel {
         editingView = nil
         warnings = []
         today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
-        current = nil
-        revealed = false
-        lastRating = nil
+        study = .none
         dashboard = nil
         browsed = []
         browsedCount = nil
@@ -332,7 +332,7 @@ final class AppModel {
             pane: pane,
             environment: .current,
             icons: tagIcons,
-            study: StudyPayload(card: current, revealed: revealed, autoplay: autoplay, answered: lastRating),
+            study: StudyPayload(card: current, revealed: revealed, autoplay: autoplay, instant: studyInput == .key),
             dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDue, today: today) } : nil,
             browse: browse,
             search: search,
@@ -356,7 +356,7 @@ final class AppModel {
             }
         }
         if suspended, let current, ids.contains(current.id) {
-            self.current = nil
+            study = .none
         }
         refresh()
     }
@@ -438,20 +438,26 @@ final class AppModel {
         return items
     }
 
-    func revealWithAnimation() {
-        guard current != nil else { return }
-        withAnimation(.smooth(duration: 0.3)) { revealed = true }
+    func reveal(via input: StudyInput) {
+        guard case .question(let card) = study else { return }
+        studyInput = input
+        withAnimation(input.animation) { study = .answer(card) }
     }
 
-    func answerWithAnimation(_ rating: Rating) {
-        guard current != nil, revealed else { return }
-        withAnimation(.smooth(duration: 0.25)) { answer(rating) }
+    func answer(_ rating: Rating, via input: StudyInput) {
+        guard let collection, case .answer(let card) = study else { return }
+        studyInput = input
+        withAnimation(input.animation) {
+            perform { try collection.answer(cardId: card.id, rating: rating) }
+            study = .none
+            refresh()
+        }
     }
 
     private func handle(_ message: WebMessage) {
         switch message {
-        case .reveal: revealWithAnimation()
-        case .answer(let rating): answerWithAnimation(rating)
+        case .reveal(let input): reveal(via: input)
+        case .answer(let rating, let input): answer(rating, via: input)
         case .open(let path): revealInEditor(path: path)
         case .select(let ids): update(\.browseSelection, Set(ids))
         case .count(let count): update(\.browsedCount, count)
@@ -469,8 +475,7 @@ final class AppModel {
     func loadNext() {
         guard let collection else { return }
         perform {
-            update(\.current, try collection.nextCard(scope: .all))
-            update(\.revealed, false)
+            update(\.study, try collection.nextCard(scope: .all).map(StudyState.question) ?? .none)
         }
     }
 
@@ -479,7 +484,7 @@ final class AppModel {
         guard let collection, let card = current else { return }
         perform {
             if let next = try collection.nextCard(scope: .all), next.id == card.id {
-                update(\.current, next)
+                update(\.study, revealed ? .answer(next) : .question(next))
             }
         }
     }
@@ -487,14 +492,6 @@ final class AppModel {
     private static func savedRetention() -> Double {
         let saved = UserDefaults.standard.object(forKey: retentionKey) as? Double ?? 0.9
         return min(max(saved, retentionRange.lowerBound), retentionRange.upperBound)
-    }
-
-    func answer(_ rating: Rating) {
-        guard let collection, let card = current else { return }
-        perform { try collection.answer(cardId: card.id, rating: rating) }
-        lastRating = rating
-        current = nil
-        refresh()
     }
 
     func icon(forTag tag: String) -> String? {
@@ -651,4 +648,33 @@ extension Rating: CaseIterable, Identifiable {
     }
 
     var index: Int { Self.allCases.firstIndex(of: self)! }
+}
+
+/// The card being studied: its question, or its answer too.
+enum StudyState: Equatable {
+    case none
+    case question(StudyCard)
+    case answer(StudyCard)
+
+    var card: StudyCard? {
+        switch self {
+        case .none: nil
+        case .question(let card), .answer(let card): card
+        }
+    }
+
+    var revealed: Bool {
+        if case .answer = self { true } else { false }
+    }
+}
+
+/// What showed an answer or rated a card. Study keys are pressed hundreds of times a
+/// session, so what they change shows at once; a click animates.
+enum StudyInput: String {
+    case key
+    case pointer
+
+    var animation: Animation? {
+        self == .pointer ? .smooth(duration: 0.25) : nil
+    }
 }
