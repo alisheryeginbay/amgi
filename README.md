@@ -9,6 +9,10 @@ A collection is a folder of Markdown files. Each file is a deck, and folders nes
 decks: the `lang` deck holds `lang.md` and everything in `lang/`. Review history is
 stored in `.amgi.sqlite` at the root of the folder.
 
+<p align="center">
+  <img src="media/screenshot.webp" alt="Amgi reviewing a card: the deck sidebar on the left, the card in the middle and the Again, Hard, Good and Easy buttons below it" />
+</p>
+
 ## Card format
 
 ```markdown
