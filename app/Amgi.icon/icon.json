@@ -1,0 +1,83 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "solid": "extended-srgb:1.00000,1.00000,1.00000,1.00000"
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "extended-srgb:0.10588,0.18431,0.36863,1.00000"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "name": "Eye",
+      "layers": [
+        {
+          "image-name": "eye-center.svg",
+          "name": "eye-center",
+          "glass": true
+        },
+        {
+          "image-name": "eye-ring.svg",
+          "name": "eye-ring",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      },
+      "specular": true
+    },
+    {
+      "name": "Veins",
+      "layers": [
+        {
+          "image-name": "veins.svg",
+          "name": "veins",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    },
+    {
+      "name": "Petals",
+      "layers": [
+        {
+          "image-name": "petals.svg",
+          "name": "petals",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.6
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.25
+      },
+      "specular": true
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

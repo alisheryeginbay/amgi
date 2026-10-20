@@ -50,6 +50,19 @@ cp -R "$bin/Amgi_Amgi.bundle" "$app/Contents/Resources/"
 # Drop debug symbols, which also name the object files they came from.
 strip -S -x "$app/Contents/MacOS/Amgi"
 
+# The app icon, made in Icon Composer: layers macOS renders as Liquid Glass, in light,
+# dark, clear and tinted. actool (Xcode's, not the Command Line Tools') compiles it into
+# Assets.car, plus Amgi.icns for older systems. It needs absolute paths.
+if ! icon_log="$(xcrun actool "$root/app/Amgi.icon" \
+    --compile "$app/Contents/Resources" \
+    --platform macosx --minimum-deployment-target 26.0 \
+    --app-icon Amgi \
+    --output-partial-info-plist "$out/icon-info.plist" \
+    --errors --warnings --output-format human-readable-text 2>&1)"; then
+    echo "$icon_log" >&2
+    exit 1
+fi
+
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -62,6 +75,10 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>CFBundleName</key>
     <string>Amgi</string>
     <key>CFBundleDisplayName</key>
+    <string>Amgi</string>
+    <key>CFBundleIconName</key>
+    <string>Amgi</string>
+    <key>CFBundleIconFile</key>
     <string>Amgi</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
