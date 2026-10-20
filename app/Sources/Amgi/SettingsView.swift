@@ -39,7 +39,7 @@ struct SettingsView: View {
             Section {
                 Toggle("Show progress bar", isOn: $studyProgress)
             } footer: {
-                Text("A bar above the card fills as you study the cards due today and the new ones.")
+                Text("A bar above the card fills as you work through today's due, learning and new cards.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

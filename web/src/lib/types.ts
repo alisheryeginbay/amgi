@@ -27,7 +27,7 @@ export interface StudyState {
   progress: boolean;
   /** Answers given today. */
   reviewed: number;
-  /** Cards still to study today: due ones and new ones. */
+  /** Cards still to study today: due, learning and new. */
   remaining: number;
 }
 

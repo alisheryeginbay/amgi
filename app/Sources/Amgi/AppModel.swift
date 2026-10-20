@@ -173,6 +173,19 @@ final class AppModel {
 
     /// Top-level decks already include their subdecks.
     var totalDue: UInt32 { decks.filter { !$0.name.contains("/") }.reduce(0) { $0 + $1.due } }
+    /// Cards answered Again, waiting minutes to come back.
+    var totalLearning: UInt32 { decks.filter { !$0.name.contains("/") }.reduce(0) { $0 + $1.learning } }
+    /// Cards still to study today: due, learning and new.
+    var totalLeft: UInt32 { totalDue + totalLearning + today.newAvailable }
+
+    /// "3 due · 2 learning · 5 new", leaving out learning when there is none.
+    var studyCounts: String {
+        [
+            "\(totalDue) due",
+            totalLearning > 0 ? "\(totalLearning) learning" : nil,
+            "\(today.newAvailable) new",
+        ].compactMap { $0 }.joined(separator: " · ")
+    }
 
     func chooseFolder() {
         let panel = NSOpenPanel()
@@ -362,7 +375,7 @@ final class AppModel {
                 instant: studyInput == .key,
                 progress: progress,
                 reviewed: today.reviewed,
-                remaining: totalDue + today.newAvailable
+                remaining: totalLeft
             ),
             dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDue, today: today) } : nil,
             cards: cardsJSON,

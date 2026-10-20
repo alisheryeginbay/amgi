@@ -45,7 +45,7 @@ struct StudyPayload: Encodable, Equatable {
     let instant: Bool
     /// Whether the progress bar shows.
     let progress: Bool
-    /// Answers given today, and cards still to study today: due ones and new ones.
+    /// Answers given today, and cards still to study today: due, learning and new.
     let reviewed: UInt32
     let remaining: UInt32
 

@@ -63,7 +63,7 @@ struct DetailView: View {
     private var subtitle: String {
         switch model.selection {
         case .dashboard: model.folder?.lastPathComponent ?? ""
-        case .review: "\(model.totalDue) due · \(model.today.newAvailable) new"
+        case .review: model.studyCounts
         case .tags: model.tags.count == 1 ? "1 tag" : "\(model.tags.count) tags"
         case .views: model.savedViews.count == 1 ? "1 view" : "\(model.savedViews.count) views"
         case .cards, .deck, .tag, .view: model.browsedCount.map { $0 == 1 ? "1 card" : "\($0) cards" } ?? ""

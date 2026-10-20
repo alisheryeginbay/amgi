@@ -92,6 +92,8 @@ pub struct DeckInfo {
     pub title: String,
     pub total: u32,
     pub due: u32,
+    /// Cards answered Again, waiting minutes to come back. Due once that time is up.
+    pub learning: u32,
     /// New cards available today, capped by the daily new-card limit.
     pub new: u32,
 }
@@ -650,7 +652,7 @@ impl Inner {
         let remaining = self.new_remaining(now)?;
         // Count each deck's own cards, then add them to the deck and its parents:
         // there are far fewer decks than cards.
-        let mut own: HashMap<&str, (u32, u32, u32)> = HashMap::new();
+        let mut own: HashMap<&str, (u32, u32, u32, u32)> = HashMap::new();
         for card in &self.cards {
             let counts = own.entry(&card.deck).or_default();
             counts.0 += 1;
@@ -659,13 +661,14 @@ impl Inner {
             }
             match self.states.get(&card.parsed.id) {
                 Some(s) if s.due <= now => counts.1 += 1,
+                Some(s) if s.interval_secs < DAY_SECS => counts.2 += 1,
                 Some(_) => {}
-                None => counts.2 += 1,
+                None => counts.3 += 1,
             }
         }
         // Keyed by path components, so parents sort before their children.
         let mut decks: BTreeMap<Vec<&str>, DeckInfo> = BTreeMap::new();
-        for (name, (total, due, new)) in own {
+        for (name, (total, due, learning, new)) in own {
             let parts: Vec<&str> = name.split('/').collect();
             for depth in 1..=parts.len() {
                 let deck = decks.entry(parts[..depth].to_vec()).or_insert_with(|| DeckInfo {
@@ -673,10 +676,12 @@ impl Inner {
                     title: String::new(),
                     total: 0,
                     due: 0,
+                    learning: 0,
                     new: 0,
                 });
                 deck.total += total;
                 deck.due += due;
+                deck.learning += learning;
                 deck.new += new;
             }
         }
@@ -1238,7 +1243,13 @@ mod tests {
         assert_eq!(card2.front, "2");
         inner.answer(&card2.id, Rating::Again, T0).unwrap();
 
-        // The failed card is shown again within the learn-ahead window.
+        // The failed card waits to come back, then is due.
+        let decks = inner.decks(T0 + 60).unwrap();
+        assert_eq!((decks[0].due, decks[0].learning, decks[0].new), (0, 1, 0));
+        let decks = inner.decks(T0 + scheduler::AGAIN_DELAY_SECS).unwrap();
+        assert_eq!((decks[0].due, decks[0].learning), (1, 0));
+
+        // It is shown again within the learn-ahead window.
         let again = inner.next_card(&deck("a"), T0 + 60).unwrap().unwrap();
         assert_eq!(again.id, card2.id);
         assert!(!again.is_new);

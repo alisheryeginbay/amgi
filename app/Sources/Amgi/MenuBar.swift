@@ -37,13 +37,13 @@ struct MenuBarMenu: View {
                 Text(reviewedToday)
             }
             Section {
-                Button(model.totalDue + model.today.newAvailable > 0 ? "Study Now" : "Nothing Left Today") {
+                Button(model.totalLeft > 0 ? "Study Now" : "Nothing Left Today") {
                     model.selection = .review
                     showMainWindow()
                 }
-                .disabled(model.totalDue + model.today.newAvailable == 0)
+                .disabled(model.totalLeft == 0)
             }
-            let decks = model.decks.filter { !$0.name.contains("/") && $0.due + $0.new > 0 }
+            let decks = model.decks.filter { !$0.name.contains("/") && $0.due + $0.learning + $0.new > 0 }
             if !decks.isEmpty {
                 Section("Decks") {
                     ForEach(decks, id: \.name) { deck in
@@ -51,7 +51,7 @@ struct MenuBarMenu: View {
                             model.selection = .deck(deck.name)
                             showMainWindow()
                         }
-                        .badge(Text(counts(due: deck.due, new: deck.new)))
+                        .badge(Text(counts(due: deck.due, learning: deck.learning, new: deck.new)))
                     }
                 }
             }
@@ -70,11 +70,8 @@ struct MenuBarMenu: View {
     }
 
     private var summary: String {
-        let due = model.totalDue
-        let new = model.today.newAvailable
-        if due == 0 && new == 0 { return "All caught up" }
-        return [due > 0 ? "\(due) due" : nil, new > 0 ? "\(new) new" : nil]
-            .compactMap { $0 }
+        if model.totalLeft == 0 { return "All caught up" }
+        return parts(due: model.totalDue, learning: model.totalLearning, new: model.today.newAvailable)
             .joined(separator: " · ")
     }
 
@@ -83,10 +80,13 @@ struct MenuBarMenu: View {
         return reviewed == 1 ? "1 review today" : "\(reviewed) reviews today"
     }
 
-    private func counts(due: UInt32, new: UInt32) -> String {
-        [due > 0 ? "\(due) due" : nil, new > 0 ? "\(new) new" : nil]
+    private func counts(due: UInt32, learning: UInt32, new: UInt32) -> String {
+        parts(due: due, learning: learning, new: new).joined(separator: ", ")
+    }
+
+    private func parts(due: UInt32, learning: UInt32, new: UInt32) -> [String] {
+        [due > 0 ? "\(due) due" : nil, learning > 0 ? "\(learning) learning" : nil, new > 0 ? "\(new) new" : nil]
             .compactMap { $0 }
-            .joined(separator: ", ")
     }
 
     private func showMainWindow() {
