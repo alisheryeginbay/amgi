@@ -93,9 +93,9 @@
     background: var(--tile);
   }
 
-  /* Figures and headings in the card serif; labels stay in the system font. */
+  /* Figures and headings in the headline serif; labels stay in the system font. */
   .value {
-    font-family: var(--font-serif);
+    font-family: var(--font-headline);
     font-size: 28px;
     font-weight: 500;
     line-height: 1.15;
@@ -109,7 +109,7 @@
 
   h2 {
     margin: 0 0 14px;
-    font-family: var(--font-serif);
+    font-family: var(--font-headline);
     font-size: var(--font-title3);
     font-weight: 600;
   }
