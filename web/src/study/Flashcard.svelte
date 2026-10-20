@@ -131,7 +131,7 @@
     display: flex;
     flex-direction: column;
     padding: 36px 36px;
-    font-size: 26px;
+    font-size: 22px;
     text-align: center;
   }
 
@@ -139,7 +139,7 @@
     align-items: center;
   }
 
-  /* Basic: the question set like a heading, ruled off from the answer below it. */
+  /* Basic: the question ruled off from the answer below it. */
   .question,
   .answer {
     text-align: left;
@@ -153,21 +153,11 @@
   .question {
     padding-bottom: 10px;
     border-bottom: 1px solid var(--separator);
-    font-size: 30px;
-  }
-
-  .question :global(.markdown) {
-    font-family: var(--font-headline);
-  }
-
-  .question :global(.text) {
-    line-height: 1.25;
   }
 
   .answer {
     display: none;
     padding-top: 18px;
-    font-size: 20px;
   }
 
   .shown .answer {
