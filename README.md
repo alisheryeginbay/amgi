@@ -24,6 +24,11 @@ C: The capital of [France] is [Paris|city].
 `[answer|hint]` shows the hint. Cards can also hold images, sounds, math and highlighted
 code, and you can import your Anki decks.
 
+## Install
+
+[Download the latest release](https://github.com/alisheryeginbay/amgi/releases/latest),
+open the `.dmg` and drag Amgi into Applications. Needs macOS 26 on Apple Silicon.
+
 ## Build & run
 
 Building needs macOS, Rust and [Bun](https://bun.sh).
