@@ -1,8 +1,7 @@
-# amgi
-
 <p align="center">
-  <img src="media/amgi.svg" alt="Amgi, then 암기, written by hand" width="360" />
+  <img src="media/logo/amgi-symbol.svg" alt="" width="96" />
 </p>
+<h1 align="center">Amgi</h1>
 
 Plain-text flash cards, scheduled with [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm).
 
