@@ -10,6 +10,7 @@ private let browsePreviewKey = "browsePreview"
 struct DetailView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(autoplaySoundsKey) private var autoplay = true
+    @AppStorage(studyProgressKey) private var progress = true
     @AppStorage(browsePreviewKey) private var preview = true
 
     var body: some View {
@@ -26,7 +27,7 @@ struct DetailView: View {
     }
 
     private var web: some View {
-        WebContent(host: model.web, state: model.webState(autoplay: autoplay, preview: preview))
+        WebContent(host: model.web, state: model.webState(autoplay: autoplay, progress: progress, preview: preview))
             // Glass lives only on the floating controls, over the content, which scrolls
             // beneath them. The page leaves room below for them.
             .overlay(alignment: .bottom) {

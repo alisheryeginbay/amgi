@@ -337,7 +337,7 @@ final class AppModel {
 
     /// What the web panes show. Read while rendering the detail column, so any change
     /// here updates the page.
-    func webState(autoplay: Bool, preview: Bool) -> WebState {
+    func webState(autoplay: Bool, progress: Bool, preview: Bool) -> WebState {
         let pane: WebPane = switch selection {
         // The tag and view lists are native, so the web view is hidden for them.
         case .dashboard, .tags, .views: .dashboard
@@ -355,7 +355,15 @@ final class AppModel {
             pane: pane,
             environment: .current,
             icons: tagIcons,
-            study: StudyPayload(card: current, revealed: revealed, autoplay: autoplay, instant: studyInput == .key),
+            study: StudyPayload(
+                card: current,
+                revealed: revealed,
+                autoplay: autoplay,
+                instant: studyInput == .key,
+                progress: progress,
+                reviewed: today.reviewed,
+                remaining: totalDue + today.newAvailable
+            ),
             dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDue, today: today) } : nil,
             cards: cardsJSON,
             browse: browse,

@@ -43,8 +43,13 @@ struct StudyPayload: Encodable, Equatable {
     let autoplay: Bool
     /// Whether a key made the last change, which the page then shows without animating.
     let instant: Bool
+    /// Whether the progress bar shows.
+    let progress: Bool
+    /// Answers given today, and cards still to study today: due ones and new ones.
+    let reviewed: UInt32
+    let remaining: UInt32
 
-    enum CodingKeys: CodingKey { case card, revealed, autoplay, instant }
+    enum CodingKeys: CodingKey { case card, revealed, autoplay, instant, progress, reviewed, remaining }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -52,6 +57,9 @@ struct StudyPayload: Encodable, Equatable {
         try c.encode(revealed, forKey: .revealed)
         try c.encode(autoplay, forKey: .autoplay)
         try c.encode(instant, forKey: .instant)
+        try c.encode(progress, forKey: .progress)
+        try c.encode(reviewed, forKey: .reviewed)
+        try c.encode(remaining, forKey: .remaining)
     }
 }
 

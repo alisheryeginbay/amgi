@@ -11,6 +11,12 @@
   const revealed = $derived(app.study?.revealed ?? false);
   const instant = $derived(app.study?.instant ?? false);
 
+  /** Today's share studied: answers given, out of those and the cards still to study. */
+  const reviewed = $derived(app.study?.reviewed ?? 0);
+  const total = $derived(reviewed + (app.study?.remaining ?? 0));
+  const progress = $derived(total > 0 ? reviewed / total : 0);
+  const showProgress = $derived(app.study?.progress ?? true);
+
   // Each card is dealt anew, even the same card again, rather than fading back to its
   // question in place. New intervals for the card on screen keep it where it is.
   let dealt = 0;
@@ -104,6 +110,19 @@
 <main bind:this={scroller}>
   {#if card}
     <div class="pile">
+      {#if showProgress}
+        <div
+          class="progress"
+          role="progressbar"
+          aria-label="Studied today"
+          aria-valuemin={0}
+          aria-valuemax={total}
+          aria-valuenow={reviewed}
+          title="{reviewed} of {total} studied today"
+        >
+          <div class="bar" style:transform="scaleX({progress})"></div>
+        </div>
+      {/if}
       {#key deal}
         <div class="stage" in:dealIn>
           <Flashcard {card} {revealed} {instant} onreveal={() => post({ type: "reveal", via: "pointer" })} />
@@ -134,5 +153,27 @@
 
   .stage {
     min-width: 0;
+  }
+
+  /* Today's progress, a thin track above the card. */
+  .progress {
+    height: 4px;
+    margin-bottom: 16px;
+    border-radius: 2px;
+    background: var(--fill-strong);
+    overflow: hidden;
+  }
+
+  .bar {
+    height: 100%;
+    background: var(--accent);
+    transform-origin: left;
+    transition: transform 0.3s var(--ease-out);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar {
+      transition: none;
+    }
   }
 </style>

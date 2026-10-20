@@ -3,10 +3,13 @@ import SwiftUI
 /// The app's Settings window (⌘,).
 /// Whether card sounds play when a card or its answer appears.
 let autoplaySoundsKey = "autoplaySounds"
+/// Whether a bar above the card shows how much of today's studying is done.
+let studyProgressKey = "studyProgress"
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(autoplaySoundsKey) private var autoplaySounds = true
+    @AppStorage(studyProgressKey) private var studyProgress = true
     @AppStorage(showMenuBarKey) private var showMenuBar = true
 
     var body: some View {
@@ -30,6 +33,13 @@ struct SettingsView: View {
                 Toggle("Play audio automatically", isOn: $autoplaySounds)
             } footer: {
                 Text("Sounds on the question play when a card appears, and the answer's when it is shown. Press R to replay them.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
+                Toggle("Show progress bar", isOn: $studyProgress)
+            } footer: {
+                Text("A bar above the card fills as you study the cards due today and the new ones.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

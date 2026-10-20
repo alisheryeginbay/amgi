@@ -23,6 +23,12 @@ export interface StudyState {
   autoplay: boolean;
   /** Whether a key made the last change, which then shows without animating. */
   instant: boolean;
+  /** Whether the progress bar shows. */
+  progress: boolean;
+  /** Answers given today. */
+  reviewed: number;
+  /** Cards still to study today: due ones and new ones. */
+  remaining: number;
 }
 
 export interface DashboardState {
