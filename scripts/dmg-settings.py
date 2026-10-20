@@ -16,7 +16,8 @@ icon = os.path.join(app, "Contents", "Resources", "Amgi.icns")
 # copied as it is, so Finder picks the image for the screen.
 background = defines["background"]  # noqa: F821
 
-window_rect = ((200, 160), (660, 400))
+# The height counts Finder's title bar (32 pt on macOS 26) on top of the 400 pt background.
+window_rect = ((200, 160), (660, 432))
 default_view = "icon-view"
 show_status_bar = False
 show_tab_view = False
