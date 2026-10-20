@@ -116,18 +116,19 @@ the root, and note tags become `#tag` lines.
 ## Build & run
 
 ```sh
-scripts/build-core.sh        # build Rust core + generate Swift bindings
-scripts/build-web.sh         # build the Svelte panes into the app (needs Node)
-cd app && swift run          # or: open app/Package.swift in Xcode
-scripts/bundle.sh            # or: build target/bundle/Amgi.app (release, signed ad-hoc)
-cargo test                   # core tests
-(cd web && npm test)         # search tests
+make                         # rebuild whatever changed (Rust core, web panes), then run the app
+make dev                     # same, with the panes served by Vite and reloaded live
+make build                   # build without running
+make test                    # core and web tests
+make bundle                  # build target/bundle/Amgi.app (release, signed ad-hoc)
 ```
 
-Re-run `scripts/build-core.sh` after any change to `core/` and `scripts/build-web.sh` after
-any change to `web/`. The emoji picker's names and keywords come from GitHub's
-[gemoji](https://github.com/github/gemoji) (MIT); `scripts/build-emoji.py` refreshes them. To work on the panes with live reload, run `npm run dev` in `web/`
-and start the app with `AMGI_WEB_URL=http://localhost:5173 swift run`. Debug builds can be
+Building needs Rust and Node. `make` runs `scripts/build-core.sh` and
+`scripts/build-web.sh` for you, only when `core/` or `web/` changed; `PROFILE=debug make`
+builds the core without optimizations. If you open `app/Package.swift` in Xcode, run
+`make build` first after changing `core/` or `web/`. The emoji picker's names and
+keywords come from GitHub's [gemoji](https://github.com/github/gemoji) (MIT);
+`scripts/build-emoji.py` refreshes them. Debug builds can be
 inspected with Safari's Web Inspector (Develop ▸ your Mac ▸ Amgi).
 
 Keys while studying: <kbd>Space</kbd> shows the answer, <kbd>1</kbd>–<kbd>4</kbd> rate

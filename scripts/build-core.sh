@@ -21,8 +21,10 @@ out="target/bindings"
 cargo run -q -p uniffi-bindgen -- generate "$lib" --language swift --out-dir "$out"
 
 mkdir -p app/Sources/AmgiCore app/Sources/amgi_coreFFI/include
-cp "$out/amgi_core.swift" app/Sources/AmgiCore/
-cp "$out/amgi_coreFFI.h" app/Sources/amgi_coreFFI/include/
+# Copy only when the bindings changed, so Swift doesn't recompile them on every build.
+update() { cmp -s "$1" "$2/$(basename "$1")" || cp "$1" "$2/"; }
+update "$out/amgi_core.swift" app/Sources/AmgiCore
+update "$out/amgi_coreFFI.h" app/Sources/amgi_coreFFI/include
 
 # The app links the static library; point the package at the chosen profile.
 mkdir -p target

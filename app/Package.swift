@@ -2,7 +2,7 @@
 import Foundation
 import PackageDescription
 
-// Static library produced by `scripts/build-core.sh`.
+// Static library produced by `scripts/build-core.sh` (run by `make`).
 let coreLibrary = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .appendingPathComponent("../target/amgi/libamgi_core.a")
