@@ -156,6 +156,10 @@
     font-size: 30px;
   }
 
+  .question :global(.markdown) {
+    font-family: var(--font-headline);
+  }
+
   .question :global(.text) {
     line-height: 1.25;
   }

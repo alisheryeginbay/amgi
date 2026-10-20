@@ -35,6 +35,8 @@
      Korean forms first unless `main.ts` finds another CJK language. */
   --font-han: "Noto Serif KR Variable", "Noto Serif JP Variable", "Noto Serif SC Variable", "Noto Serif TC Variable";
   --font-serif: "Source Serif 4 Variable", var(--font-han), ui-serif, Georgia, serif;
+  /* Headlines, such as a basic card's question, in Brygada 1918. */
+  --font-headline: "Brygada 1918 Variable", var(--font-han), ui-serif, Georgia, serif;
 }
 
 :root[data-han="ja"] {

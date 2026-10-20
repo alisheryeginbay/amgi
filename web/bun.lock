@@ -5,6 +5,7 @@
     "": {
       "name": "amgi-web",
       "dependencies": {
+        "@fontsource-variable/brygada-1918": "^5.3.0",
         "@fontsource-variable/noto-serif-jp": "^5.3.1",
         "@fontsource-variable/noto-serif-kr": "^5.3.1",
         "@fontsource-variable/noto-serif-sc": "^5.3.1",
@@ -26,6 +27,8 @@
     },
   },
   "packages": {
+    "@fontsource-variable/brygada-1918": ["@fontsource-variable/brygada-1918@5.3.0", "", {}, "sha512-BbsFcgXc6HkA8JJs0YMdHe9JxF2aUjOQuSSJIpuz+yv749Kv5KxPkP3L7X6sJZQsFvYZ8WW+m5d12xhqu46SiA=="],
+
     "@fontsource-variable/noto-serif-jp": ["@fontsource-variable/noto-serif-jp@5.3.1", "", {}, "sha512-quU5uIezSqZFgPaDDI2C3hQfIJHzyXVYuvMZsDDF++og8yechsAwcmCkLLdofPboUB1xHOWV3xohJyIVBi3b4g=="],
 
     "@fontsource-variable/noto-serif-kr": ["@fontsource-variable/noto-serif-kr@5.3.1", "", {}, "sha512-cf29V+FWfw7/9dyzwCK6zKmf0z7XkdPPoq5UxgczmjZkV3RW1mr02/1LbEsRtiCKagRgVCb9/wQ+uYci1KzRMg=="],
