@@ -37,6 +37,19 @@ struct AmgiApp: App {
                     .keyboardShortcut("i", modifiers: [.command, .shift])
                     .disabled(model.folder == nil || model.importing)
             }
+            // The sidebar's first three items, as in Mail and Finder.
+            CommandGroup(before: .sidebar) {
+                Button("Dashboard") { model.selection = .dashboard }
+                    .keyboardShortcut("1")
+                    .disabled(model.folder == nil)
+                Button("Review") { model.selection = .review }
+                    .keyboardShortcut("2")
+                    .disabled(model.folder == nil)
+                Button("Decks") { model.selection = .cards }
+                    .keyboardShortcut("3")
+                    .disabled(model.folder == nil)
+                Divider()
+            }
         }
 
         // A card's history beside the main window, opened with ⌘I.

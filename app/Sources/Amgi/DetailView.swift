@@ -127,7 +127,7 @@ private struct DetailToolbar: ToolbarContent {
             }
             ToolbarItem(placement: .navigation) {
                 @Bindable var model = model
-                SearchField(text: $model.search, prompt: "Search Cards")
+                SearchField(text: $model.search, prompt: "Search Cards") { model.searchField = $0 }
                     .frame(width: 200)
             }
             ToolbarItem(placement: .navigation) {
@@ -164,12 +164,15 @@ private struct MenuAnchorView: NSViewRepresentable {
 private struct SearchField: NSViewRepresentable {
     @Binding var text: String
     let prompt: String
+    /// Hands over the field, for ⌘F to focus.
+    let onField: (NSSearchField) -> Void
 
     func makeNSView(context: Context) -> NSSearchField {
         let field = NSSearchField()
         field.placeholderString = prompt
         field.sendsSearchStringImmediately = true
         field.delegate = context.coordinator
+        onField(field)
         return field
     }
 

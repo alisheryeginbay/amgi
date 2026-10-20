@@ -152,11 +152,12 @@ keywords come from GitHub's [gemoji](https://github.com/github/gemoji) (MIT);
 inspected with Safari's Web Inspector (Develop ▸ your Mac ▸ Amgi).
 
 Keys while studying: <kbd>Space</kbd> shows the answer, <kbd>1</kbd>–<kbd>4</kbd> rate
-Again/Hard/Good/Easy, <kbd>R</kbd> replays the card's sounds, <kbd>⌘O</kbd> opens a folder, <kbd>⌘R</kbd> reloads. Files also reload
+Again/Hard/Good/Easy, <kbd>R</kbd> replays the card's sounds, <kbd>⌘O</kbd> opens a folder, <kbd>⌘R</kbd> reloads,
+and <kbd>⌘1</kbd>–<kbd>⌘3</kbd> go to Dashboard, Review and Decks. Files also reload
 whenever the app comes to the front.
 
 **Review** in the sidebar studies the whole collection. Pick a deck or tag to browse its
-cards in a table: search, sort by any column, and double-click a card to open its file.
+cards in a table: search (<kbd>⌘F</kbd>), sort by any column, and double-click a card to open its file.
 The selected card shows beside the table as it looks when studied; drag the divider to
 resize it, or hide it with **Hide Card** in the toolbar.
 

@@ -151,6 +151,8 @@ final class AppModel {
     let web = WebHost()
     /// The toolbar's More button, which its menu opens under.
     @ObservationIgnored weak var moreMenuAnchor: NSView?
+    /// The browse toolbar's search field, which ⌘F focuses.
+    @ObservationIgnored weak var searchField: NSSearchField?
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var countsTimer: Timer?
     @ObservationIgnored private let quickAdd = QuickAddPanel()
@@ -392,6 +394,11 @@ final class AppModel {
                 else { return false }
                 if key == "i", let id = self.infoTarget {
                     self.showCardInfo(id: id)
+                    return true
+                }
+                // Here rather than in the menus, where Edit ▸ Find already has ⌘F.
+                if key == "f", self.isBrowsing, let field = self.searchField, field.window === window {
+                    window.makeFirstResponder(field)
                     return true
                 }
                 guard key == "s" || key == "k", self.selection == .review, self.current != nil else { return false }

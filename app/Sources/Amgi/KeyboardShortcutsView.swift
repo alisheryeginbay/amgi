@@ -25,6 +25,9 @@ struct ShortcutGroup: Identifiable {
             Shortcut("Open Folder", "⌘", "O"),
             Shortcut("Reload Cards", "⌘", "R"),
             Shortcut("Import Anki Deck", "⇧", "⌘", "I"),
+            Shortcut("Dashboard", "⌘", "1"),
+            Shortcut("Review", "⌘", "2"),
+            Shortcut("Decks", "⌘", "3"),
             Shortcut("Settings", "⌘", ","),
             Shortcut("Keyboard Shortcuts", "⌘", "/"),
         ]),
@@ -42,6 +45,7 @@ struct ShortcutGroup: Identifiable {
         ShortcutGroup(title: "Browse", shortcuts: [
             Shortcut("Select Next or Previous Card", "↓", "↑"),
             Shortcut("Extend Selection", "⇧", "↓"),
+            Shortcut("Search Cards", "⌘", "F"),
             Shortcut("Select All", "⌘", "A"),
             Shortcut("Edit Card", "Return"),
             Shortcut("Card Info", "⌘", "I"),
