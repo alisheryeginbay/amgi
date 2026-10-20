@@ -123,7 +123,7 @@ make test                    # core and web tests
 make bundle                  # build target/bundle/Amgi.app (release, signed ad-hoc)
 ```
 
-Building needs Rust and Node. `make` runs `scripts/build-core.sh` and
+Building needs Rust and [Bun](https://bun.sh). `make` runs `scripts/build-core.sh` and
 `scripts/build-web.sh` for you, only when `core/` or `web/` changed; `PROFILE=debug make`
 builds the core without optimizations. If you open `app/Package.swift` in Xcode, run
 `make build` first after changing `core/` or `web/`. The emoji picker's names and

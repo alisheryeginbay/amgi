@@ -2,7 +2,7 @@
 // is written, fades, and the loop starts over. Each word comes from the tegaki CLI
 // (https://github.com/gkurt/tegaki); this script puts both on one timeline.
 //
-//   node scripts/readme-svg.mjs
+//   bun scripts/readme-svg.mjs
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -22,8 +22,8 @@ const words = [
 
 function tegaki(text, args) {
   return execFileSync(
-    "npx",
-    ["-y", TEGAKI, text, "--mode", "loop", "--color", LIGHT, "-o", "-", ...args],
+    "bunx",
+    [TEGAKI, text, "--mode", "loop", "--color", LIGHT, "-o", "-", ...args],
     { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
   );
 }

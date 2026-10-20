@@ -9,7 +9,7 @@
 PROFILE ?= release
 WEB_OUT := app/Sources/Amgi/Web/index.html
 WEB_SRC := $(shell find web/src -type f) web/index.html web/vite.config.ts \
-	web/svelte.config.js web/tsconfig.json web/node_modules/.package-lock.json
+	web/svelte.config.js web/tsconfig.json web/node_modules/.installed
 
 .PHONY: run dev build core web test bundle
 
@@ -17,7 +17,7 @@ run: build
 	swift run --package-path app
 
 dev: core $(WEB_OUT)
-	@(cd web && exec node_modules/.bin/vite --strictPort) & vite=$$!; \
+	@(cd web && exec bun --bun vite --strictPort) & vite=$$!; \
 	trap 'kill $$vite 2>/dev/null' EXIT; \
 	AMGI_WEB_URL=http://localhost:5173 swift run --package-path app
 
@@ -33,12 +33,12 @@ web: $(WEB_OUT)
 $(WEB_OUT): $(WEB_SRC)
 	@scripts/build-web.sh
 
-web/node_modules/.package-lock.json: web/package-lock.json
-	cd web && npm ci
+web/node_modules/.installed: web/bun.lock
+	cd web && bun install --frozen-lockfile && touch node_modules/.installed
 
 test:
 	cargo test
-	cd web && npm test
+	cd web && bun test
 
 bundle:
 	scripts/bundle.sh

@@ -59,7 +59,7 @@ final class WebHost: NSObject {
     }
 
     /// The bundled page, or a development server given in `AMGI_WEB_URL`
-    /// (`cd web && npm run dev`, then `AMGI_WEB_URL=http://localhost:5173 swift run`).
+    /// (`make dev`, or `cd web && bun run dev`, then `AMGI_WEB_URL=http://localhost:5173 swift run`).
     private func load() {
         ready = false
         if let dev = ProcessInfo.processInfo.environment["AMGI_WEB_URL"], let url = URL(string: dev) {

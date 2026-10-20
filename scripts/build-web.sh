@@ -6,8 +6,8 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root/web"
 
-[[ -d node_modules ]] || npm ci
-npm run build
+[[ -d node_modules ]] || bun install --frozen-lockfile
+bun run build
 
 out="$root/app/Sources/Amgi/Web"
 rm -rf "$out"
