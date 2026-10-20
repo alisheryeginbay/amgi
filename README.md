@@ -152,7 +152,8 @@ keywords come from GitHub's [gemoji](https://github.com/github/gemoji) (MIT);
 inspected with Safari's Web Inspector (Develop ▸ your Mac ▸ Amgi).
 
 Keys while studying: <kbd>Space</kbd> shows the answer, <kbd>1</kbd>–<kbd>4</kbd> rate
-Again/Hard/Good/Easy, <kbd>R</kbd> replays the card's sounds, <kbd>⌘O</kbd> opens a folder, <kbd>⌘R</kbd> reloads,
+Again/Hard/Good/Easy, <kbd>⌘Z</kbd> takes back the last rating and shows that card again,
+<kbd>R</kbd> replays the card's sounds, <kbd>⌘O</kbd> opens a folder, <kbd>⌘R</kbd> reloads,
 and <kbd>⌘1</kbd>–<kbd>⌘3</kbd> go to Dashboard, Review and Decks. Files also reload
 whenever the app comes to the front.
 

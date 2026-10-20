@@ -37,6 +37,7 @@ struct ShortcutGroup: Identifiable {
             Shortcut("Hard", "2"),
             Shortcut("Good", "3"),
             Shortcut("Easy", "4"),
+            Shortcut("Undo Answer", "⌘", "Z"),
             Shortcut("Replay Audio", "R"),
             Shortcut("Suspend Card", "⌘", "S"),
             Shortcut("Card Info", "⌘", "I"),

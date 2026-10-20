@@ -65,6 +65,8 @@ final class AppModel {
     private(set) var studyInput: StudyInput = .pointer
     var current: StudyCard? { study.card }
     var revealed: Bool { study.revealed }
+    /// Whether an answer given since the folder opened can be taken back with ⌘Z.
+    private(set) var canUndoAnswer = false
     private(set) var importing = false
     private(set) var dashboard: Dashboard?
     /// Every card, as JSON for the browse pane, which narrows it to the deck, tag or
@@ -189,6 +191,7 @@ final class AppModel {
             collection.setUtcOffset(seconds: Int32(TimeZone.current.secondsFromGMT()))
             collection.setDesiredRetention(retention: Float(desiredRetention))
             self.collection = collection
+            self.canUndoAnswer = false
             self.folder = url
             web.collectionRoot = url
             self.selection = .review
@@ -214,6 +217,7 @@ final class AppModel {
         warnings = []
         today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
         study = .none
+        canUndoAnswer = false
         dashboard = nil
         cardsJSON = nil
         cardsStale = true
@@ -380,9 +384,9 @@ final class AppModel {
         refresh()
     }
 
-    /// ⌘S suspends the card being studied and ⌘K opens the More menu; ⌘I shows Card Info
-    /// for that card or the one selected in browse. Caught before any view, so they work
-    /// whether the web view, sidebar or nothing has focus.
+    /// ⌘S suspends the card being studied, ⌘K opens the More menu and ⌘Z takes back the
+    /// last answer; ⌘I shows Card Info for that card or the one selected in browse. Caught
+    /// before any view, so they work whether the web view, sidebar or nothing has focus.
     private func monitorReviewShortcuts() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
@@ -399,6 +403,11 @@ final class AppModel {
                 // Here rather than in the menus, where Edit ▸ Find already has ⌘F.
                 if key == "f", self.isBrowsing, let field = self.searchField, field.window === window {
                     window.makeFirstResponder(field)
+                    return true
+                }
+                // A text field keeps ⌘Z for its own undo.
+                if key == "z", self.selection == .review, !(window.firstResponder is NSText) {
+                    self.undoAnswer()
                     return true
                 }
                 guard key == "s" || key == "k", self.selection == .review, self.current != nil else { return false }
@@ -435,6 +444,13 @@ final class AppModel {
         }
         info.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
         menu.addItem(info)
+        if canUndoAnswer {
+            let undo = ActionMenuItem("Undo Answer", keyEquivalent: "z") { [weak self] in
+                self?.undoAnswer()
+            }
+            undo.image = NSImage(systemSymbolName: "arrow.uturn.backward", accessibilityDescription: nil)
+            menu.addItem(undo)
+        }
         if let view = moreMenuAnchor, view.window != nil {
             let below = NSPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 6 : -6)
             menu.popUp(positioning: nil, at: below, in: view)
@@ -473,9 +489,25 @@ final class AppModel {
         studyInput = input
         withAnimation(input.animation) {
             perform { try collection.answer(cardId: card.id, rating: rating) }
+            canUndoAnswer = collection.canUndoAnswer()
             study = .none
             refresh()
         }
+    }
+
+    /// Take back the last answer and show that card again with its answer, ready to
+    /// be rated anew. Answers can be undone one after another, latest first.
+    func undoAnswer() {
+        guard let collection, canUndoAnswer else {
+            NSSound.beep()
+            return
+        }
+        var card: StudyCard?
+        perform { card = try collection.undoAnswer() }
+        canUndoAnswer = collection.canUndoAnswer()
+        // A card no longer in its file can't be shown, so the next one comes up instead.
+        study = card.map(StudyState.answer) ?? .none
+        refresh()
     }
 
     private func handle(_ message: WebMessage) {

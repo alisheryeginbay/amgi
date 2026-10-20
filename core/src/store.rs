@@ -232,6 +232,7 @@ impl Store {
     }
 
     /// Persist a review: append to the log and upsert the card's state atomically.
+    /// Returns the new state and the review's log row, for `undo_review`.
     #[allow(clippy::too_many_arguments)]
     pub fn record_review(
         &mut self,
@@ -242,7 +243,7 @@ impl Store {
         review_state: ReviewState,
         prev: Option<CardState>,
         outcome: Outcome,
-    ) -> rusqlite::Result<CardState> {
+    ) -> rusqlite::Result<(CardState, i64)> {
         let lapse = u32::from(prev.is_some() && rating == Rating::Again);
         let state = CardState {
             memory: outcome.memory,
@@ -266,9 +267,24 @@ impl Store {
                 state: Some(review_state),
             },
         )?;
+        let review_id = tx.last_insert_rowid();
         upsert_state(&tx, card_id, &state)?;
         tx.commit()?;
-        Ok(state)
+        Ok((state, review_id))
+    }
+
+    /// Take back a review `record_review` logged: remove its log row and put the card's
+    /// state back to `prev`, or make it new again if it had none.
+    pub fn undo_review(&mut self, card_id: &str, review_id: i64, prev: Option<CardState>) -> rusqlite::Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM review_log WHERE id = ?1 AND card_id = ?2", params![review_id, card_id])?;
+        match prev {
+            Some(state) => upsert_state(&tx, card_id, &state)?,
+            None => {
+                tx.execute("DELETE FROM card_state WHERE card_id = ?1", [card_id])?;
+            }
+        }
+        tx.commit()
     }
 
     /// Persist the history and resulting state of many cards in one transaction.
@@ -461,12 +477,12 @@ mod tests {
             },
             interval_secs: 86_400,
         };
-        let s1 = store
+        let (s1, _) = store
             .record_review("abc", 1000, Rating::Good, 0.0, ReviewState::New, None, outcome)
             .unwrap();
         assert_eq!((s1.reps, s1.lapses, s1.due), (1, 0, 87_400));
 
-        let s2 = store
+        let (s2, _) = store
             .record_review("abc", 90_000, Rating::Again, 1.0, ReviewState::Review, Some(s1), outcome)
             .unwrap();
         assert_eq!((s2.reps, s2.lapses), (2, 1));
@@ -482,6 +498,27 @@ mod tests {
         assert_eq!(store.last_review_state("abc").unwrap(), Some(ReviewState::Review));
         assert_eq!(store.last_review_state("other").unwrap(), None);
         assert!(store.reviews("other").unwrap().is_empty());
+    }
+
+    #[test]
+    fn undo_reviews() {
+        let mut store = Store::open_in_memory().unwrap();
+        let outcome = |interval_secs| Outcome { memory: Memory { stability: 2.0, difficulty: 5.0 }, interval_secs };
+        let (s1, r1) = store
+            .record_review("abc", 1000, Rating::Good, 0.0, ReviewState::New, None, outcome(86_400))
+            .unwrap();
+        let (_, r2) = store
+            .record_review("abc", 90_000, Rating::Again, 1.0, ReviewState::Review, Some(s1), outcome(600))
+            .unwrap();
+
+        store.undo_review("abc", r2, Some(s1)).unwrap();
+        assert_eq!(store.state("abc").unwrap(), Some(s1));
+        assert_eq!(store.reviews_since(0).unwrap(), 1);
+        assert_eq!(store.last_review_state("abc").unwrap(), Some(ReviewState::New));
+
+        store.undo_review("abc", r1, None).unwrap();
+        assert_eq!(store.state("abc").unwrap(), None);
+        assert!(store.reviews("abc").unwrap().is_empty());
     }
 
     #[test]

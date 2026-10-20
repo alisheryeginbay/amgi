@@ -334,6 +334,15 @@ struct Inner {
     /// Why the database was reopened while the collection was open, shown with the
     /// warnings until the app restarts.
     store_notice: Option<CollectionWarning>,
+    /// Answers given since the collection was opened, latest last, for `undo_answer`.
+    answered: Vec<Answered>,
+}
+
+/// An answer that can be taken back: the card, its review's log row and its state before.
+struct Answered {
+    card_id: String,
+    review_id: i64,
+    prev: Option<CardState>,
 }
 
 #[derive(uniffi::Object)]
@@ -443,6 +452,18 @@ impl CardCollection {
         self.lock().answer(&card_id, rating, unix_now())
     }
 
+    /// Take back the latest answer not yet undone, removing it from the history.
+    /// Returns its card, scheduled as before, or `None` if there is nothing to undo or
+    /// the card has since left the collection.
+    pub fn undo_answer(&self) -> Result<Option<StudyCard>> {
+        self.lock().undo_answer(unix_now())
+    }
+
+    /// Whether `undo_answer` has an answer to take back.
+    pub fn can_undo_answer(&self) -> bool {
+        !self.lock().answered.is_empty()
+    }
+
     /// `None` for a card no longer in the collection.
     pub fn card_info(&self, card_id: String) -> Result<Option<CardInfo>> {
         self.lock().card_info(&card_id, unix_now())
@@ -503,6 +524,7 @@ impl CardCollection {
             new_per_day: 20,
             utc_offset_secs: 0,
             store_notice: None,
+            answered: Vec::new(),
         };
         inner.reload()?;
         Ok(CardCollection {
@@ -530,6 +552,8 @@ impl Inner {
             Ok((states, store)) => {
                 self.store = store;
                 self.states = states;
+                // Those reviews were in the old file.
+                self.answered.clear();
                 if deleted {
                     "The review database was deleted, so a new one was started.".to_string()
                 } else {
@@ -814,11 +838,29 @@ impl Inner {
                 elapsed,
             ),
         };
-        let state = self
+        let (state, review_id) = self
             .store
             .record_review(card_id, now, rating, elapsed.into(), review_state, prev, outcome)?;
         self.states.insert(card_id.to_string(), state);
+        self.answered.push(Answered { card_id: card_id.to_string(), review_id, prev });
         Ok(())
+    }
+
+    fn undo_answer(&mut self, now: i64) -> Result<Option<StudyCard>> {
+        let Some(answered) = self.answered.pop() else { return Ok(None) };
+        let Answered { card_id, review_id, prev } = answered;
+        if let Err(e) = self.store.undo_review(&card_id, review_id, prev) {
+            self.answered.push(Answered { card_id, review_id, prev });
+            return Err(e.into());
+        }
+        match prev {
+            Some(state) => self.states.insert(card_id.clone(), state),
+            None => self.states.remove(&card_id),
+        };
+        match self.index.get(&card_id) {
+            Some(&i) => self.study_card(&self.cards[i], now).map(Some),
+            None => Ok(None),
+        }
     }
 
     fn add_card(&mut self, card: &NewCard) -> Result<Vec<String>> {
@@ -1210,6 +1252,15 @@ mod tests {
             inner.answer("nope", Rating::Good, T0),
             Err(AmgiError::UnknownCard { .. })
         ));
+
+        // Undo takes answers back latest first, leaving the cards as they were.
+        let undone = inner.undo_answer(T0).unwrap().unwrap();
+        assert_eq!(undone, card2);
+        let undone = inner.undo_answer(T0).unwrap().unwrap();
+        assert_eq!(undone, card);
+        assert!(inner.states.is_empty());
+        assert_eq!(inner.today(T0).unwrap().new_studied, 0);
+        assert!(inner.undo_answer(T0).unwrap().is_none());
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
