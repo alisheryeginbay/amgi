@@ -6,6 +6,7 @@
 pub mod anki;
 pub mod parser;
 pub mod scheduler;
+pub mod search;
 pub mod store;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -82,7 +83,7 @@ pub struct TagInfo {
     pub cards: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
 pub struct DeckInfo {
     /// File path relative to the collection root, without the `.md` extension, or a
     /// folder. A deck contains the decks below it: `lang` holds `lang.md` and the `lang` folder.
@@ -115,7 +116,7 @@ pub struct StudyCard {
 }
 
 /// A card as listed when browsing a deck.
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
 pub struct BrowseCard {
     pub id: String,
     pub deck: String,
@@ -138,7 +139,7 @@ pub struct BrowseCard {
 }
 
 /// Everything known about one card: its content, schedule, memory and review history.
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
 pub struct CardInfo {
     pub id: String,
     pub deck: String,
@@ -170,7 +171,7 @@ pub struct CardInfo {
 }
 
 /// One review of a card, with the memory state and interval it led to.
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
 pub struct CardReview {
     /// Unix seconds.
     pub reviewed_at: i64,
@@ -184,14 +185,14 @@ pub struct CardReview {
     pub was_new: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
 pub struct CollectionWarning {
     pub path: String,
     pub line: u32,
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
 pub struct TodayStats {
     pub reviewed: u32,
     pub new_studied: u32,
@@ -254,7 +255,7 @@ pub struct Imported {
     pub new_cards: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
 pub struct Dashboard {
     /// Reviews per study day, oldest first, ending today.
     pub activity: Vec<u32>,
@@ -296,7 +297,7 @@ impl StudyScope {
 }
 
 /// A named browse search, listed under Saved Views.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record, serde::Serialize)]
 pub struct SavedView {
     pub id: i64,
     pub name: String,

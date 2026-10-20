@@ -11,7 +11,8 @@ pub const AGAIN_DELAY_SECS: i64 = 10 * 60;
 const DAY_SECS: i64 = 86_400;
 const MAX_INTERVAL_DAYS: f32 = 36_500.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, uniffi::Enum, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Rating {
     Again = 1,
     Hard = 2,

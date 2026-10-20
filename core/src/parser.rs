@@ -27,7 +27,8 @@ use std::fmt::Write;
 
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CardKind {
     Basic,
     Cloze,

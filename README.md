@@ -103,10 +103,30 @@ the root, and note tags become `#tag` lines.
   Anki, those get a tagged copy of the cloze of their own.
 - Image occlusion notes are left out.
 
+## Command line
+
+`amgi` reads a collection from the terminal. Install it with `cargo install --path cli`.
+
+```sh
+amgi status                  # cards left today, by deck; --short for one line, empty when done
+amgi check                   # problems in the deck files as path:line: message; exits 1 if any
+amgi search deck:french is:due   # the search syntax above; --view Leeches runs a saved view
+amgi decks                   # every deck with due, new and total counts
+amgi tags                    # every tag with its card count
+amgi info geography.md:12    # a card's schedule and history, by id, path:line or a search
+amgi stats                   # streak, retention, recent reviews and the next two weeks
+```
+
+Every command takes `--json`. `search` exits 1 when nothing matches, and `--ids` prints
+only card ids. `--dir` (or `AMGI_DIR`) picks the collection; without it, `amgi` uses the
+folder holding `.amgi.sqlite` at or above the current one, or else the folder last opened
+in the app.
+
 ## Layout
 
 - `core/`: Rust library containing the parser, FSRS-6 scheduler, SQLite store and the
   `CardCollection` API, exported through [UniFFI](https://mozilla.github.io/uniffi-rs/)
+- `cli/`: the `amgi` command, built on the core
 - `app/`: SwiftUI macOS app (Swift package): the window, sidebar, toolbar and settings
 - `web/`: the study, dashboard and browse panes in [Svelte](https://svelte.dev), shown in
   one web view. The app sends each pane its data and the page sends back what you do;

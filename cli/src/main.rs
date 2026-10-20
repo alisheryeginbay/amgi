@@ -1,0 +1,92 @@
+//! `amgi`: the collection from the terminal.
+
+mod commands;
+mod locate;
+mod text;
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "amgi", version, about = "Plain-text flash cards, from the terminal")]
+struct Cli {
+    /// Collection folder. Defaults to the folder holding `.amgi.sqlite` at or above the
+    /// current one, then to the folder last opened in the app.
+    #[arg(long, short = 'C', global = true, env = "AMGI_DIR", value_name = "PATH")]
+    dir: Option<PathBuf>,
+
+    /// Print JSON instead of text.
+    #[arg(long, global = true)]
+    json: bool,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Cards left to study today, and the decks they're in.
+    Status {
+        /// One line, such as `12 due · 5 new`, or nothing when all caught up.
+        #[arg(long, short)]
+        short: bool,
+    },
+    /// Problems in the deck files, as `path:line: message`. Exits 1 if there are any.
+    Check,
+    /// Find cards with the app's search syntax, such as `deck:french is:due`.
+    Search {
+        /// Search words and filters; all must match. Empty lists every card.
+        query: Vec<String>,
+        /// Run a saved view, such as `Leeches`, combined with any query given.
+        #[arg(long, short)]
+        view: Option<String>,
+        /// Print only card ids, one per line.
+        #[arg(long, conflicts_with = "json")]
+        ids: bool,
+    },
+    /// Every deck, with cards due, new and in total.
+    Decks,
+    /// Every tag, with how many cards have it.
+    Tags,
+    /// A card's schedule, memory and review history.
+    Info {
+        /// A card id, `path:line` (any line of the card), or a search matching one card.
+        card: Vec<String>,
+    },
+    /// Streak, retention, card counts, recent reviews and the coming days' workload.
+    Stats {
+        /// Days of review history to show.
+        #[arg(long, default_value_t = 30)]
+        days: u32,
+    },
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let collection = match locate::open(cli.dir.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("amgi: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let out = commands::Output { json: cli.json };
+    let result = match cli.command {
+        Command::Status { short } => commands::status(&collection, out, short),
+        Command::Check => commands::check(&collection, out),
+        Command::Search { query, view, ids } => commands::search(&collection, out, &query.join(" "), view.as_deref(), ids),
+        Command::Decks => commands::decks(&collection, out),
+        Command::Tags => commands::tags(&collection, out),
+        Command::Info { card } => commands::info(&collection, out, &card.join(" ")),
+        Command::Stats { days } => commands::stats(&collection, out, days),
+    };
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("amgi: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
