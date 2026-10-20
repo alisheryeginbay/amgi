@@ -62,7 +62,7 @@ private struct GeneralSettings: View {
         Form {
             Toggle(isOn: $showMenuBar) {
                 Text("Show in menu bar")
-                Text("Shows how many cards are due. Amgi keeps running when its window is closed.")
+                Text("Shows how many cards are due. \(appName) keeps running when its window is closed.")
             }
             Toggle(isOn: $model.quickAddShortcut) {
                 Text("Add cards from any app with ⌥⌘N")

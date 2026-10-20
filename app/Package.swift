@@ -8,6 +8,12 @@ let coreLibrary = URL(fileURLWithPath: #filePath)
     .appendingPathComponent("../target/amgi/libamgi_core.a")
     .standardized.path
 
+// Debug builds run as a bare executable; this names them Amgi Dev in the menu bar.
+let devInfoPlist = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .appendingPathComponent("DevInfo.plist")
+    .standardized.path
+
 let package = Package(
     name: "Amgi",
     platforms: [.macOS(.v26)],
@@ -23,7 +29,18 @@ let package = Package(
         ),
         // `Web` holds the Svelte panes, built by `scripts/build-web.sh`; `Emoji.tsv` the emoji
         // picker's data, written by `scripts/build-emoji.py`; `Amgi.svg` the welcome screen's
-        // handwriting, written by `scripts/readme-svg.mjs`.
-        .executableTarget(name: "Amgi", dependencies: ["AmgiCore"], resources: [.copy("Web"), .copy("Emoji.tsv"), .copy("Amgi.svg")]),
+        // handwriting, written by `scripts/readme-svg.mjs`; `AmgiDev.icns` the dev build's
+        // violet icon, written by `scripts/build-dev-icon.sh`.
+        .executableTarget(
+            name: "Amgi",
+            dependencies: ["AmgiCore"],
+            resources: [.copy("Web"), .copy("Emoji.tsv"), .copy("Amgi.svg"), .copy("AmgiDev.icns")],
+            linkerSettings: [
+                .unsafeFlags(
+                    ["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", devInfoPlist],
+                    .when(configuration: .debug)
+                ),
+            ]
+        ),
     ]
 )

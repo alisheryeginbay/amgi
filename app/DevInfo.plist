@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Linked into debug builds (`make`, `swift run`) so the menu bar names them Amgi Dev.
+     No bundle identifier, so their settings stay apart from Amgi.app's. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Amgi Dev</string>
+	<key>CFBundleDisplayName</key>
+	<string>Amgi Dev</string>
+</dict>
+</plist>

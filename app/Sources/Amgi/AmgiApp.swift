@@ -9,7 +9,7 @@ struct AmgiApp: App {
 
     var body: some Scene {
         // One main window: a collection is studied in a single place, so no tabs.
-        Window("Amgi", id: "main") {
+        Window(appName, id: "main") {
             ContentView()
                 .environment(model)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -81,6 +81,14 @@ struct AmgiApp: App {
     }
 }
 
+/// Whether this is a development build (`make`, `swift run`) rather than Amgi.app, which
+/// has a bundle identifier. It's called Amgi Dev and its flower is violet, so it isn't
+/// mistaken for the installed app.
+let isDevBuild = Bundle.main.bundleIdentifier == nil
+let appName = isDevBuild ? "Amgi Dev" : "Amgi"
+/// The dev build's petals, in place of forget-me-not blue.
+let devViolet = NSColor(srgbRed: 0x91 / 255, green: 0x5b / 255, blue: 0xef / 255, alpha: 1)
+
 /// Replaces the Help menu's search-only "Amgi Help" item, as there is no help book.
 private struct HelpCommands: Commands {
     @Environment(\.openWindow) private var openWindow
@@ -102,6 +110,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // A bare executable has no icon of its own.
+        if isDevBuild, let url = Bundle.module.url(forResource: "AmgiDev", withExtension: "icns") {
+            NSApp.applicationIconImage = NSImage(contentsOf: url)
+        }
         NSApp.activate()
     }
 

@@ -12,10 +12,21 @@ struct MenuBarLabel: View {
     var body: some View {
         let due = model.totalDue
         HStack(spacing: 3) {
-            Image(systemName: due > 0 ? "rectangle.stack.fill" : "rectangle.stack")
+            symbol(due > 0 ? "rectangle.stack.fill" : "rectangle.stack")
             if due > 0 { Text("\(due)").monospacedDigit() }
         }
-        .accessibilityLabel(due == 0 ? "Amgi: nothing due" : "Amgi: \(due) due")
+        .accessibilityLabel(due == 0 ? "\(appName): nothing due" : "\(appName): \(due) due")
+    }
+
+    /// Violet in the dev build. The menu bar draws SwiftUI images as templates, ignoring
+    /// their colour, so it's an `NSImage` that isn't one.
+    private func symbol(_ name: String) -> Image {
+        guard isDevBuild,
+              let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(paletteColors: [devViolet]))
+        else { return Image(systemName: name) }
+        image.isTemplate = false
+        return Image(nsImage: image)
     }
 }
 
@@ -64,8 +75,8 @@ struct MenuBarMenu: View {
         Divider()
         Button("Add Card…") { model.toggleQuickAdd() }
             .keyboardShortcut("n", modifiers: model.quickAddShortcut ? [.option, .command] : .command)
-        Button("Open Amgi") { showMainWindow() }
-        Button("Quit Amgi") { NSApp.terminate(nil) }
+        Button("Open \(appName)") { showMainWindow() }
+        Button("Quit \(appName)") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 
