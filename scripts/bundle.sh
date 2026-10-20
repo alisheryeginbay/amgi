@@ -39,7 +39,7 @@ scripts/build-web.sh
 swift build -c release --package-path app --scratch-path "$out/swift"
 bin="$(swift build -c release --package-path app --scratch-path "$out/swift" --show-bin-path)"
 
-version="$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml | head -1)"
+version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 build="$(git rev-list --count HEAD)"
 
 rm -rf "$app"

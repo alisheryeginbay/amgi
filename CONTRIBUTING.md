@@ -41,3 +41,11 @@ Debug builds can be inspected with Safari's Web Inspector (Develop ▸ your Mac 
 - `app/Sources/Amgi/AmgiDev.icns`, Amgi Dev's violet icon, is built from `app/Amgi.icon`
   by `scripts/build-dev-icon.sh` (needs Xcode); run it again after changing the icon.
 - `media/amgi.svg`, the handwritten "Amgi" and 암기, is built by `bun scripts/readme-svg.mjs`.
+
+## Versions
+
+The version is set once, under `[workspace.package]` in the root `Cargo.toml`; the
+crates, `amgi --version` and the app's bundle all read it. The app's build number is the
+commit count. Until 1.0, bump the minor version for new features and the patch version
+for fixes, then tag the release commit `vX.Y.Z`. A change to card ids loses review
+history, so call it out in the release.
