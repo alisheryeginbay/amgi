@@ -50,6 +50,10 @@ INSERT INTO saved_view (name, query, icon) VALUES ('Leeches', 'is:leech', '🐞'
 -- `ReviewState`: 0 New, 1 Learning, 2 Review, 3 Relearning; NULL for reviews logged
 -- before this column. A row with rating 0 is a reset: the card became new again.
 ALTER TABLE review_log ADD COLUMN review_state INTEGER;
+"#, r#"
+-- With the rating, counting reviews per day reads only the index.
+DROP INDEX review_log_time;
+CREATE INDEX review_log_time ON review_log (reviewed_at, rating);
 "#];
 
 #[derive(Debug, Clone, Copy, PartialEq)]

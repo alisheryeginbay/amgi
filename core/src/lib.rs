@@ -902,14 +902,16 @@ impl Inner {
         let today = (now + shift).div_euclid(DAY_SECS);
         let first = today - i64::from(activity_days.max(1)) + 1;
 
+        // Every day studied, for the streak; the recent ones fill the activity heatmap.
+        let per_day = self.store.reviews_per_day(0, shift)?;
         let mut activity = vec![0; activity_days.max(1) as usize];
-        for (day, count) in self.store.reviews_per_day(first * DAY_SECS - shift, shift)? {
+        for &(day, count) in &per_day {
             if let Some(slot) = usize::try_from(day - first).ok().and_then(|i| activity.get_mut(i)) {
                 *slot = count;
             }
         }
 
-        let studied: HashSet<i64> = self.store.reviews_per_day(0, shift)?.into_iter().map(|(d, _)| d).collect();
+        let studied: HashSet<i64> = per_day.into_iter().map(|(d, _)| d).collect();
         let from = if studied.contains(&today) { today } else { today - 1 };
         let streak = (0..).take_while(|n| studied.contains(&(from - n))).count() as u32;
 
