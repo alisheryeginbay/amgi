@@ -5,6 +5,7 @@ members = ["core", "cli", "uniffi-bindgen"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [workspace.dependencies]
 uniffi = "0.32.2"

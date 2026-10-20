@@ -40,3 +40,9 @@ cargo install --path cli     # the amgi command
 - [Importing from Anki](docs/anki-import.md)
 - [Command line](docs/cli.md)
 - [Contributing](CONTRIBUTING.md): project layout, building and tests
+
+## License
+
+[MIT](LICENSE). The bundled fonts (Source Serif 4, Brygada 1918 and Noto Serif CJK) are
+under the [SIL Open Font License](https://openfontlicense.org), and the emoji names
+come from GitHub's [gemoji](https://github.com/github/gemoji) (MIT).
