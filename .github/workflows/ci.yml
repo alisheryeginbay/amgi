@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install web dependencies
+        run: cd web && bun install --frozen-lockfile
+
+      - name: Test
+        run: make test
+
+      - name: Check web types
+        run: cd web && bun run check
+
+      - name: Build the app
+        run: PROFILE=debug make build
+
+      - name: Check the example decks
+        run: cargo run -q -p amgi-cli -- check --dir examples

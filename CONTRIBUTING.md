@@ -49,3 +49,28 @@ crates, `amgi --version` and the app's bundle all read it. The app's build numbe
 commit count. Until 1.0, bump the minor version for new features and the patch version
 for fixes, then tag the release commit `vX.Y.Z`. A change to card ids loses review
 history, so call it out in the release.
+
+## Releases
+
+Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`: it builds Amgi.app, signs
+it with the Developer ID, notarizes it and attaches `Amgi-X.Y.Z.zip` to a draft release
+on GitHub. Write the notes there, then publish it. The tag has to match the version in
+`Cargo.toml`.
+
+The workflow needs these repository secrets:
+
+- `DEVELOPER_ID_P12`: the Developer ID Application certificate with its private key,
+  exported from Keychain Access as a .p12 and base64-encoded (`base64 -i cert.p12 | pbcopy`)
+- `DEVELOPER_ID_P12_PASSWORD`: the password chosen when exporting it
+- `NOTARY_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`: an App Store Connect API key
+  (Users and Access ▸ Integrations), the .p8 file's contents and its two ids
+
+To release from this Mac instead:
+
+```sh
+AMGI_SIGN_IDENTITY="Developer ID Application" scripts/bundle.sh
+NOTARY_PROFILE=amgi scripts/notarize.sh   # after `xcrun notarytool store-credentials amgi`
+```
+
+Every push to `main` runs the tests, type checks and a debug build
+(`.github/workflows/ci.yml`).
