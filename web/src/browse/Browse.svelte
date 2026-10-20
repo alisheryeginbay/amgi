@@ -40,7 +40,9 @@
   const cards = $derived.by(() => {
     const browse = app.browse;
     if (!browse) return [];
-    return browse.query ? browse.cards.filter(parseQuery(browse.query)) : browse.cards;
+    const { deck, query } = browse;
+    const inDeck = deck === undefined ? app.cards : app.cards.filter((c) => c.deck === deck || c.deck.startsWith(`${deck}/`));
+    return query ? inDeck.filter(parseQuery(query)) : inDeck;
   });
   // The window subtitle counts them.
   $effect(() => post({ type: "count", count: cards.length }));

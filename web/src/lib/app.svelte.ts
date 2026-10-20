@@ -1,4 +1,4 @@
-import type { BrowseState, DashboardState, Environment, Message, Pane, StudyState } from "./types";
+import type { BrowseCard, BrowseState, DashboardState, Environment, Message, Pane, StudyState } from "./types";
 
 /** Everything the page shows, as last sent by the app. Each part is replaced whole,
  *  never changed in place, so none of it is deeply reactive. */
@@ -6,6 +6,8 @@ class AppState {
   pane = $state.raw<Pane | null>(null);
   study = $state.raw<StudyState | null>(null);
   dashboard = $state.raw<DashboardState | null>(null);
+  /** Every card, sent once and again only when cards change. */
+  cards = $state.raw<BrowseCard[]>([]);
   browse = $state.raw<BrowseState | null>(null);
   search = $state.raw("");
   /** Whether browsing shows the selected card beside the table. */
@@ -17,7 +19,7 @@ class AppState {
 
 export const app = new AppState();
 
-type Part = "pane" | "study" | "dashboard" | "browse" | "search" | "preview" | "icons" | "environment";
+type Part = "pane" | "study" | "dashboard" | "cards" | "browse" | "search" | "preview" | "icons" | "environment";
 
 /** Commands from the app, such as `replay`. */
 export const commands = new EventTarget();

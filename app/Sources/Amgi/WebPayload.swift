@@ -11,7 +11,9 @@ struct WebState {
     var icons: [String: String]
     var study: StudyPayload
     var dashboard: DashboardPayload?
-    /// Only while browsing, so other panes never copy the card list.
+    /// Every card as JSON, once read.
+    var cards: String?
+    /// Which cards to show, while browsing.
     var browse: BrowseSource?
     var search: String
     /// Whether browsing shows the selected card beside the table.
@@ -83,24 +85,14 @@ struct DashboardPayload: Encodable, Equatable {
     }
 }
 
-/// The cards browsed, as the core's JSON, which the page reads as is.
-struct BrowseSource: Equatable {
+/// Which of the cards the browse pane shows.
+struct BrowseSource: Encodable, Equatable {
     /// Changes when another deck, tag or saved view is browsed.
     let scope: String
+    /// Only this deck and its subdecks, if set. Left out of the JSON when `nil`.
+    let deck: String?
     /// The tag's or saved view's search, run by the page before the one typed.
     let query: String
-    /// A JSON array of cards.
-    let cards: String
-
-    /// `{scope, query, cards}`, with the cards spliced in rather than parsed and encoded again.
-    var json: String {
-        #"{"scope":\#(Self.quoted(scope)),"query":\#(Self.quoted(query)),"cards":\#(cards)}"#
-    }
-
-    private static func quoted(_ string: String) -> String {
-        // Encoding a string can't fail.
-        String(decoding: try! JSONEncoder().encode(string), as: UTF8.self)
-    }
 }
 
 /// A card to study.

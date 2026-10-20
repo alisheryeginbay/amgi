@@ -67,9 +67,12 @@ final class AppModel {
     var revealed: Bool { study.revealed }
     private(set) var importing = false
     private(set) var dashboard: Dashboard?
-    /// Cards of the deck being browsed, or every card for a tag or saved view, as JSON
-    /// for the browse pane, which runs their searches.
-    private(set) var browsedJSON = "[]"
+    /// Every card, as JSON for the browse pane, which narrows it to the deck, tag or
+    /// saved view browsed. Sent once and again only when cards change, so moving
+    /// between them sends almost nothing.
+    private(set) var cardsJSON: String?
+    /// Cards changed while nothing was browsed; they're read again when browsing starts.
+    @ObservationIgnored private var cardsStale = true
     /// How many browsed cards match the tag or saved view, as counted by the browse pane.
     private(set) var browsedCount: Int?
     /// The card the Card Info window shows, kept current as cards are studied or edited.
@@ -116,18 +119,17 @@ final class AppModel {
             switch selection {
             case .dashboard: loadDashboard()
             case .review: loadNext()
-            case .cards, .deck, .tag, .view: loadBrowsed()
+            case .cards, .deck, .tag, .view: if cardsStale { loadBrowsed() }
             case .tags, .views: break
             }
         }
     }
 
-    /// The cards being browsed, if any.
-    var browseScope: StudyScope? {
+    /// Whether a deck, tag or saved view's cards are showing.
+    var isBrowsing: Bool {
         switch selection {
-        case .dashboard, .review, .tags, .views: nil
-        case .deck(let name): .deck(name: name)
-        case .cards, .tag, .view: .all
+        case .dashboard, .review, .tags, .views: false
+        case .cards, .deck, .tag, .view: true
         }
     }
 
@@ -211,7 +213,8 @@ final class AppModel {
         today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
         study = .none
         dashboard = nil
-        browsedJSON = "[]"
+        cardsJSON = nil
+        cardsStale = true
         browsedCount = nil
         browseSelection = []
         search = ""
@@ -264,7 +267,8 @@ final class AppModel {
         }
         loadCardInfo()
         if selection == .dashboard { loadDashboard() }
-        if browseScope != nil { loadBrowsed() }
+        // Studying changes cards on every answer; the list waits until it's browsed.
+        if isBrowsing { loadBrowsed() } else { cardsStale = true }
         if current == nil || !revealed { loadNext() }
     }
 
@@ -336,10 +340,10 @@ final class AppModel {
         }
         let browse: BrowseSource? = switch selection {
         case .dashboard, .review, .tags, .views: nil
-        case .cards: BrowseSource(scope: "cards", query: "", cards: browsedJSON)
-        case .deck(let name): BrowseSource(scope: "deck:\(name)", query: "", cards: browsedJSON)
-        case .tag(let tag): BrowseSource(scope: "tag:\(tag)", query: browseQuery, cards: browsedJSON)
-        case .view(let id): BrowseSource(scope: "view:\(id)", query: browseQuery, cards: browsedJSON)
+        case .cards: BrowseSource(scope: "cards", deck: nil, query: "")
+        case .deck(let name): BrowseSource(scope: "deck:\(name)", deck: name, query: "")
+        case .tag(let tag): BrowseSource(scope: "tag:\(tag)", deck: nil, query: browseQuery)
+        case .view(let id): BrowseSource(scope: "view:\(id)", deck: nil, query: browseQuery)
         }
         return WebState(
             pane: pane,
@@ -347,6 +351,7 @@ final class AppModel {
             icons: tagIcons,
             study: StudyPayload(card: current, revealed: revealed, autoplay: autoplay, instant: studyInput == .key),
             dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDue, today: today) } : nil,
+            cards: cardsJSON,
             browse: browse,
             search: search,
             preview: preview
@@ -480,8 +485,9 @@ final class AppModel {
 
     /// Card lists are only read while a deck, tag or saved view is showing.
     func loadBrowsed() {
-        guard let collection, let scope = browseScope else { return }
-        update(\.browsedJSON, collection.cardsJson(scope: scope))
+        guard let collection, isBrowsing else { return }
+        update(\.cardsJSON, collection.cardsJson(scope: .all))
+        cardsStale = false
         // Suspending or editing cards changes them under the selection.
         loadSelectedCards()
     }

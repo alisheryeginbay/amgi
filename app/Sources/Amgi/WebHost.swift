@@ -29,6 +29,7 @@ final class WebHost: NSObject {
     private var sentIcons: [String: String]?
     private var sentStudy: StudyPayload?
     private var sentDashboard: DashboardPayload?
+    private var sentCards: String?
     private var sentBrowse: BrowseSource?
     private var sentSearch: String?
     private var sentPreview: Bool?
@@ -81,9 +82,13 @@ final class WebHost: NSObject {
         if let dashboard = state.dashboard {
             send("dashboard", dashboard, &sentDashboard)
         }
-        if let browse = state.browse, browse != sentBrowse {
-            sentBrowse = browse
-            post("browse", json: browse.json)
+        // Cards first, so the page never narrows the old list to a new deck.
+        if let cards = state.cards, cards != sentCards {
+            sentCards = cards
+            post("cards", json: cards)
+        }
+        if let browse = state.browse {
+            send("browse", browse, &sentBrowse)
         }
         send("pane", state.pane, &sentPane)
     }
@@ -155,6 +160,7 @@ final class WebHost: NSObject {
             sentIcons = nil
             sentStudy = nil
             sentDashboard = nil
+            sentCards = nil
             sentBrowse = nil
             sentSearch = nil
             sentPreview = nil

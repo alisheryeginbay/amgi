@@ -62,12 +62,14 @@ export interface BrowseCard {
   suspended: boolean;
 }
 
+/** Which of the cards to browse. */
 export interface BrowseState {
   /** Changes when another deck, tag or saved view is browsed. */
   scope: string;
+  /** Only this deck and its subdecks; left out for every deck. */
+  deck?: string;
   /** The tag's or saved view's search, applied before the one typed. */
   query: string;
-  cards: BrowseCard[];
 }
 
 export interface Environment {
