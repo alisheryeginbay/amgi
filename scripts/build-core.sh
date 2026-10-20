@@ -11,9 +11,11 @@ cd "$root"
 # Match the app's minimum macOS version (app/Package.swift).
 export MACOSX_DEPLOYMENT_TARGET=26.0
 
-flag=()
-[[ "$profile" == "release" ]] && flag=(--release)
-cargo build -p amgi-core "${flag[@]}"
+if [[ "$profile" == "release" ]]; then
+    cargo build -p amgi-core --release
+else
+    cargo build -p amgi-core
+fi
 
 target="${CARGO_TARGET_DIR:-$root/target}"
 lib="$target/$profile/libamgi_core.dylib"
