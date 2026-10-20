@@ -10,10 +10,16 @@ enum SidebarItem: Hashable {
     case dashboard
     /// Study the whole collection.
     case review
+    /// Browse every card in the collection.
+    case cards
     /// Browse a deck and its subdecks.
     case deck(String)
+    /// List every tag.
+    case tags
     /// Browse cards with this tag, across all decks.
     case tag(String)
+    /// List every saved view.
+    case views
     /// Browse a saved view's search, by its id.
     case view(Int64)
 }
@@ -45,7 +51,7 @@ final class AppModel {
     /// Deck names and titles without counts, for views that only show the decks:
     /// counts change with every answer, these only when files do.
     private(set) var deckNames: [DeckName] = []
-    private(set) var tags: [String] = []
+    private(set) var tags: [TagInfo] = []
     /// Lowercased tag → icon, such as an emoji.
     private(set) var tagIcons: [String: String] = [:]
     private(set) var savedViews: [SavedView] = []
@@ -106,7 +112,8 @@ final class AppModel {
             switch selection {
             case .dashboard: loadDashboard()
             case .review: loadNext()
-            case .deck, .tag, .view: loadBrowsed()
+            case .cards, .deck, .tag, .view: loadBrowsed()
+            case .tags, .views: break
             }
         }
     }
@@ -114,16 +121,16 @@ final class AppModel {
     /// The cards being browsed, if any.
     var browseScope: StudyScope? {
         switch selection {
-        case .dashboard, .review: nil
+        case .dashboard, .review, .tags, .views: nil
         case .deck(let name): .deck(name: name)
-        case .tag, .view: .all
+        case .cards, .tag, .view: .all
         }
     }
 
     /// The search a tag or saved view stands for, applied before the one typed.
     var browseQuery: String {
         switch selection {
-        case .dashboard, .review, .deck: ""
+        case .dashboard, .review, .cards, .deck, .tags, .views: ""
         case .tag(let tag): "#\(tag)"
         case .view(let id): savedView(id)?.query ?? ""
         }
@@ -318,12 +325,14 @@ final class AppModel {
     /// here updates the page.
     func webState(autoplay: Bool, preview: Bool) -> WebState {
         let pane: WebPane = switch selection {
-        case .dashboard: .dashboard
+        // The tag and view lists are native, so the web view is hidden for them.
+        case .dashboard, .tags, .views: .dashboard
         case .review: .study
-        case .deck, .tag, .view: .browse
+        case .cards, .deck, .tag, .view: .browse
         }
         let browse: BrowseSource? = switch selection {
-        case .dashboard, .review: nil
+        case .dashboard, .review, .tags, .views: nil
+        case .cards: BrowseSource(scope: "cards", query: "", cards: browsed)
         case .deck(let name): BrowseSource(scope: "deck:\(name)", query: "", cards: browsed)
         case .tag(let tag): BrowseSource(scope: "tag:\(tag)", query: browseQuery, cards: browsed)
         case .view(let id): BrowseSource(scope: "view:\(id)", query: browseQuery, cards: browsed)

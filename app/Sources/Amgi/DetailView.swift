@@ -13,6 +13,19 @@ struct DetailView: View {
     @AppStorage(browsePreviewKey) private var preview = true
 
     var body: some View {
+        Group {
+            switch model.selection {
+            case .tags: TagList()
+            case .views: SavedViewList()
+            default: web
+            }
+        }
+        .navigationTitle(title)
+        .navigationSubtitle(subtitle)
+        .toolbar { DetailToolbar() }
+    }
+
+    private var web: some View {
         WebContent(host: model.web, state: model.webState(autoplay: autoplay, preview: preview))
             // Glass lives only on the floating controls, over the content, which scrolls
             // beneath them. The page leaves room below for them.
@@ -31,15 +44,15 @@ struct DetailView: View {
                     )
                 }
             }
-            .navigationTitle(title)
-            .navigationSubtitle(subtitle)
-            .toolbar { DetailToolbar() }
     }
 
     private var title: String {
         switch model.selection {
         case .dashboard: "Dashboard"
         case .review: model.folder?.lastPathComponent ?? "All Cards"
+        case .cards: "All Cards"
+        case .tags: "Tags"
+        case .views: "Saved Views"
         case .tag(let tag): model.icon(forTag: tag).map { "\($0) \(tag)" } ?? "#\(tag)"
         case .deck(let name): model.deckNames.first { $0.name == name }?.title ?? deckTitle(name)
         case .view(let id): model.savedView(id).map { view in view.icon.map { "\($0) \(view.name)" } ?? view.name } ?? ""
@@ -50,7 +63,9 @@ struct DetailView: View {
         switch model.selection {
         case .dashboard: model.folder?.lastPathComponent ?? ""
         case .review: "\(model.totalDue) due · \(model.today.newAvailable) new"
-        case .deck, .tag, .view: model.browsedCount.map { $0 == 1 ? "1 card" : "\($0) cards" } ?? ""
+        case .tags: model.tags.count == 1 ? "1 tag" : "\(model.tags.count) tags"
+        case .views: model.savedViews.count == 1 ? "1 view" : "\(model.savedViews.count) views"
+        case .cards, .deck, .tag, .view: model.browsedCount.map { $0 == 1 ? "1 card" : "\($0) cards" } ?? ""
         }
     }
 }
@@ -91,7 +106,7 @@ private struct DetailToolbar: ToolbarContent {
                     .help("Open \(card.path), line \(card.line)")
                 }
             }
-        case .deck, .tag, .view:
+        case .cards, .deck, .tag, .view:
             ToolbarItem {
                 let card = model.selectedBrowseCard
                 Button {
@@ -124,7 +139,7 @@ private struct DetailToolbar: ToolbarContent {
                 .disabled(model.search.trimmingCharacters(in: .whitespaces).isEmpty)
                 .help("Save Search: add it to Saved Views in the sidebar")
             }
-        case .dashboard:
+        case .dashboard, .tags, .views:
             ToolbarItem { EmptyView() }
         }
     }

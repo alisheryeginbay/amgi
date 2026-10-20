@@ -75,6 +75,14 @@ impl From<rusqlite::Error> for AmgiError {
 type Result<T, E = AmgiError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TagInfo {
+    /// Without `#`, in the spelling first seen.
+    pub name: String,
+    /// Cards with this tag, in any spelling.
+    pub cards: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct DeckInfo {
     /// File path relative to the collection root, without the `.md` extension, or a
     /// folder. A deck contains the decks below it: `lang` holds `lang.md` and the `lang` folder.
@@ -376,7 +384,7 @@ impl CardCollection {
     }
 
     /// Every tag in the collection, sorted, in the spelling first seen.
-    pub fn tags(&self) -> Vec<String> {
+    pub fn tags(&self) -> Vec<TagInfo> {
         self.lock().tags()
     }
 
@@ -577,16 +585,26 @@ impl Inner {
         self.cards.iter().filter(move |c| scope.contains(c))
     }
 
-    fn tags(&self) -> Vec<String> {
-        let mut tags: Vec<&String> = Vec::new();
-        let mut seen = HashSet::new();
-        for tag in self.cards.iter().flat_map(|c| &c.parsed.tags) {
-            if seen.insert(tag.to_lowercase()) {
-                tags.push(tag);
+    fn tags(&self) -> Vec<TagInfo> {
+        // Lowercased tag → its index in `tags`.
+        let mut index: HashMap<String, usize> = HashMap::new();
+        let mut tags: Vec<TagInfo> = Vec::new();
+        for card in &self.cards {
+            // A card counts once per tag, however many spellings it has.
+            let mut counted = HashSet::new();
+            for tag in &card.parsed.tags {
+                let key = tag.to_lowercase();
+                let i = *index.entry(key.clone()).or_insert_with(|| {
+                    tags.push(TagInfo { name: tag.clone(), cards: 0 });
+                    tags.len() - 1
+                });
+                if counted.insert(key) {
+                    tags[i].cards += 1;
+                }
             }
         }
-        tags.sort_by_key(|t| t.to_lowercase());
-        tags.into_iter().cloned().collect()
+        tags.sort_by_key(|t| t.name.to_lowercase());
+        tags
     }
 
     fn decks(&self, now: i64) -> Result<Vec<DeckInfo>> {
@@ -1390,7 +1408,8 @@ mod tests {
             ("en.md", "Q: run\nA: бегать\n#Verbs #lang\n"),
         ]);
         let inner = c.lock();
-        assert_eq!(inner.tags(), ["lang", "Verbs"]);
+        let tags: Vec<_> = inner.tags().into_iter().map(|t| (t.name, t.cards)).collect();
+        assert_eq!(tags, [("lang".into(), 3), ("Verbs".into(), 2)]);
         let titles: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.title).collect();
         assert_eq!(titles, ["en", "Korean"]);
         let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
@@ -1510,7 +1529,8 @@ mod tests {
         let names: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.name).collect();
         assert_eq!(names, ["Default", "Default 2", "Lang", "Lang/Kazakh-Verbs"]);
         assert_eq!(inner.decks(T0).unwrap()[3].title, "Kazakh/Verbs");
-        assert_eq!(inner.tags(), ["geo", "suspended"]);
+        let names: Vec<_> = inner.tags().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["geo", "suspended"]);
         let card = inner.cards.iter().find(|c| c.parsed.front == "сәлем").unwrap();
         let state = inner.states[&card.parsed.id];
         // Due on the card's day in Anki (day 5), not 3 days after its last review as logged.

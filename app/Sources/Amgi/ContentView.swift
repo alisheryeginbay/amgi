@@ -186,9 +186,14 @@ private struct Sidebar: View {
     @Environment(AppModel.self) private var model
     @State private var showingWarnings = false
     @State private var expanded: Set<String> = []
+    @AppStorage("cardsExpanded") private var cardsExpanded = true
     @AppStorage("decksExpanded") private var decksExpanded = true
     @AppStorage("tagsExpanded") private var tagsExpanded = true
     @AppStorage("viewsExpanded") private var viewsExpanded = true
+
+    private var hasCards: Bool {
+        !model.deckNames.isEmpty || !model.savedViews.isEmpty || !model.tags.isEmpty
+    }
 
     var body: some View {
         @Bindable var model = model
@@ -200,24 +205,37 @@ private struct Sidebar: View {
                     .tag(SidebarItem.review)
             }
             // Sections collapse from the chevron shown when hovering the header.
-            if !model.deckNames.isEmpty {
-                Section("Decks", isExpanded: $decksExpanded) {
-                    ForEach(DeckNode.tree(decks: model.deckNames)) { node in
-                        DeckTree(node: node, expanded: $expanded)
+            if hasCards {
+                Section("Cards", isExpanded: $cardsExpanded) {
+                    if !model.deckNames.isEmpty {
+                        DisclosureGroup(isExpanded: $decksExpanded) {
+                            ForEach(DeckNode.tree(decks: model.deckNames)) { node in
+                                DeckTree(node: node, expanded: $expanded)
+                            }
+                        } label: {
+                            Label("Decks", systemImage: "rectangle.portrait.on.rectangle.portrait")
+                                .tag(SidebarItem.cards)
+                        }
                     }
-                }
-            }
-            if !model.savedViews.isEmpty {
-                Section("Saved Views", isExpanded: $viewsExpanded) {
-                    ForEach(model.savedViews, id: \.id) { view in
-                        SavedViewRow(view: view)
+                    if !model.savedViews.isEmpty {
+                        DisclosureGroup(isExpanded: $viewsExpanded) {
+                            ForEach(model.savedViews, id: \.id) { view in
+                                SavedViewRow(view: view)
+                            }
+                        } label: {
+                            Label("Saved Views", systemImage: "line.3.horizontal.decrease.circle")
+                                .tag(SidebarItem.views)
+                        }
                     }
-                }
-            }
-            if !model.tags.isEmpty {
-                Section("Tags", isExpanded: $tagsExpanded) {
-                    ForEach(model.tags, id: \.self) { tag in
-                        TagRow(tag: tag)
+                    if !model.tags.isEmpty {
+                        DisclosureGroup(isExpanded: $tagsExpanded) {
+                            ForEach(model.tags, id: \.name) { tag in
+                                TagRow(tag: tag.name)
+                            }
+                        } label: {
+                            Label("Tags", systemImage: "number")
+                                .tag(SidebarItem.tags)
+                        }
                     }
                 }
             }
