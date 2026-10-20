@@ -9,7 +9,7 @@ struct TagList: View {
         if model.tags.isEmpty {
             ContentUnavailableView("No Tags", systemImage: "number", description: Text("Add #tags to cards to group them across decks."))
         } else {
-            List(model.tags, id: \.name) { tag in
+            LinkList(model.tags, id: \.name) { tag in
                 LinkRow {
                     model.selection = .tag(tag.name)
                 } icon: {
@@ -38,7 +38,7 @@ struct SavedViewList: View {
                 description: Text("Search while browsing cards, then save the search.")
             )
         } else {
-            List(model.savedViews, id: \.id) { view in
+            LinkList(model.savedViews, id: \.id) { view in
                 LinkRow {
                     model.selection = .view(view.id)
                 } icon: {
@@ -50,6 +50,29 @@ struct SavedViewList: View {
                         .font(.callout.monospaced())
                 }
             }
+        }
+    }
+}
+
+/// Rows in a lazy stack rather than a `List`: a `List` builds a table view, which took
+/// about 75 ms to show or remove with a few hundred rows.
+private struct LinkList<Data: RandomAccessCollection, ID: Hashable, Row: View>: View {
+    let data: Data
+    let id: KeyPath<Data.Element, ID>
+    @ViewBuilder let row: (Data.Element) -> Row
+
+    init(_ data: Data, id: KeyPath<Data.Element, ID>, @ViewBuilder row: @escaping (Data.Element) -> Row) {
+        self.data = data
+        self.id = id
+        self.row = row
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(data, id: id, content: row)
+            }
+            .padding(10)
         }
     }
 }
