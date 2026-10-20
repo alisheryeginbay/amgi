@@ -53,9 +53,17 @@ history, so call it out in the release.
 ## Releases
 
 Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`: it builds Amgi.app, signs
-it with the Developer ID, notarizes it and attaches `Amgi-X.Y.Z.zip` to a draft release
-on GitHub. Write the notes there, then publish it. The tag has to match the version in
-`Cargo.toml`.
+it with the Developer ID, notarizes it and attaches it to a draft release on GitHub as
+`Amgi-X.Y.Z.dmg` and `Amgi-X.Y.Z.zip`. Write the notes there, then publish it. The tag
+has to match the version in `Cargo.toml`.
+
+The disk image is made by [dmgbuild](https://dmgbuild.readthedocs.io), run through
+[uv](https://docs.astral.sh/uv/); `scripts/dmg-settings.py` places the icons to match
+the drawn arrow in `media/dmg-background.tiff`. That background comes from the separate
+amgi-install repo as one TIFF with a 1x and a 2x image, a dpi for each and a color
+profile: replace it as a whole and don't convert, resize or strip it, or Finder loses
+the Retina image. `scripts/dmg.sh path/to/Amgi.app` builds an unsigned image to check
+the layout.
 
 The workflow needs these repository secrets:
 
@@ -69,7 +77,8 @@ To release from this Mac instead:
 
 ```sh
 AMGI_SIGN_IDENTITY="Developer ID Application" scripts/bundle.sh
-NOTARY_PROFILE=amgi scripts/notarize.sh   # after `xcrun notarytool store-credentials amgi`
+NOTARY_PROFILE=amgi scripts/notarize.sh   # after `xcrun notarytool store-credentials amgi`;
+                                          # writes the .zip and the .dmg
 ```
 
 Every push to `main` runs the tests, type checks and a debug build

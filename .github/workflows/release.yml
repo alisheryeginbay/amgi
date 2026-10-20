@@ -1,5 +1,6 @@
 # Pushing a tag `vX.Y.Z` builds Amgi.app, signs it with the Developer ID, notarizes it
-# and attaches it to a draft GitHub release. Needs these repository secrets:
+# and attaches it, as a disk image and a zip, to a draft GitHub release. Needs these
+# repository secrets:
 #   DEVELOPER_ID_P12           the Developer ID Application certificate and key, base64
 #   DEVELOPER_ID_P12_PASSWORD  the .p12's password
 #   NOTARY_KEY                 an App Store Connect API key (.p8 contents)
@@ -22,6 +23,7 @@ jobs:
           fetch-depth: 0 # the build number is the commit count
       - uses: dtolnay/rust-toolchain@stable
       - uses: oven-sh/setup-bun@v2
+      - uses: astral-sh/setup-uv@v6 # runs dmgbuild
 
       - name: Check the tag matches the version
         run: |
@@ -56,6 +58,7 @@ jobs:
 
       - name: Notarize
         env:
+          AMGI_SIGN_IDENTITY: Developer ID Application
           NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
@@ -70,5 +73,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" target/bundle/Amgi-*.zip \
+          gh release create "$GITHUB_REF_NAME" target/bundle/Amgi-*.dmg target/bundle/Amgi-*.zip \
             --draft --generate-notes --title "Amgi ${GITHUB_REF_NAME#v}"
