@@ -384,6 +384,20 @@ impl CardCollection {
         self.lock().browse(&scope)
     }
 
+    /// `cards` as a JSON array, for the browse pane. Writing it here skips converting
+    /// every card to Swift and back, which takes most of the time for large decks.
+    pub fn cards_json(&self, scope: StudyScope) -> String {
+        // Plain structs of strings and numbers always serialize.
+        serde_json::to_string(&self.lock().browse(&scope)).expect("cards serialize")
+    }
+
+    /// The cards with these ids, in file order. Unknown ids are skipped.
+    pub fn cards_with_ids(&self, ids: Vec<String>) -> Vec<BrowseCard> {
+        let ids: HashSet<String> = ids.into_iter().collect();
+        let inner = self.lock();
+        inner.browse_where(&StudyScope::All, |card| ids.contains(&card.parsed.id))
+    }
+
     /// Every tag in the collection, sorted, in the spelling first seen.
     pub fn tags(&self) -> Vec<TagInfo> {
         self.lock().tags()
@@ -655,7 +669,12 @@ impl Inner {
     }
 
     fn browse(&self, scope: &StudyScope) -> Vec<BrowseCard> {
+        self.browse_where(scope, |_| true)
+    }
+
+    fn browse_where(&self, scope: &StudyScope, keep: impl Fn(&Card) -> bool) -> Vec<BrowseCard> {
         self.in_scope(scope)
+            .filter(|card| keep(card))
             .map(|card| {
                 let state = self.states.get(&card.parsed.id);
                 BrowseCard {
@@ -1269,6 +1288,20 @@ mod tests {
         fs::rename(&saved, &db).unwrap();
         assert_eq!(reps(&c), 1);
         assert!(c.warnings()[0].message.contains("replaced"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn browse_cards_as_json_and_by_id() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: one\n#x\n\nQ: 2\nA: two\n")]);
+        let cards = c.cards(StudyScope::All);
+        let json: serde_json::Value = serde_json::from_str(&c.cards_json(StudyScope::All)).unwrap();
+        assert_eq!(json[0]["front"], "1");
+        assert_eq!(json[0]["kind"], "basic");
+        assert_eq!(json[0]["tags"], serde_json::json!(["x"]));
+        assert_eq!(json[1]["due"], serde_json::Value::Null);
+        let found = c.cards_with_ids(vec![cards[1].id.clone(), "missing".into()]);
+        assert_eq!(found, [cards[1].clone()]);
         fs::remove_dir_all(dir).unwrap();
     }
 

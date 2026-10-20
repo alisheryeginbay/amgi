@@ -83,29 +83,27 @@ struct DashboardPayload: Encodable, Equatable {
     }
 }
 
-/// The cards browsed, kept as the core's records so comparing them is cheap; they
-/// are only converted when they change.
+/// The cards browsed, as the core's JSON, which the page reads as is.
 struct BrowseSource: Equatable {
     /// Changes when another deck, tag or saved view is browsed.
     let scope: String
     /// The tag's or saved view's search, run by the page before the one typed.
     let query: String
-    let cards: [BrowseCard]
-}
+    /// A JSON array of cards.
+    let cards: String
 
-struct BrowsePayload: Encodable {
-    let scope: String
-    let query: String
-    let cards: [CardPayload]
+    /// `{scope, query, cards}`, with the cards spliced in rather than parsed and encoded again.
+    var json: String {
+        #"{"scope":\#(Self.quoted(scope)),"query":\#(Self.quoted(query)),"cards":\#(cards)}"#
+    }
 
-    init(_ source: BrowseSource) {
-        scope = source.scope
-        query = source.query
-        cards = source.cards.map(CardPayload.init)
+    private static func quoted(_ string: String) -> String {
+        // Encoding a string can't fail.
+        String(decoding: try! JSONEncoder().encode(string), as: UTF8.self)
     }
 }
 
-/// A card to show, from study or browsing. Fields a card lacks are left out.
+/// A card to study.
 struct CardPayload: Encodable {
     let id: String
     let deck: String
@@ -115,12 +113,6 @@ struct CardPayload: Encodable {
     let kind: String
     let front: String
     let back: String
-    var due: Int64?
-    var reps: UInt32?
-    var lapses: UInt32?
-    var suspended: Bool?
-
-    enum CodingKeys: CodingKey { case id, deck, tags, path, line, kind, front, back, due, reps, lapses, suspended }
 
     init(_ card: StudyCard) {
         id = card.id
@@ -131,40 +123,6 @@ struct CardPayload: Encodable {
         kind = card.kind.name
         front = card.front
         back = card.back
-    }
-
-    init(_ card: BrowseCard) {
-        id = card.id
-        deck = card.deck
-        tags = card.tags
-        path = card.path
-        line = card.line
-        kind = card.kind.name
-        front = card.front
-        back = card.back
-        due = card.due
-        reps = card.reps
-        lapses = card.lapses
-        suspended = card.suspended
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(id, forKey: .id)
-        try c.encode(deck, forKey: .deck)
-        try c.encode(tags, forKey: .tags)
-        try c.encode(path, forKey: .path)
-        try c.encode(line, forKey: .line)
-        try c.encode(kind, forKey: .kind)
-        try c.encode(front, forKey: .front)
-        try c.encode(back, forKey: .back)
-        // Browse cards send `null` for a new card's due date; study cards leave all three out.
-        if reps != nil {
-            try c.encode(due, forKey: .due)
-            try c.encode(reps, forKey: .reps)
-            try c.encode(lapses, forKey: .lapses)
-            try c.encode(suspended, forKey: .suspended)
-        }
     }
 }
 

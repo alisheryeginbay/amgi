@@ -67,9 +67,9 @@ final class AppModel {
     var revealed: Bool { study.revealed }
     private(set) var importing = false
     private(set) var dashboard: Dashboard?
-    /// Cards of the deck being browsed, or every card for a tag or saved view: the
-    /// browse pane runs their searches.
-    private(set) var browsed: [BrowseCard] = []
+    /// Cards of the deck being browsed, or every card for a tag or saved view, as JSON
+    /// for the browse pane, which runs their searches.
+    private(set) var browsedJSON = "[]"
     /// How many browsed cards match the tag or saved view, as counted by the browse pane.
     private(set) var browsedCount: Int?
     /// The card the Card Info window shows, kept current as cards are studied or edited.
@@ -78,7 +78,11 @@ final class AppModel {
     /// Opens the Card Info window. Set by the main window's view, which can open windows.
     @ObservationIgnored var openCardInfoWindow: () -> Void = {}
     /// Cards selected in the browse table.
-    var browseSelection: Set<String> = []
+    var browseSelection: Set<String> = [] {
+        didSet { loadSelectedCards() }
+    }
+    /// The cards in `browseSelection`, for the toolbar and context menu.
+    private(set) var selectedCards: [BrowseCard] = []
     /// The browse search, as typed.
     var search = ""
     var errorMessage: String?
@@ -207,7 +211,7 @@ final class AppModel {
         today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
         study = .none
         dashboard = nil
-        browsed = []
+        browsedJSON = "[]"
         browsedCount = nil
         browseSelection = []
         search = ""
@@ -332,10 +336,10 @@ final class AppModel {
         }
         let browse: BrowseSource? = switch selection {
         case .dashboard, .review, .tags, .views: nil
-        case .cards: BrowseSource(scope: "cards", query: "", cards: browsed)
-        case .deck(let name): BrowseSource(scope: "deck:\(name)", query: "", cards: browsed)
-        case .tag(let tag): BrowseSource(scope: "tag:\(tag)", query: browseQuery, cards: browsed)
-        case .view(let id): BrowseSource(scope: "view:\(id)", query: browseQuery, cards: browsed)
+        case .cards: BrowseSource(scope: "cards", query: "", cards: browsedJSON)
+        case .deck(let name): BrowseSource(scope: "deck:\(name)", query: "", cards: browsedJSON)
+        case .tag(let tag): BrowseSource(scope: "tag:\(tag)", query: browseQuery, cards: browsedJSON)
+        case .view(let id): BrowseSource(scope: "view:\(id)", query: browseQuery, cards: browsedJSON)
         }
         return WebState(
             pane: pane,
@@ -351,8 +355,7 @@ final class AppModel {
 
     /// The one browsed card selected, if exactly one is.
     var selectedBrowseCard: BrowseCard? {
-        guard browseSelection.count == 1, let id = browseSelection.first else { return nil }
-        return browsed.first { $0.id == id }
+        selectedCards.count == 1 ? selectedCards.first : nil
     }
 
     /// Suspend or unsuspend cards; the next card comes up if the one studied is suspended.
@@ -431,7 +434,7 @@ final class AppModel {
 
     /// Right-click items for browse rows.
     private func menuItems(for ids: [String]) -> [NSMenuItem] {
-        let cards = browsed.filter { ids.contains($0.id) }
+        let cards = collection?.cardsWithIds(ids: ids) ?? []
         guard !cards.isEmpty else { return [] }
         var items: [NSMenuItem] = []
         if cards.count == 1, let card = cards.first {
@@ -478,7 +481,14 @@ final class AppModel {
     /// Card lists are only read while a deck, tag or saved view is showing.
     func loadBrowsed() {
         guard let collection, let scope = browseScope else { return }
-        update(\.browsed, collection.cards(scope: scope))
+        update(\.browsedJSON, collection.cardsJson(scope: scope))
+        // Suspending or editing cards changes them under the selection.
+        loadSelectedCards()
+    }
+
+    private func loadSelectedCards() {
+        let cards = browseSelection.isEmpty ? [] : collection?.cardsWithIds(ids: Array(browseSelection)) ?? []
+        update(\.selectedCards, cards)
     }
 
     func loadNext() {

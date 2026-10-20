@@ -83,7 +83,7 @@ final class WebHost: NSObject {
         }
         if let browse = state.browse, browse != sentBrowse {
             sentBrowse = browse
-            post("browse", BrowsePayload(browse))
+            post("browse", json: browse.json)
         }
         send("pane", state.pane, &sentPane)
     }
@@ -132,6 +132,10 @@ final class WebHost: NSObject {
 
     private func post(_ part: String, _ value: some Encodable) {
         guard let data = try? JSONEncoder().encode(value), let json = String(data: data, encoding: .utf8) else { return }
+        post(part, json: json)
+    }
+
+    private func post(_ part: String, json: String) {
         webView.callAsyncJavaScript(
             "window.amgi.receive(part, json)",
             arguments: ["part": part, "json": json],
