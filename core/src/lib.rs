@@ -37,6 +37,9 @@ const DAY_SECS: i64 = 86_400;
 const DEFAULT_ROLLOVER_HOUR: u8 = 4;
 /// When nothing else is left, a failed card due back within this window is shown early.
 const LEARN_AHEAD_SECS: i64 = 20 * 60;
+/// Keys of the settings kept in the collection's database.
+const RETENTION_KEY: &str = "desired_retention";
+const ROLLOVER_HOUR_KEY: &str = "rollover_hour";
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum AmgiError {
@@ -419,8 +422,34 @@ impl CardCollection {
 
     /// The hour (0–23, local time) a new study day starts. Cards on intervals of a day
     /// or more are due from the start of their day.
-    pub fn set_rollover_hour(&self, hour: u8) {
-        self.lock().rollover_secs = i64::from(hour.min(23)) * 3600;
+    pub fn rollover_hour(&self) -> u8 {
+        (self.lock().rollover_secs / 3600) as u8
+    }
+
+    /// Set and save the hour a new study day starts, clamped to 0–23.
+    pub fn set_rollover_hour(&self, hour: u8) -> Result<()> {
+        let mut inner = self.lock();
+        let hour = hour.min(23);
+        inner.store.set_setting(ROLLOVER_HOUR_KEY, hour.into())?;
+        inner.rollover_secs = i64::from(hour) * 3600;
+        Ok(())
+    }
+
+    /// Settings kept by the app before collections kept their own: each is saved only if
+    /// the collection has none yet, so schedules don't change on upgrading.
+    pub fn adopt_settings(&self, desired_retention: Option<f32>, rollover_hour: Option<u8>) -> Result<()> {
+        let inner = self.lock();
+        let unset = |key| inner.store.setting(key).map(|v| v.is_none());
+        let retention = desired_retention.filter(|_| unset(RETENTION_KEY).unwrap_or(false));
+        let hour = rollover_hour.filter(|_| unset(ROLLOVER_HOUR_KEY).unwrap_or(false));
+        drop(inner);
+        if let Some(retention) = retention {
+            self.set_desired_retention(retention)?;
+        }
+        if let Some(hour) = hour {
+            self.set_rollover_hour(hour)?;
+        }
+        Ok(())
     }
 
     /// When the current study day started (Unix seconds), for searches like `is:due`.
@@ -430,8 +459,17 @@ impl CardCollection {
     }
 
     /// Target probability of recall when a card comes due, between 0.7 and 0.99.
-    pub fn set_desired_retention(&self, retention: f32) {
-        self.lock().scheduler.desired_retention = retention.clamp(0.7, 0.99);
+    pub fn desired_retention(&self) -> f32 {
+        self.lock().scheduler.desired_retention
+    }
+
+    /// Set and save the desired retention, clamped to 0.7–0.99.
+    pub fn set_desired_retention(&self, retention: f32) -> Result<()> {
+        let mut inner = self.lock();
+        let retention = retention.clamp(0.7, 0.99);
+        inner.store.set_setting(RETENTION_KEY, retention.into())?;
+        inner.scheduler.desired_retention = retention;
+        Ok(())
     }
 
     /// Every deck and folder, parents before children. Counts include subdecks.
@@ -642,6 +680,7 @@ impl CardCollection {
             store_notice: None,
             answered: Vec::new(),
         };
+        inner.load_settings()?;
         inner.reload()?;
         Ok(CardCollection {
             inner: Mutex::new(inner),
@@ -657,6 +696,17 @@ impl CardCollection {
 }
 
 impl Inner {
+    /// Read the collection's own settings; those it doesn't have keep their values.
+    fn load_settings(&mut self) -> rusqlite::Result<()> {
+        if let Some(retention) = self.store.setting(RETENTION_KEY)? {
+            self.scheduler.desired_retention = (retention as f32).clamp(0.7, 0.99);
+        }
+        if let Some(hour) = self.store.setting(ROLLOVER_HOUR_KEY)? {
+            self.rollover_secs = hour.clamp(0.0, 23.0) as i64 * 3600;
+        }
+        Ok(())
+    }
+
     /// If the database file was deleted or replaced while open, switch to whatever is
     /// at its path now, as a restart would: a new, empty database if it was deleted.
     /// Otherwise writes would go to a file that is gone.
@@ -668,6 +718,9 @@ impl Inner {
             Ok((states, store)) => {
                 self.store = store;
                 self.states = states;
+                // A new database has none, so the settings in use carry on, as they
+                // also do if it can't be read: its states just were.
+                self.load_settings().ok();
                 // Those reviews were in the old file.
                 self.answered.clear();
                 if deleted {
@@ -1589,8 +1642,28 @@ mod tests {
 
         // A later rollover hour moves the day's start.
         drop(inner);
-        c.set_rollover_hour(6);
+        c.set_rollover_hour(6).unwrap();
         assert_eq!(c.lock().day_start(T0 + DAY_SECS) - today, DAY_SECS + 2 * hour);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn settings_are_kept_in_the_collection() {
+        let (dir, _) = collection(&[("a.md", "Q: 1\nA: -\n")]);
+        let open = || CardCollection::open(dir.to_string_lossy().into_owned()).unwrap();
+        let c = open();
+        assert_eq!((c.desired_retention(), c.rollover_hour()), (0.9, 4));
+        // The app's settings from before are taken on.
+        c.adopt_settings(Some(0.85), Some(3)).unwrap();
+        assert_eq!((c.desired_retention(), c.rollover_hour()), (0.85, 3));
+        c.set_rollover_hour(30).unwrap();
+        drop(c);
+
+        // Reopened, the collection keeps its own and no longer takes the app's.
+        let c = open();
+        assert_eq!((c.desired_retention(), c.rollover_hour()), (0.85, 23));
+        c.adopt_settings(Some(0.95), Some(5)).unwrap();
+        assert_eq!((c.desired_retention(), c.rollover_hour()), (0.85, 23));
         fs::remove_dir_all(dir).unwrap();
     }
 

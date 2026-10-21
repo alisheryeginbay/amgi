@@ -25,8 +25,28 @@ private struct StudySettings: View {
     @AppStorage(studyProgressKey) private var studyProgress = true
 
     var body: some View {
-        @Bindable var model = model
         Form {
+            Section {
+                schedule
+            } footer: {
+                Text(model.folder == nil
+                    ? "Open a collection to change these. Each collection keeps its own."
+                    : "Saved with this collection, so the app and the amgi command agree.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Section {
+                options
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 440)
+    }
+
+    @ViewBuilder private var schedule: some View {
+        @Bindable var model = model
+        Group {
             LabeledContent {
                 HStack {
                     Slider(value: $model.desiredRetention, in: AppModel.retentionRange, step: 0.01)
@@ -47,17 +67,19 @@ private struct StudySettings: View {
                 Text("Next day starts at")
                 Text("Cards are due for the whole day. Studying after midnight but before this hour counts as the day before. 4 AM suits most people.")
             }
-            Toggle(isOn: $autoplaySounds) {
-                Text("Play audio automatically")
-                Text("Sounds play when a card or its answer appears. Press R to replay them.")
-            }
-            Toggle(isOn: $studyProgress) {
-                Text("Show progress bar")
-                Text("Fills as you work through today's due, learning and new cards.")
-            }
         }
-        .formStyle(.grouped)
-        .frame(width: 440)
+        .disabled(model.folder == nil)
+    }
+
+    @ViewBuilder private var options: some View {
+        Toggle(isOn: $autoplaySounds) {
+            Text("Play audio automatically")
+            Text("Sounds play when a card or its answer appears. Press R to replay them.")
+        }
+        Toggle(isOn: $studyProgress) {
+            Text("Show progress bar")
+            Text("Fills as you work through today's due, learning and new cards.")
+        }
     }
 
     /// The hour as the Mac shows times, such as `4 AM` or `04:00`.

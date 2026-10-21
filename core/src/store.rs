@@ -63,6 +63,12 @@ CREATE INDEX review_log_time ON review_log (reviewed_at, rating);
 UPDATE card_state
 SET due = last_review + (due - last_review + 86399) / 86400 * 86400
 WHERE due - last_review > 900 AND (due - last_review) % 86400 != 0 AND due % 900 = 0;
+"#, r#"
+-- Scheduling settings that belong to the collection, such as `desired_retention`.
+CREATE TABLE setting (
+    key   TEXT PRIMARY KEY,
+    value NOT NULL
+);
 "#];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -350,6 +356,20 @@ impl Store {
     }
 
     /// Lowercased tag → icon.
+    /// A setting's value, if the collection has one.
+    pub fn setting(&self, key: &str) -> rusqlite::Result<Option<f64>> {
+        self.conn.query_row("SELECT value FROM setting WHERE key = ?1", [key], |r| r.get(0)).optional()
+    }
+
+    pub fn set_setting(&self, key: &str, value: f64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO setting (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
     pub fn tag_icons(&self) -> rusqlite::Result<HashMap<String, String>> {
         let mut stmt = self.conn.prepare("SELECT tag, icon FROM tag_icon")?;
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()

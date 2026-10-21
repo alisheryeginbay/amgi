@@ -43,8 +43,9 @@ struct DeckName: Equatable {
 @MainActor
 final class AppModel {
     private static let folderKey = "collectionPath"
+    /// Where desired retention was kept before collections kept their own, which new
+    /// and older collections still start from.
     private static let retentionKey = "desiredRetention"
-    private static let rolloverKey = "rolloverHour"
     private static let quickAddShortcutKey = "quickAddShortcut"
     /// The range the core accepts.
     static let retentionRange = 0.7...0.99
@@ -102,22 +103,21 @@ final class AppModel {
     var errorMessage: String?
     var importSummary: ImportSummary?
 
-    /// Target probability of recalling a card when it comes due. Applies to every collection.
-    var desiredRetention: Double = AppModel.savedRetention() {
+    /// Target probability of recalling a card when it comes due. The open collection's,
+    /// kept in its database.
+    var desiredRetention: Double = 0.9 {
         didSet {
-            guard oldValue != desiredRetention else { return }
-            UserDefaults.standard.set(desiredRetention, forKey: Self.retentionKey)
-            collection?.setDesiredRetention(retention: Float(desiredRetention))
+            guard let collection, Float(desiredRetention) != collection.desiredRetention() else { return }
+            perform { try collection.setDesiredRetention(retention: Float(desiredRetention)) }
             refreshIntervals()
         }
     }
 
-    /// The hour (0–23) a new study day starts. Applies to every collection.
-    var rolloverHour: Int = AppModel.savedRolloverHour() {
+    /// The hour (0–23) a new study day starts. The open collection's, kept in its database.
+    var rolloverHour: Int = 4 {
         didSet {
-            guard oldValue != rolloverHour else { return }
-            UserDefaults.standard.set(rolloverHour, forKey: Self.rolloverKey)
-            collection?.setRolloverHour(hour: UInt8(rolloverHour))
+            guard let collection, rolloverHour != Int(collection.rolloverHour()) else { return }
+            perform { try collection.setRolloverHour(hour: UInt8(rolloverHour)) }
             refresh()
         }
     }
@@ -223,9 +223,10 @@ final class AppModel {
         perform {
             let collection = try CardCollection.open(root: url.path)
             collection.setUtcOffset(seconds: Int32(TimeZone.current.secondsFromGMT()))
-            collection.setDesiredRetention(retention: Float(desiredRetention))
-            collection.setRolloverHour(hour: UInt8(rolloverHour))
+            try collection.adoptSettings(desiredRetention: Self.savedRetention(), rolloverHour: nil)
             self.collection = collection
+            self.desiredRetention = Double(collection.desiredRetention())
+            self.rolloverHour = Int(collection.rolloverHour())
             self.canUndoAnswer = false
             self.folder = url
             web.collectionRoot = url
@@ -605,14 +606,9 @@ final class AppModel {
         }
     }
 
-    private static func savedRolloverHour() -> Int {
-        let saved = UserDefaults.standard.object(forKey: rolloverKey) as? Int ?? 4
-        return min(max(saved, 0), 23)
-    }
-
-    private static func savedRetention() -> Double {
-        let saved = UserDefaults.standard.object(forKey: retentionKey) as? Double ?? 0.9
-        return min(max(saved, retentionRange.lowerBound), retentionRange.upperBound)
+    /// The desired retention the app kept for every collection, if it was ever changed.
+    private static func savedRetention() -> Float? {
+        (UserDefaults.standard.object(forKey: retentionKey) as? Double).map(Float.init)
     }
 
     func icon(forTag tag: String) -> String? {
