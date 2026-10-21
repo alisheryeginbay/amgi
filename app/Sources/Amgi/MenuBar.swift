@@ -5,28 +5,17 @@ import SwiftUI
 /// Whether Amgi shows its due count in the menu bar.
 let showMenuBarKey = "showMenuBar"
 
-/// The menu bar item: a stack of cards, with the number due beside it.
+/// The menu bar item: Amgi's flower, with the number due beside it.
 struct MenuBarLabel: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let due = model.totalDue
         HStack(spacing: 3) {
-            symbol(due > 0 ? "rectangle.stack.fill" : "rectangle.stack")
+            Image(nsImage: MenuBarIcon.image)
             if due > 0 { Text("\(due)").monospacedDigit() }
         }
         .accessibilityLabel(due == 0 ? "\(appName): nothing due" : "\(appName): \(due) due")
-    }
-
-    /// Violet in the dev build. The menu bar draws SwiftUI images as templates, ignoring
-    /// their colour, so it's an `NSImage` that isn't one.
-    private func symbol(_ name: String) -> Image {
-        guard isDevBuild,
-              let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(paletteColors: [devViolet]))
-        else { return Image(systemName: name) }
-        image.isTemplate = false
-        return Image(nsImage: image)
     }
 }
 

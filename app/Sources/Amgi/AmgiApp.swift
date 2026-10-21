@@ -88,8 +88,6 @@ struct AmgiApp: App {
 /// mistaken for the installed app.
 let isDevBuild = Bundle.main.bundleIdentifier == nil
 let appName = isDevBuild ? "Amgi Dev" : "Amgi"
-/// The dev build's petals, in place of forget-me-not blue.
-let devViolet = NSColor(srgbRed: 0x91 / 255, green: 0x5b / 255, blue: 0xef / 255, alpha: 1)
 
 extension Bundle {
     /// The app's own resources (web panes, emoji, artwork). Amgi.app keeps them in
