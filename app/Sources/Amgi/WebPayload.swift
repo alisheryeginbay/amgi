@@ -8,6 +8,8 @@ import Foundation
 struct WebState {
     var pane: WebPane
     var environment: EnvironmentPayload
+    /// Stylesheets of the CJK font packs installed, as `amgi://fonts/` URLs.
+    var fonts: [String]
     var icons: [String: String]
     var study: StudyPayload
     var dashboard: DashboardPayload?
@@ -28,12 +30,28 @@ struct EnvironmentPayload: Encodable, Equatable {
     let locale: String
     /// 0 for Sunday through 6 for Saturday.
     let firstWeekday: Int
+    /// The Mac's first CJK language: `ko`, `ja`, `zh-hans` or `zh-hant`. Chinese, Japanese
+    /// and Korean share Han characters but draw some differently, and cards don't say
+    /// their language, so this picks the forms. Left out of the JSON when there is none.
+    let han: String?
 
     static var current: EnvironmentPayload {
         EnvironmentPayload(
             locale: Locale.current.identifier(.bcp47),
-            firstWeekday: Calendar.current.firstWeekday - 1
+            firstWeekday: Calendar.current.firstWeekday - 1,
+            han: preferredHan
         )
+    }
+
+    static var preferredHan: String? {
+        Locale.preferredLanguages.lazy.compactMap { tag -> String? in
+            let tag = tag.lowercased()
+            if tag.hasPrefix("ja") { return "ja" }
+            if ["zh-hant", "zh-tw", "zh-hk", "zh-mo"].contains(where: tag.hasPrefix) { return "zh-hant" }
+            if tag.hasPrefix("zh") { return "zh-hans" }
+            if tag.hasPrefix("ko") { return "ko" }
+            return nil
+        }.first
     }
 }
 

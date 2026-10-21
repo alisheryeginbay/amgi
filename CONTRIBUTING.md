@@ -81,5 +81,10 @@ NOTARY_PROFILE=amgi scripts/notarize.sh   # after `xcrun notarytool store-creden
                                           # writes the .zip and the .dmg
 ```
 
+The Chinese, Japanese and Korean fonts aren't in the app: it downloads them from the
+`fonts-1` GitHub release when a collection first needs them (`FontPacks.swift`).
+`scripts/build-fonts.sh` builds those zips from `web/node_modules`; its header says how
+to publish new ones.
+
 Every push to `main` runs the tests, type checks and a debug build
 (`.github/workflows/ci.yml`).

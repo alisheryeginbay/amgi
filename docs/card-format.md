@@ -35,6 +35,13 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
   powmat <- {{expm|function}}(1.1 * logm(mat))
   ```
   ````
+- Chinese, Japanese and Korean text is set in Source Han Serif (Noto Serif CJK). Its
+  fonts, about 6 MB per language, are downloaded from the
+  [Amgi releases on GitHub](https://github.com/alisheryeginbay/amgi/releases) the first
+  time a folder's decks use Hangul, kana or Han characters; until then the Mac's own
+  serif stands in. Han characters take the forms of the Mac's first Chinese, Japanese or
+  Korean language in **System Settings ▸ General ▸ Language & Region**, or Simplified
+  Chinese when there is none.
 - A card ends at a blank line or the next `Q:` / `C:` outside a code block. Every other
   line is ignored.
 

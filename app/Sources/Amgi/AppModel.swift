@@ -151,6 +151,8 @@ final class AppModel {
     private var collection: CardCollection?
     /// The web view behind every detail pane.
     let web = WebHost()
+    /// CJK fonts for card text, downloaded when the collection first uses them.
+    let fonts = FontPacks()
     /// The toolbar's More button, which its menu opens under.
     @ObservationIgnored weak var moreMenuAnchor: NSView?
     /// The browse toolbar's search field, which ⌘F focuses.
@@ -284,6 +286,7 @@ final class AppModel {
             update(\.today, try collection.today())
             update(\.warnings, collection.warnings())
         }
+        fonts.fetch(for: collection.scripts(), han: EnvironmentPayload.preferredHan)
         loadCardInfo()
         if selection == .dashboard { loadDashboard() }
         // Studying changes cards on every answer; the list waits until it's browsed.
@@ -367,6 +370,7 @@ final class AppModel {
         return WebState(
             pane: pane,
             environment: .current,
+            fonts: fonts.stylesheets,
             icons: tagIcons,
             study: StudyPayload(
                 card: current,

@@ -6,6 +6,7 @@
 pub mod anki;
 pub mod parser;
 pub mod scheduler;
+pub mod scripts;
 pub mod search;
 pub mod store;
 
@@ -17,6 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use parser::CardKind;
 pub use scheduler::{Rating, ReviewState};
+pub use scripts::Scripts;
 use parser::ParsedCard;
 use scheduler::{Memory, Scheduler};
 use store::{CardState, LogEntry, LoggedReview, Store};
@@ -331,6 +333,8 @@ struct Inner {
     deck_titles: HashMap<String, String>,
     states: HashMap<String, CardState>,
     warnings: Vec<CollectionWarning>,
+    /// CJK scripts in the deck files, for the fonts the app fetches.
+    scripts: Scripts,
     new_per_day: u32,
     utc_offset_secs: i64,
     /// Why the database was reopened while the collection was open, shown with the
@@ -498,6 +502,11 @@ impl CardCollection {
         let inner = self.lock();
         inner.warnings.iter().chain(&inner.store_notice).cloned().collect()
     }
+
+    /// Whether the deck files use Hangul, kana or Han characters, as of the last read.
+    pub fn scripts(&self) -> Scripts {
+        self.lock().scripts
+    }
 }
 
 impl CardCollection {
@@ -523,6 +532,7 @@ impl CardCollection {
             deck_titles: HashMap::new(),
             states,
             warnings: Vec::new(),
+            scripts: Scripts::default(),
             new_per_day: 20,
             utc_offset_secs: 0,
             store_notice: None,
@@ -577,10 +587,13 @@ impl Inner {
         self.index.clear();
         self.deck_titles.clear();
         self.warnings.clear();
+        self.scripts = Scripts::default();
         for file in files {
             let rel = relative(&self.root, &file);
             let deck = rel.strip_suffix(".md").unwrap_or(&rel).to_string();
-            let result = parser::parse(&fs::read_to_string(&file)?);
+            let text = fs::read_to_string(&file)?;
+            self.scripts.scan(&text);
+            let result = parser::parse(&text);
             if let Some(name) = result.name {
                 self.deck_titles.insert(deck.clone(), name);
             }

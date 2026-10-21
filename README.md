@@ -48,6 +48,6 @@ cargo install --path cli     # the amgi command
 
 ## License
 
-[MIT](LICENSE). The bundled fonts (Source Serif 4, Brygada 1918 and Noto Serif CJK) are
+[MIT](LICENSE). The fonts (Source Serif 4, Brygada 1918 and Noto Serif CJK) are
 under the [SIL Open Font License](https://openfontlicense.org), and the emoji names
 come from GitHub's [gemoji](https://github.com/github/gemoji) (MIT).

@@ -83,6 +83,8 @@ export interface Environment {
   locale: string;
   /** 0 for Sunday through 6 for Saturday. */
   firstWeekday: number;
+  /** The Mac's first CJK language, which picks how Han characters are drawn. */
+  han?: "ko" | "ja" | "zh-hans" | "zh-hant";
 }
 
 /** What showed an answer or rated a card. */

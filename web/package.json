@@ -10,6 +10,10 @@
     "test": "bun test"
   },
   "devDependencies": {
+    "@fontsource-variable/noto-serif-jp": "^5.3.1",
+    "@fontsource-variable/noto-serif-kr": "^5.3.1",
+    "@fontsource-variable/noto-serif-sc": "^5.3.1",
+    "@fontsource-variable/noto-serif-tc": "^5.3.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.19.2",
@@ -20,10 +24,6 @@
   },
   "dependencies": {
     "@fontsource-variable/brygada-1918": "^5.3.0",
-    "@fontsource-variable/noto-serif-jp": "^5.3.1",
-    "@fontsource-variable/noto-serif-kr": "^5.3.1",
-    "@fontsource-variable/noto-serif-sc": "^5.3.1",
-    "@fontsource-variable/noto-serif-tc": "^5.3.1",
     "@fontsource-variable/source-serif-4": "^5.3.1",
     "marked": "^18.1.1",
     "shiki": "^4.5.0",

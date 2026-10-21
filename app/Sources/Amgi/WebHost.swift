@@ -26,6 +26,7 @@ final class WebHost: NSObject {
     // What the page has, to send only what changed.
     private var sentPane: WebPane?
     private var sentEnvironment: EnvironmentPayload?
+    private var sentFonts: [String]?
     private var sentIcons: [String: String]?
     private var sentStudy: StudyPayload?
     private var sentDashboard: DashboardPayload?
@@ -75,6 +76,7 @@ final class WebHost: NSObject {
         self.state = state
         guard ready else { return }
         send("environment", state.environment, &sentEnvironment)
+        send("fonts", state.fonts, &sentFonts)
         send("icons", state.icons, &sentIcons)
         send("search", state.search, &sentSearch)
         send("preview", state.preview, &sentPreview)
@@ -157,6 +159,7 @@ final class WebHost: NSObject {
             ready = true
             sentPane = nil
             sentEnvironment = nil
+            sentFonts = nil
             sentIcons = nil
             sentStudy = nil
             sentDashboard = nil
@@ -292,8 +295,9 @@ final class ActionMenuItem: NSMenuItem {
     @objc private func run() { handler() }
 }
 
-/// Serves `amgi://app/…` from the bundled page and `amgi://collection/…` from the open
-/// collection folder, never anything outside it. Byte ranges are honoured, which media
+/// Serves `amgi://app/…` from the bundled page, `amgi://collection/…` from the open
+/// collection folder and `amgi://fonts/…` from the downloaded font packs, never anything
+/// outside them. Byte ranges are honoured, which media
 /// elements ask for.
 private final class SchemeHandler: NSObject, WKURLSchemeHandler {
     static let scheme = "amgi"
@@ -308,7 +312,11 @@ private final class SchemeHandler: NSObject, WKURLSchemeHandler {
         let id = ObjectIdentifier(task)
         running.insert(id)
         let request = task.request
-        let root = request.url?.host() == "collection" ? collectionRoot : pageRoot
+        let root = switch request.url?.host() {
+        case "collection": collectionRoot
+        case "fonts": FontPacks.root
+        default: pageRoot
+        }
         Task {
             let response = await Task.detached { Self.respond(to: request, root: root) }.value
             guard running.remove(id) != nil else { return }

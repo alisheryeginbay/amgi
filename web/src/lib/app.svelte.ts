@@ -15,11 +15,13 @@ class AppState {
   /** Lowercased tag → icon, such as an emoji. */
   icons = $state.raw<Record<string, string>>({});
   environment = $state.raw<Environment>({ locale: navigator.language, firstWeekday: 1 });
+  /** Stylesheets of the CJK font packs downloaded so far. */
+  fonts = $state.raw<string[]>([]);
 }
 
 export const app = new AppState();
 
-type Part = "pane" | "study" | "dashboard" | "cards" | "browse" | "search" | "preview" | "icons" | "environment";
+type Part = "pane" | "study" | "dashboard" | "cards" | "browse" | "search" | "preview" | "icons" | "environment" | "fonts";
 
 /** Commands from the app, such as `replay`. */
 export const commands = new EventTarget();

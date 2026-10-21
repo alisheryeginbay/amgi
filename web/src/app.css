@@ -32,23 +32,29 @@
 
   /* Card text. Source Serif's optical sizes suit both the large study card and the small
      preview. Hangul, kana and Han characters come from Noto Serif CJK (Source Han Serif),
-     Korean forms first unless `main.ts` finds another CJK language. */
-  --font-han: "Noto Serif KR Variable", "Noto Serif JP Variable", "Noto Serif SC Variable", "Noto Serif TC Variable";
+     Korean forms first unless the Mac prefers another CJK language. Those fonts are
+     downloaded when cards first use them (`FontPacks.swift`); until then the Mac's own
+     serifs stand in, in the same order. */
+  --font-han: "Noto Serif KR Variable", "Noto Serif JP Variable", "Noto Serif SC Variable", "Noto Serif TC Variable",
+    "AppleMyungjo", "Hiragino Mincho ProN", "Songti SC", "Songti TC";
   --font-serif: "Source Serif 4 Variable", var(--font-han), ui-serif, Georgia, serif;
   /* Headlines, such as a basic card's question, in Brygada 1918. */
   --font-headline: "Brygada 1918 Variable", var(--font-han), ui-serif, Georgia, serif;
 }
 
 :root[data-han="ja"] {
-  --font-han: "Noto Serif JP Variable", "Noto Serif KR Variable", "Noto Serif SC Variable", "Noto Serif TC Variable";
+  --font-han: "Noto Serif JP Variable", "Noto Serif KR Variable", "Noto Serif SC Variable", "Noto Serif TC Variable",
+    "Hiragino Mincho ProN", "AppleMyungjo", "Songti SC", "Songti TC";
 }
 
 :root[data-han="zh-hans"] {
-  --font-han: "Noto Serif SC Variable", "Noto Serif TC Variable", "Noto Serif JP Variable", "Noto Serif KR Variable";
+  --font-han: "Noto Serif SC Variable", "Noto Serif TC Variable", "Noto Serif JP Variable", "Noto Serif KR Variable",
+    "Songti SC", "Songti TC", "Hiragino Mincho ProN", "AppleMyungjo";
 }
 
 :root[data-han="zh-hant"] {
-  --font-han: "Noto Serif TC Variable", "Noto Serif SC Variable", "Noto Serif JP Variable", "Noto Serif KR Variable";
+  --font-han: "Noto Serif TC Variable", "Noto Serif SC Variable", "Noto Serif JP Variable", "Noto Serif KR Variable",
+    "Songti TC", "Songti SC", "Hiragino Mincho ProN", "AppleMyungjo";
 }
 
 @media (prefers-color-scheme: dark) {
