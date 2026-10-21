@@ -8,7 +8,7 @@ Plain-text flash cards, scheduled with [FSRS](https://github.com/open-spaced-rep
 A collection is a folder with a `cards` folder of Markdown files inside. Each file is a
 deck, and folders nest decks: the `lang` deck holds `cards/lang.md` and everything in
 `cards/lang/`. Beside `cards` are `media` for images and sounds and `note-types` for
-[notes with fields](docs/card-format.mdx#notes-with-fields); review history is stored
+[notes with fields](https://docs.amgi.study/card-format#notes-with-fields); review history is stored
 in `.amgi.sqlite`. Anything else in the folder, such as a README, is left alone.
 
 ```
@@ -53,10 +53,12 @@ cargo install --path cli     # the amgi command
 
 ## Docs
 
-- [Card format](docs/card-format.mdx): cards, clozes, media, math, code, tags and suspending
-- [Studying](docs/studying.mdx): shortcuts, browsing, adding cards, saved views and search
-- [Importing from Anki](docs/anki-import.mdx)
-- [Command line](docs/cli.mdx)
+The full docs are at [docs.amgi.study](https://docs.amgi.study).
+
+- [Card format](https://docs.amgi.study/card-format): cards, clozes, media, math, code, tags and suspending
+- [Studying](https://docs.amgi.study/studying): shortcuts, browsing, adding cards, saved views and search
+- [Importing from Anki](https://docs.amgi.study/anki-import)
+- [Command line](https://docs.amgi.study/cli)
 - [Contributing](CONTRIBUTING.md): project layout, building and tests
 
 ## License
