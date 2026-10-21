@@ -57,6 +57,12 @@ it with the Developer ID, notarizes it and attaches it to a draft release on Git
 `Amgi-X.Y.Z.dmg` and `Amgi-X.Y.Z.zip`. Write the notes there, then publish it. The tag
 has to match the version in `Cargo.toml`.
 
+The release also carries `appcast.xml`, the feed that installed copies check through
+[Sparkle](https://sparkle-project.org) (Amgi ▸ Check for Updates…). It lists the zip,
+signed with an EdDSA key (`scripts/appcast.sh`). The app reads the feed from the latest
+published release, so a draft isn't offered until it's published. Keep the private
+key safe: without it, installed copies can't be updated.
+
 The disk image is made by [dmgbuild](https://dmgbuild.readthedocs.io), run through
 [uv](https://docs.astral.sh/uv/); `scripts/dmg-settings.py` places the icons to match
 the drawn arrow in `media/dmg-background.tiff`. That background comes from the separate
@@ -72,6 +78,9 @@ The workflow needs these repository secrets:
 - `DEVELOPER_ID_P12_PASSWORD`: the password chosen when exporting it
 - `NOTARY_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`: an App Store Connect API key
   (Users and Access ▸ Integrations), the .p8 file's contents and its two ids
+- `SPARKLE_ED_PRIVATE_KEY`: the private key from Sparkle's `generate_keys`, exported
+  with `generate_keys -x key.txt`; its public half is `SUPublicEDKey` in
+  `scripts/bundle.sh`
 
 To release from this Mac instead:
 
@@ -79,6 +88,7 @@ To release from this Mac instead:
 AMGI_SIGN_IDENTITY="Developer ID Application" scripts/bundle.sh
 NOTARY_PROFILE=amgi scripts/notarize.sh   # after `xcrun notarytool store-credentials amgi`;
                                           # writes the .zip and the .dmg
+scripts/appcast.sh                        # signs with the key in the login keychain
 ```
 
 The Chinese, Japanese and Korean fonts aren't in the app: it downloads them from the

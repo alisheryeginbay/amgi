@@ -1,10 +1,12 @@
 # Pushing a tag `vX.Y.Z` builds Amgi.app, signs it with the Developer ID, notarizes it
-# and attaches it, as a disk image and a zip, to a draft GitHub release. Needs these
-# repository secrets:
+# and attaches it, as a disk image and a zip, to a draft GitHub release, with the
+# appcast.xml that offers the zip to installed copies once the release is published.
+# Needs these repository secrets:
 #   DEVELOPER_ID_P12           the Developer ID Application certificate and key, base64
 #   DEVELOPER_ID_P12_PASSWORD  the .p12's password
 #   NOTARY_KEY                 an App Store Connect API key (.p8 contents)
 #   NOTARY_KEY_ID, NOTARY_ISSUER_ID
+#   SPARKLE_ED_PRIVATE_KEY     signs updates; its public half is SUPublicEDKey in bundle.sh
 name: Release
 
 on:
@@ -67,6 +69,11 @@ jobs:
           NOTARY_KEY="$RUNNER_TEMP/notary.p8" scripts/notarize.sh
           rm "$RUNNER_TEMP/notary.p8"
 
+      - name: Write the update feed
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: scripts/appcast.sh
+
       # A draft, so the notes can be written (and any change to card ids called out)
       # before it's published.
       - name: Create a draft release
@@ -74,4 +81,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" target/bundle/Amgi-*.dmg target/bundle/Amgi-*.zip \
+            target/bundle/appcast.xml \
             --draft --generate-notes --title "Amgi ${GITHUB_REF_NAME#v}"

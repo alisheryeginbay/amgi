@@ -17,6 +17,10 @@ let devInfoPlist = URL(fileURLWithPath: #filePath)
 let package = Package(
     name: "Amgi",
     platforms: [.macOS(.v26)],
+    dependencies: [
+        // Checks for and installs updates; see Updater.swift.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0"),
+    ],
     targets: [
         // C module exposing the UniFFI header; the generated Swift imports it as `amgi_coreFFI`.
         .target(name: "amgi_coreFFI"),
@@ -33,9 +37,11 @@ let package = Package(
         // violet icon, written by `scripts/build-dev-icon.sh`.
         .executableTarget(
             name: "Amgi",
-            dependencies: ["AmgiCore"],
+            dependencies: ["AmgiCore", .product(name: "Sparkle", package: "Sparkle")],
             resources: [.copy("Web"), .copy("Emoji.tsv"), .copy("Amgi.svg"), .copy("AmgiDev.icns")],
             linkerSettings: [
+                // Amgi.app keeps Sparkle.framework in Contents/Frameworks (scripts/bundle.sh).
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
                 .unsafeFlags(
                     ["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", devInfoPlist],
                     .when(configuration: .debug)

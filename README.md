@@ -28,6 +28,8 @@ code, and you can import your Anki decks.
 
 [Download the latest release](https://github.com/alisheryeginbay/amgi/releases/latest),
 open the `.dmg` and drag Amgi into Applications. Needs macOS 26 on Apple Silicon.
+Amgi checks for new versions itself and installs them in one click; you can also
+choose Amgi ▸ Check for Updates….
 
 ## Build & run
 

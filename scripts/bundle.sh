@@ -50,6 +50,12 @@ cp -R "$bin/Amgi_Amgi.bundle" "$app/Contents/Resources/"
 # Drop debug symbols, which also name the object files they came from.
 strip -S -x "$app/Contents/MacOS/Amgi"
 
+# Sparkle, the updater. Its XPC services are only for sandboxed apps, which Amgi isn't.
+sparkle="$app/Contents/Frameworks/Sparkle.framework"
+mkdir -p "$app/Contents/Frameworks"
+ditto "$bin/Sparkle.framework" "$sparkle"
+rm -rf "$sparkle/XPCServices" "$sparkle/Versions/B/XPCServices"
+
 # The app icon, made in Icon Composer: layers macOS renders as Liquid Glass, in light,
 # dark, clear and tinted. actool (Xcode's, not the Command Line Tools') compiles it into
 # Assets.car, plus Amgi.icns for older systems. It needs absolute paths.
@@ -94,6 +100,10 @@ cat > "$app/Contents/Info.plist" <<EOF
     <string>public.app-category.education</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>SUFeedURL</key>
+    <string>https://github.com/alisheryeginbay/amgi/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>TShzf8QQ88x/3EE1dfKeQ2QFi59r2r7/zXfZK808aXY=</string>
 </dict>
 </plist>
 EOF
@@ -102,8 +112,12 @@ EOF
 # runtime and a secure timestamp to pass notarization.
 sign=(--force --sign "$identity")
 [[ "$identity" != "-" ]] && sign+=(--options runtime --timestamp)
+# Inside out: Sparkle's helpers, the framework, then the app.
+codesign "${sign[@]}" "$sparkle/Versions/B/Autoupdate"
+codesign "${sign[@]}" "$sparkle/Versions/B/Updater.app"
+codesign "${sign[@]}" "$sparkle"
 codesign "${sign[@]}" "$app"
-codesign --verify --strict "$app"
+codesign --verify --strict --deep "$app"
 
 # Check that no home folder path made it into the bundle.
 if grep -rqa "$HOME" "$app"; then
