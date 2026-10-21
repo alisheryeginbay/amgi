@@ -3,7 +3,7 @@ resolver = "3"
 members = ["core", "cli", "uniffi-bindgen"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
 
