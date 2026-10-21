@@ -11,6 +11,9 @@ cards in a table: search (<kbd>⌘F</kbd>), sort by any column, and double-click
 The selected card shows beside the table as it looks when studied; drag the divider to
 resize it, or hide it with **Hide Card** in the toolbar.
 
+For a card from a [note](card-format.md#notes-with-fields), the note's fields are listed
+under it, by name, with the empty ones left out.
+
 ## Adding cards
 
 **Add Card** (<kbd>⌥⌘N</kbd> from any app, or <kbd>⌘N</kbd> in Amgi) opens a small panel
@@ -18,6 +21,12 @@ over whatever you're doing: pick a deck, type a question and answer or a cloze, 
 <kbd>⌘↩</kbd>. The card is appended to the end of the deck's file, which is created if
 needed. <kbd>Return</kbd> moves to the next field and <kbd>⌥↩</kbd> starts a new line; <kbd>Esc</kbd> puts the panel away and
 keeps what you typed. Turn the shortcut off in **Settings**.
+
+Next to Basic and Cloze, the menu at the top lists your
+[note types](card-format.md#notes-with-fields); a deck with notes starts with the type
+most of them have. For a note, the panel shows a box for each field and says how many
+cards the note makes; fields left empty are left out. Drop an image or sound onto a
+field to copy it into the collection's `media` folder and link it there.
 
 ## Menu bar
 
@@ -37,8 +46,8 @@ splitting.
 
 ## Searching
 
-Every word in a search must match the card's question, answer or tags, ignoring case
-and accents. Words can also be filters:
+Every word in a search must match the card's question, answer, tags or note fields,
+ignoring case and accents. Words can also be filters:
 
 | Search | Finds cards |
 |---|---|
@@ -47,6 +56,7 @@ and accents. Words can also be filters:
 | `#verbs`, `#lang*` | tagged `verbs`; with a tag starting with `lang` |
 | `deck:french` | in a deck named `french` or under one, such as `lang/french/words` |
 | `q:paris`, `a:"to go"` | with that text in the question or answer only |
+| `meaning:apple`, `wordmeaning:go` | from a note whose field of that name has the text; leave out spaces in the name |
 | `is:new` `is:due` `is:suspended` `is:leech` `is:cloze` `is:basic` | in that state or of that kind |
 | `lapses>3`, `reviews<=5` | compared by count (`<`, `<=`, `>`, `>=`, `=`) |
 | `due<7`, `due<0` | due within 7 days; overdue. New cards have no due date |

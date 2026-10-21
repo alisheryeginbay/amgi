@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import CardView from "../components/CardView.svelte";
+  import NoteFields from "../components/NoteFields.svelte";
   import TagPills from "../components/TagPills.svelte";
   import { app, commands, post } from "../lib/app.svelte";
   import { oneLine, renderInline } from "../lib/markdown";
@@ -42,13 +43,13 @@
     if (!browse) return [];
     const { deck, query } = browse;
     const inDeck = deck === undefined ? app.cards : app.cards.filter((c) => c.deck === deck || c.deck.startsWith(`${deck}/`));
-    return query ? inDeck.filter(parseQuery(query)) : inDeck;
+    return query ? inDeck.filter(parseQuery(query, undefined, app.noteTypes)) : inDeck;
   });
   // The window subtitle counts them.
   $effect(() => post({ type: "count", count: cards.length }));
   const query = $derived(app.search.trim());
   const rows = $derived.by(() => {
-    const matches = parseQuery(query);
+    const matches = parseQuery(query, undefined, app.noteTypes);
     return sorted(query ? cards.filter(matches) : cards, sort, collator);
   });
   const rowIndex = $derived(new Map(rows.map((card, i) => [card.id, i])));
@@ -356,6 +357,15 @@
     {#if selected}
       <div class="card">
         <CardView card={selected} />
+        {#if selected.noteType !== null}
+          <div class="fields">
+            <NoteFields
+              names={app.noteTypes.find((t) => t.name === selected.noteType)?.fields ?? []}
+              values={selected.fields}
+              cardPath={selected.path}
+            />
+          </div>
+        {/if}
       </div>
       <footer class="tabular">
         {#if selected.suspended}
@@ -587,6 +597,10 @@
     flex: 1;
     overflow-y: auto;
     padding: 24px 24px 16px;
+  }
+
+  .preview .fields {
+    margin-top: 28px;
   }
 
   .preview footer {

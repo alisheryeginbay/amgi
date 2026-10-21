@@ -34,6 +34,7 @@ final class WebHost: NSObject {
     private var sentBrowse: BrowseSource?
     private var sentSearch: String?
     private var sentPreview: Bool?
+    private var sentNoteTypes: String?
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -80,6 +81,10 @@ final class WebHost: NSObject {
         send("icons", state.icons, &sentIcons)
         send("search", state.search, &sentSearch)
         send("preview", state.preview, &sentPreview)
+        if let noteTypes = state.noteTypes, noteTypes != sentNoteTypes {
+            sentNoteTypes = noteTypes
+            post("noteTypes", json: noteTypes)
+        }
         send("study", state.study, &sentStudy)
         if let dashboard = state.dashboard {
             send("dashboard", dashboard, &sentDashboard)
@@ -167,6 +172,7 @@ final class WebHost: NSObject {
             sentBrowse = nil
             sentSearch = nil
             sentPreview = nil
+            sentNoteTypes = nil
             if let state {
                 self.state = nil
                 apply(state)

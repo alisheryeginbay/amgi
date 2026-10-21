@@ -11,6 +11,7 @@
 mod text;
 
 use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -58,7 +59,7 @@ impl CardCollection {
         let images = package.write_media(&conversion.media.images, &media_dir)?;
         let sounds = package.write_media(&conversion.media.sounds, &media_dir)?;
         let histories = conversion.histories.iter().map(History::entries).collect();
-        let imported = self.import(Import { decks: conversion.decks, histories })?;
+        let imported = self.import(Import { decks: conversion.decks, note_types: conversion.note_types, histories })?;
         Ok(ImportSummary {
             files: imported.files,
             notes: conversion.notes,
@@ -591,6 +592,8 @@ pub struct Conversion {
     /// Suspended Anki cards, written with the `#suspended` tag.
     pub suspended_cards: u32,
     pub media: Media,
+    /// Note type name and its file's TOML, for the note types decks use.
+    pub note_types: Vec<(String, String)>,
 }
 
 impl Package {
@@ -601,6 +604,25 @@ impl Package {
         for card in &self.cards {
             cards_by_note.entry(card.note).or_default().push(card);
         }
+        let mut layouts: HashMap<i64, NoteLayout> = HashMap::new();
+        let mut ids: Vec<i64> = self.notetypes.keys().copied().collect();
+        ids.sort();
+        for id in ids {
+            let Some(mut layout) = note_layout(&self.notetypes[&id]) else { continue };
+            // Names are files, so two note types can't share one, whatever its case.
+            let base = clean_part(&self.notetypes[&id].name);
+            layout.name = (1..)
+                .map(|n| if n == 1 { base.clone() } else { format!("{base} {n}") })
+                .find(|name| !layouts.values().any(|l| l.name.eq_ignore_ascii_case(name)))
+                .expect("unbounded range");
+            layouts.insert(id, layout);
+        }
+        let mut types = parser::NoteTypes::default();
+        for layout in layouts.values() {
+            types.insert(&layout.name, &layout.toml());
+        }
+        // The note types notes were written with.
+        let mut used: BTreeSet<&str> = BTreeSet::new();
 
         for note in &self.notes {
             let (Some(notetype), Some(cards)) = (self.notetypes.get(&note.notetype), cards_by_note.get(&note.id))
@@ -639,8 +661,13 @@ impl Package {
                     if is_suspended {
                         out.suspended_cards += ids.len() as u32;
                     }
-                    push_block(&mut decks, first.deck, &block);
+                    push_block(decks.entry(first.deck).or_default(), &block);
                 }
+            } else if let Some(layout) = layouts.get(&note.notetype)
+                && let Some(block) = self.note_block(layout, &types, note, cards, &mut out)
+            {
+                push_block(decks.entry(cards[0].deck).or_default(), &block);
+                used.insert(&layout.name);
             } else {
                 for card in cards {
                     let Some((name, qfmt, afmt)) = notetype.templates.get(card.ord as usize) else { continue };
@@ -654,7 +681,7 @@ impl Package {
                     self.add_histories(&[card], |_| vec![id.clone()], &mut out);
                     out.cards += 1;
                     out.suspended_cards += u32::from(card.suspended);
-                    push_block(&mut decks, card.deck, &block);
+                    push_block(decks.entry(card.deck).or_default(), &block);
                 }
             }
             if out.cards == before {
@@ -664,20 +691,68 @@ impl Package {
 
         let mut order: Vec<i64> = decks.keys().copied().collect();
         order.sort_by_key(|id| self.decks.get(id));
-        out.decks = order
-            .into_iter()
-            .map(|id| {
-                let path = self.deck_path(id);
-                let mut markdown = decks.remove(&id).unwrap_or_default();
-                // Keep the Anki name when the file name had to change.
-                let name = self.decks.get(&id).and_then(|parts| parts.last());
-                if let Some(name) = name.filter(|n| Some(n.as_str()) != path.rsplit('/').next()) {
-                    markdown = format!("+++\nname = {}\n+++\n\n{markdown}", toml_string(name));
-                }
-                (path, markdown)
+        for id in order {
+            let path = self.deck_path(id);
+            let name = self.decks.get(&id).and_then(|parts| parts.last()).cloned().unwrap_or_default();
+            let markdown = decks.remove(&id).unwrap_or_default();
+            out.decks.push((path.clone(), deck_file(&path, &name, &markdown)));
+        }
+        out.note_types = layouts.values().filter(|l| used.contains(l.name.as_str())).map(|l| (l.name.clone(), l.toml())).collect();
+        out.note_types.sort();
+        out
+    }
+
+    /// A note as its `@` line and `Field: value` lines, when it makes the same cards as
+    /// in Anki: all in one deck, suspended alike, and one per Anki card. Adds its cards' histories and
+    /// media to `out`; `None` leaves `out` as it was.
+    fn note_block(
+        &self,
+        layout: &NoteLayout,
+        types: &parser::NoteTypes,
+        note: &Note,
+        cards: &[&AnkiCard],
+        out: &mut Conversion,
+    ) -> Option<String> {
+        let (deck, suspended) = (cards.first()?.deck, cards[0].suspended);
+        if cards.iter().any(|c| c.deck != deck || c.suspended != suspended) {
+            return None;
+        }
+        let mut media = Media { prefix: self.media_prefix(deck), ..Media::default() };
+        let values: Vec<String> = note.fields.iter().map(|html| text::html_to_markdown(html, &mut media)).collect();
+        let note_type = types.get(&layout.name)?;
+        let mut block = format!("@{}\n", layout.name);
+        for (name, value) in layout.fields.iter().zip(&values).filter(|(_, v)| !v.is_empty()) {
+            let mut lines = value.lines();
+            writeln!(block, "{name}: {}", lines.next().unwrap_or_default()).unwrap();
+            for line in lines {
+                let mut line = line.to_string();
+                parser::escape_line(&mut line, note_type);
+                writeln!(block, "{line}").unwrap();
+            }
+        }
+        let block = with_tags(block.trim_end(), &note_tags(&note.tags, suspended));
+
+        let filled = |f: &usize| values.get(*f).is_some_and(|v| !v.is_empty());
+        let made: Vec<u32> = (0..layout.rules.len() as u32)
+            .filter(|&ord| {
+                let rule = &layout.rules[ord as usize];
+                rule.front.iter().any(filled) && rule.back.iter().any(filled)
             })
             .collect();
-        out
+        let anki: BTreeSet<u32> = cards.iter().map(|c| c.ord).collect();
+        let parsed = parser::parse_deck(&block, types);
+        if !parsed.warnings.is_empty() || parsed.cards.len() != made.len() || made.iter().copied().collect::<BTreeSet<_>>() != anki {
+            return None;
+        }
+        let ids: HashMap<u32, String> = made.into_iter().zip(parsed.cards.into_iter().map(|c| c.id)).collect();
+        self.add_histories(cards, |ord| ids.get(&ord).cloned().into_iter().collect(), out);
+        out.cards += cards.len() as u32;
+        if suspended {
+            out.suspended_cards += cards.len() as u32;
+        }
+        out.media.images.extend(media.images);
+        out.media.sounds.extend(media.sounds);
+        Some(block)
     }
 
     fn add_histories(&self, cards: &[&AnkiCard], ids: impl Fn(u32) -> Vec<String>, out: &mut Conversion) {
@@ -702,19 +777,183 @@ impl Package {
     /// File path for a deck, safe for any file system and never hidden.
     fn deck_path(&self, id: i64) -> String {
         let parts = self.decks.get(&id).cloned().unwrap_or_else(|| vec!["Default".into()]);
-        parts
-            .iter()
-            .map(|part| {
-                let clean: String = part
-                    .chars()
-                    .map(|c| if matches!(c, '/' | '\\' | ':') || c.is_control() { '-' } else { c })
-                    .collect();
-                let clean = clean.trim().trim_start_matches('.').trim();
-                if clean.is_empty() { "Untitled".to_string() } else { clean.to_string() }
-            })
-            .collect::<Vec<_>>()
-            .join("/")
+        parts.iter().map(|part| clean_part(part)).collect::<Vec<_>>().join("/")
     }
+}
+
+/// A deck or note type name as part of a file path, safe for any file system and
+/// never hidden.
+fn clean_part(part: &str) -> String {
+    let clean: String = part
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':') || c.is_control() { '-' } else { c })
+        .collect();
+    let clean = clean.trim().trim_start_matches('.').trim();
+    if clean.is_empty() { "Untitled".to_string() } else { clean.to_string() }
+}
+
+/// A deck file's Markdown, with front matter for its Anki name when the file name had
+/// to change.
+fn deck_file(path: &str, name: &str, markdown: &str) -> String {
+    if Some(name) == path.rsplit('/').next() {
+        return markdown.to_string();
+    }
+    format!("+++\nname = {}\n+++\n\n{markdown}", parser::toml_string(name))
+}
+
+/// The fields and card rules an Anki note type becomes: one rule per template, with
+/// the fields its question shows on the front and those its answer adds on the back.
+struct NoteLayout {
+    /// Its file name in `note-types`, unique among the package's note types.
+    name: String,
+    fields: Vec<String>,
+    /// Indexed by template ordinal.
+    rules: Vec<LayoutRule>,
+}
+
+struct LayoutRule {
+    front: Vec<usize>,
+    back: Vec<usize>,
+}
+
+impl NoteLayout {
+    /// Its note type file.
+    fn toml(&self) -> String {
+        let list = |fields: &[usize]| fields.iter().map(|&f| self.fields[f].as_str()).collect::<Vec<_>>().join(", ");
+        let names: Vec<String> = self.fields.iter().map(|f| parser::toml_string(f)).collect();
+        let mut out = format!("fields = [{}]\ncards = [\n", names.join(", "));
+        for rule in &self.rules {
+            let rule = format!("{} -> {}", list(&rule.front), list(&rule.back));
+            writeln!(out, "  {},", parser::toml_string(&rule)).unwrap();
+        }
+        out.push_str("]\n");
+        out
+    }
+}
+
+/// How a normal note type's notes can be written with fields, or `None` to render
+/// its cards as `Q:`/`A:` text as before. That is kept for note types of two fields
+/// or fewer, which read better that way, and for those whose questions hold text of
+/// their own, such as `Plural of {{Word}}?`, which fields would lose.
+fn note_layout(notetype: &Notetype) -> Option<NoteLayout> {
+    if notetype.cloze || notetype.fields.len() <= 2 || notetype.templates.is_empty() {
+        return None;
+    }
+    let fields: Vec<String> = notetype.fields.iter().map(|f| f.trim().to_string()).collect();
+    let usable = |(i, f): (usize, &String)| {
+        !f.is_empty() && !f.contains([':', ',']) && !f.contains("->") && !["Q", "A", "C"].contains(&f.as_str()) && !fields[..i].contains(f)
+    };
+    if !fields.iter().enumerate().all(usable) {
+        return None;
+    }
+    let indexes = |names: Vec<String>, skip: &[usize]| {
+        let mut out: Vec<usize> = Vec::new();
+        for i in names.iter().filter_map(|n| fields.iter().position(|f| f == n)) {
+            if !out.contains(&i) && !skip.contains(&i) {
+                out.push(i);
+            }
+        }
+        out
+    };
+    let mut rules: Vec<LayoutRule> = Vec::new();
+    for (_, qfmt, afmt) in &notetype.templates {
+        if has_own_text(qfmt) {
+            return None;
+        }
+        let front = indexes(shown_fields(qfmt, true)?, &[]);
+        let back = indexes(shown_fields(&text::answer_template(afmt), false)?, &front);
+        if front.is_empty() || back.is_empty() || rules.iter().any(|r| r.front == front) {
+            return None;
+        }
+        rules.push(LayoutRule { front, back });
+    }
+    Some(NoteLayout { name: String::new(), fields, rules })
+}
+
+/// The fields a template shows, in order, or `None` when a fixed list can't say: a
+/// field in an HTML attribute, and on the question side any script, or a
+/// field shown only when another one is filled, as in `{{#IsSentenceCard}}{{Sentence}}`.
+/// Conditions, typing boxes, text-to-speech and Anki's own values such as
+/// `{{FrontSide}}` are left out, as are hints on the question side: Anki hides them
+/// behind a link, and makes the card without them.
+fn shown_fields(template: &str, front: bool) -> Option<Vec<String>> {
+    let lower = template.to_ascii_lowercase();
+    if front && lower.contains("<script") {
+        return None;
+    }
+    let mut names = Vec::new();
+    let mut sections: Vec<&str> = Vec::new();
+    let (mut in_tag, mut in_script) = (false, false);
+    let mut i = 0;
+    while i < template.len() {
+        let rest = &template[i..];
+        if let Some(inner) = rest.strip_prefix("{{") {
+            let len = inner.find("}}")?;
+            let tag = inner[..len].trim();
+            i += len + 4;
+            // A script on the answer side only does something with the field.
+            if in_script {
+                continue;
+            }
+            if in_tag {
+                return None;
+            }
+            if let Some(name) = tag.strip_prefix(['#', '^']) {
+                sections.push(name.trim());
+                continue;
+            }
+            if tag.starts_with('/') {
+                sections.pop();
+                continue;
+            }
+            let mut parts = tag.rsplit(':');
+            let name = parts.next().unwrap_or_default().trim();
+            let hidden = parts.map(str::trim).any(|f| {
+                f.starts_with("type") || f.starts_with("tts") || f.starts_with("cloze") || (f == "hint" && front)
+            });
+            let special = ["FrontSide", "Tags", "Type", "Deck", "Subdeck", "Card", "CardFlag"].contains(&name);
+            if hidden || special {
+                continue;
+            }
+            if front && sections.iter().any(|s| *s != name) {
+                return None;
+            }
+            names.push(name.to_string());
+            continue;
+        }
+        let lower_rest = &lower[i..];
+        if in_script {
+            in_script = !lower_rest.starts_with("</script");
+        } else if lower_rest.starts_with("<script") {
+            in_script = true;
+        }
+        match rest.as_bytes()[0] {
+            b'<' => in_tag = true,
+            b'>' => in_tag = false,
+            _ => {}
+        }
+        i += rest.chars().next().map_or(1, char::len_utf8);
+    }
+    Some(names)
+}
+
+/// Whether a template shows words or numbers besides its fields.
+fn has_own_text(template: &str) -> bool {
+    let mut bare = String::new();
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        bare.push_str(&rest[..start]);
+        let Some(len) = rest[start + 2..].find("}}") else { break };
+        rest = &rest[start + 2 + len + 2..];
+    }
+    bare.push_str(rest);
+    let shown = text::html_to_markdown(&bare, &mut Media::default());
+    // Entities such as `&mdash;` are punctuation, not words.
+    let mut words = shown.split('&').enumerate().map(|(i, part)| match part.split_once(';') {
+        Some((name, after)) if i > 0 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '#') => after,
+        _ => part,
+    });
+    words.any(|part| part.chars().any(char::is_alphanumeric))
 }
 
 /// A note's tags, with `suspended` added for a suspended card.
@@ -738,23 +977,7 @@ fn with_tags(block: &str, tags: &str) -> String {
     }
 }
 
-/// A TOML basic string.
-fn toml_string(s: &str) -> String {
-    let mut out = String::from("\"");
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            c if c.is_control() => out.push(' '),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn push_block(decks: &mut HashMap<i64, String>, deck: i64, block: &str) {
-    let md = decks.entry(deck).or_default();
+fn push_block(md: &mut String, block: &str) {
     if !md.is_empty() {
         md.push('\n');
     }
@@ -930,6 +1153,84 @@ pub(crate) mod tests {
         conn
     }
 
+    /// A legacy collection of `notes` and `cards` rows in deck 20, `Spanish`, with
+    /// note types of more than two fields.
+    fn vocab_collection(notes: &str, cards: &str, revlog: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        let models = r#"{
+            "3": {"name": "Vocab", "type": 0,
+                  "flds": [{"name": "Word", "ord": 0}, {"name": "Meaning", "ord": 1}, {"name": "Audio", "ord": 2}, {"name": "Sentence", "ord": 3}],
+                  "tmpls": [{"name": "Recognition", "ord": 0, "qfmt": "<div class=big>{{Word}}</div>{{Audio}}{{#Hint}}{{hint:Hint}}{{/Hint}}", "afmt": "{{FrontSide}}<hr id=answer>{{Meaning}}<br>{{Sentence}}"},
+                            {"name": "Recall", "ord": 1, "qfmt": "{{Meaning}} {{type:Word}}", "afmt": "{{FrontSide}}<hr id=answer>{{type:Word}} {{Audio}}"}]},
+            "4": {"name": "Phrase", "type": 0,
+                  "flds": [{"name": "Text", "ord": 0}, {"name": "Translation", "ord": 1}, {"name": "Notes", "ord": 2}],
+                  "tmpls": [{"name": "Card 1", "ord": 0, "qfmt": "{{Text}}", "afmt": "{{FrontSide}}<hr id=answer>{{Translation}}"}]},
+            "5": {"name": "Plural", "type": 0,
+                  "flds": [{"name": "Word", "ord": 0}, {"name": "Plural", "ord": 1}, {"name": "Gender", "ord": 2}],
+                  "tmpls": [{"name": "Card 1", "ord": 0, "qfmt": "Plural of {{Word}}?", "afmt": "{{FrontSide}}<hr id=answer>{{Plural}}"}]}
+        }"#;
+        conn.execute_batch(
+            "CREATE TABLE col (crt INTEGER, conf TEXT, decks TEXT, models TEXT);
+             CREATE TABLE notes (id INTEGER, mid INTEGER, flds TEXT, tags TEXT);
+             CREATE TABLE cards (id INTEGER, nid INTEGER, did INTEGER, odid INTEGER, ord INTEGER, type INTEGER, queue INTEGER, due INTEGER, odue INTEGER);
+             CREATE TABLE revlog (id INTEGER, cid INTEGER, ease INTEGER, type INTEGER, ivl INTEGER, factor INTEGER);",
+        )
+        .unwrap();
+        conn.execute("INSERT INTO col VALUES (1699920000, '{}', ?1, ?2)", [r#"{"20": {"name": "Spanish"}}"#, models]).unwrap();
+        conn.execute_batch(&format!("INSERT INTO notes VALUES {notes}; INSERT INTO cards VALUES {cards}; {revlog}")).unwrap();
+        conn
+    }
+
+    #[test]
+    fn notes_with_many_fields_keep_them() {
+        let notes = "(200, 3, 'manzana' || char(31) || 'apple' || char(31) || '[sound:manzana.mp3]' || char(31) || 'Me como una manzana.<br>Meaning: not a field', 'food'),
+             (201, 3, 'queso' || char(31) || 'cheese' || char(31) || '' || char(31) || '', ''),
+             (202, 4, 'Buenos días' || char(31) || 'Good morning' || char(31) || 'formal', ''),
+             (203, 5, 'pan' || char(31) || 'panes' || char(31) || 'm', ''),
+             (204, 3, 'uva' || char(31) || 'grape' || char(31) || '' || char(31) || '', '')";
+        let cards = "(2000, 200, 20, 0, 0, 2, 2, 5, 0), (2001, 200, 20, 0, 1, 2, 2, 6, 0),
+             (2010, 201, 20, 0, 0, 0, 0, 1, 0), (2011, 201, 20, 0, 1, 0, 0, 2, 0),
+             (2020, 202, 20, 0, 0, 0, 0, 3, 0),
+             (2030, 203, 20, 0, 0, 0, 0, 4, 0),
+             (2040, 204, 20, 0, 0, 0, -1, 7, 0), (2041, 204, 20, 0, 1, 0, 0, 8, 0)";
+        let revlog = "INSERT INTO revlog VALUES (1700000000000, 2001, 3, 0, 1, 2500);";
+        let out = Package::from_db(&vocab_collection(notes, cards, revlog)).unwrap().convert();
+        let paths: Vec<_> = out.decks.iter().map(|(p, _)| p.as_str()).collect();
+        // One file for the deck, whatever note types its notes have.
+        assert_eq!(paths, ["Spanish"]);
+        assert_eq!(
+            out.decks[0].1,
+            "@Vocab\nWord: manzana\nMeaning: apple\nAudio: ![](media/manzana.mp3)\nSentence: Me como una manzana.\nMeaning\\: not a field\n#food\n\n\
+             @Vocab\nWord: queso\nMeaning: cheese\n\n\
+             @Phrase\nText: Buenos días\nTranslation: Good morning\nNotes: formal\n\n\
+             Q: Plural of pan?\nA: panes\n\n\
+             Q: uva\nA: grape\n#suspended\n\n\
+             Q: grape\nA: uva\n"
+        );
+        let types: Vec<_> = out.note_types.iter().map(|(name, toml)| format!("{name}.toml\n{toml}")).collect();
+        assert_eq!(
+            types,
+            [
+                "Phrase.toml\nfields = [\"Text\", \"Translation\", \"Notes\"]\ncards = [\n  \"Text -> Translation\",\n]\n",
+                "Vocab.toml\nfields = [\"Word\", \"Meaning\", \"Audio\", \"Sentence\"]\ncards = [\n  \"Word, Audio -> Meaning, Sentence\",\n  \"Meaning -> Word, Audio\",\n]\n",
+            ]
+        );
+        assert_eq!((out.notes, out.cards, out.skipped_notes, out.suspended_cards), (5, 8, 0, 1));
+        assert_eq!(out.media.sounds.iter().collect::<Vec<_>>(), ["manzana.mp3"]);
+
+        let mut types = parser::NoteTypes::default();
+        for (name, toml) in &out.note_types {
+            types.insert(name, toml);
+        }
+        let parsed = parser::parse_deck(&out.decks[0].1, &types);
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        let fronts: Vec<_> = parsed.cards.iter().map(|c| c.front.as_str()).collect();
+        assert_eq!(fronts, ["manzana\n\n![](media/manzana.mp3)", "apple", "queso", "cheese", "Buenos días", "Plural of pan?", "uva", "grape"]);
+        // The review of the Recall card went to the `Meaning -> Word, Audio` card.
+        assert_eq!(out.histories.len(), 1);
+        assert_eq!(out.histories[0].id, parsed.cards[1].id);
+    }
+
     #[test]
     fn converts_legacy_collection() {
         let pkg = Package::from_db(&legacy_collection()).unwrap();
@@ -1034,6 +1335,19 @@ pub(crate) mod tests {
         let modern = [0x0a, 0x07, 0x0a, 0x05, b'a', b'.', b'p', b'n', b'g', 0x0a, 0x0a, 0x0a, 0x05, b'b', b'.', b'p', b'n', b'g', 0xf8, 0x0f, 0x07];
         let modern = media_index(&modern).unwrap();
         assert_eq!((modern["a.png"].as_str(), modern["b.png"].as_str()), ("0", "7"));
+    }
+
+    #[test]
+    fn template_fields() {
+        let shown = |t, front| shown_fields(t, front).map(|names| names.join(" "));
+        assert_eq!(shown("{{#A}}{{text:A}}{{/A}} {{type:B}} {{hint:C}} {{FrontSide}} {{tts en_US:D}} <b>{{E}}</b>", true).unwrap(), "A E");
+        assert_eq!(shown("{{hint:C}}{{#A}}{{B}}{{/A}}<script>x = '{{D}}'</script>", false).unwrap(), "C B");
+        // What the question shows depends on another field, a script or an attribute.
+        assert_eq!(shown("{{#IsSentence}}{{Sentence}}{{/IsSentence}}", true), None);
+        assert_eq!(shown("{{Word}}<script></script>", true), None);
+        assert_eq!(shown("<img src=\"{{Picture}}\">", false), None);
+        assert!(!has_own_text("<div class=\"word\">{{Word}}</div><br>{{Audio}} &mdash; <style>.word { color: red }</style>"));
+        assert!(has_own_text("Plural of {{Word}}?"));
     }
 
     #[test]

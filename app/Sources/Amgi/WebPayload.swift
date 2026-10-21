@@ -15,6 +15,8 @@ struct WebState {
     var dashboard: DashboardPayload?
     /// Every card as JSON, once read.
     var cards: String?
+    /// The note types as JSON, once read.
+    var noteTypes: String?
     /// Which cards to show, while browsing.
     var browse: BrowseSource?
     var search: String

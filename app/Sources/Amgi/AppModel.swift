@@ -35,6 +35,8 @@ struct SavedViewDraft: Identifiable {
 struct DeckName: Equatable {
     let name: String
     let title: String
+    /// The note type most of its notes have, offered first for adding to it.
+    let noteType: String?
 }
 
 @Observable
@@ -51,6 +53,8 @@ final class AppModel {
     /// Deck names and titles without counts, for views that only show the decks:
     /// counts change with every answer, these only when files do.
     private(set) var deckNames: [DeckName] = []
+    /// The note types in the collection's `note-types` folder, by name.
+    private(set) var noteTypes: [NoteTypeInfo] = []
     private(set) var tags: [TagInfo] = []
     /// Lowercased tag → icon, such as an emoji.
     private(set) var tagIcons: [String: String] = [:]
@@ -73,6 +77,8 @@ final class AppModel {
     /// saved view browsed. Sent once and again only when cards change, so moving
     /// between them sends almost nothing.
     private(set) var cardsJSON: String?
+    /// The note types, as JSON for the browse pane, which names a note's fields with them.
+    private(set) var noteTypesJSON: String?
     /// Cards changed while nothing was browsed; they're read again when browsing starts.
     @ObservationIgnored private var cardsStale = true
     /// How many browsed cards match the tag or saved view, as counted by the browse pane.
@@ -225,6 +231,7 @@ final class AppModel {
         selection = .review
         decks = []
         deckNames = []
+        noteTypes = []
         tags = []
         tagIcons = [:]
         savedViews = []
@@ -235,6 +242,7 @@ final class AppModel {
         canUndoAnswer = false
         dashboard = nil
         cardsJSON = nil
+        noteTypesJSON = nil
         cardsStale = true
         browsedCount = nil
         browseSelection = []
@@ -279,7 +287,8 @@ final class AppModel {
         perform {
             let decks = try collection.decks()
             update(\.decks, decks)
-            update(\.deckNames, decks.map { DeckName(name: $0.name, title: $0.title) })
+            update(\.deckNames, decks.map { DeckName(name: $0.name, title: $0.title, noteType: $0.noteType) })
+            update(\.noteTypes, collection.noteTypes())
             update(\.tags, collection.tags())
             update(\.tagIcons, try collection.tagIcons())
             update(\.savedViews, try collection.savedViews())
@@ -383,6 +392,7 @@ final class AppModel {
             ),
             dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDue, today: today) } : nil,
             cards: cardsJSON,
+            noteTypes: noteTypesJSON,
             browse: browse,
             search: search,
             preview: preview
@@ -550,6 +560,7 @@ final class AppModel {
     /// Card lists are only read while a deck, tag or saved view is showing.
     func loadBrowsed() {
         guard let collection, isBrowsing else { return }
+        update(\.noteTypesJSON, collection.noteTypesJson())
         update(\.cardsJSON, collection.cardsJson(scope: .all))
         cardsStale = false
         // Suspending or editing cards changes them under the selection.
@@ -668,6 +679,32 @@ final class AppModel {
         }
         refresh()
         return nil
+    }
+
+    /// Appends the note to its deck's file. Returns why it couldn't be added, if it couldn't.
+    func addNote(_ note: NewNote) -> String? {
+        guard let collection else { return "Open a folder first." }
+        do {
+            _ = try collection.addNote(note: note)
+        } catch AmgiError.InvalidCard(let message) {
+            return message
+        } catch {
+            return error.localizedDescription
+        }
+        refresh()
+        return nil
+    }
+
+    /// How many cards a note of `noteType` would make; 0 if it can't be added as it is.
+    func noteCardCount(noteType: String, values: [String]) -> Int {
+        Int(collection?.noteCardCount(noteType: noteType, values: values) ?? 0)
+    }
+
+    /// Copies a dropped image or sound into the collection's media folder, returning
+    /// the Markdown that shows it in a card of `deck`, or why it couldn't.
+    func addMedia(deck: String, file: URL) -> Result<String, Error> {
+        guard let collection else { return .failure(CocoaError(.fileNoSuchFile)) }
+        return Result { try collection.addMedia(deck: deck, path: file.path) }
     }
 
     private func registerQuickAddShortcut() {

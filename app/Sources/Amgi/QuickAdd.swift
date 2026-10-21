@@ -4,7 +4,8 @@ import SwiftUI
 
 /// The deck cards were last added to, picked again next time.
 private let quickAddDeckKey = "quickAddDeck"
-private let quickAddClozeKey = "quickAddCloze"
+/// What was last added: `basic`, `cloze`, or `note:` and a note type's name.
+private let quickAddKindKey = "quickAddKind"
 
 /// A floating panel for adding a card from anywhere, opened with ⌥⌘N. It takes
 /// typing without bringing Amgi's main window to the front.
@@ -80,14 +81,16 @@ private struct QuickAddView: View {
     let close: () -> Void
 
     @AppStorage(quickAddDeckKey) private var deck = ""
-    @AppStorage(quickAddClozeKey) private var cloze = false
+    @AppStorage(quickAddKindKey) private var kind = "basic"
     @State private var front = ""
     @State private var back = ""
+    /// A note's field values by field name, so they carry over to a note type with the same fields.
+    @State private var values: [String: String] = [:]
     @State private var tags = ""
     @State private var error: String?
     @FocusState private var focus: Field?
 
-    private enum Field { case front, back, tags }
+    private enum Field: Hashable { case front, back, note(Int), tags }
 
     var body: some View {
         Group {
@@ -109,17 +112,51 @@ private struct QuickAddView: View {
         }
         .padding(20)
         .frame(width: 520)
-        .onAppear { focus = .front }
+        .onAppear { focus = firstField }
+    }
+
+    /// The kind chosen: basic or cloze, or a note type that still exists.
+    private var kindSelection: Binding<String> {
+        Binding(
+            get: { noteTypeInfo == nil && kind.hasPrefix("note:") ? "basic" : kind },
+            set: { kind = $0 }
+        )
+    }
+
+    private var cloze: Bool { kind == "cloze" }
+
+    private var noteTypeInfo: NoteTypeInfo? {
+        guard kind.hasPrefix("note:") else { return nil }
+        let name = kind.dropFirst("note:".count)
+        return model.noteTypes.first { $0.name == name }
+    }
+
+    /// The fields of the chosen note type; empty for basic and cloze cards.
+    private var noteFields: [String] { noteTypeInfo?.fields ?? [] }
+
+    private var firstField: Field { noteFields.isEmpty ? .front : .note(0) }
+
+    private var noteValues: [String] { noteFields.map { values[$0] ?? "" } }
+
+    /// How many cards the note makes, once something is typed; nil for basic and cloze cards.
+    private var noteCards: Int? {
+        guard let noteTypeInfo, noteValues.contains(where: { !$0.isEmpty }) else { return nil }
+        return model.noteCardCount(noteType: noteTypeInfo.name, values: noteValues)
     }
 
     private var form: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Picker("Type", selection: $cloze) {
-                    Text("Basic").tag(false)
-                    Text("Cloze").tag(true)
+                Picker("Type", selection: kindSelection) {
+                    Text("Basic").tag("basic")
+                    Text("Cloze").tag("cloze")
+                    if !model.noteTypes.isEmpty {
+                        Divider()
+                        ForEach(model.noteTypes, id: \.name) { type in
+                            Text(type.name).tag("note:\(type.name)")
+                        }
+                    }
                 }
-                .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
                 Spacer()
@@ -138,9 +175,16 @@ private struct QuickAddView: View {
                 }
             }
 
-            field(cloze ? "Text" : "Question", text: $front, prompt: cloze ? "The capital of [France] is [Paris|city]." : "", focus: .front)
-            if !cloze {
-                field("Answer", text: $back, prompt: "", focus: .back)
+            if noteFields.isEmpty {
+                field(cloze ? "Text" : "Question", text: $front, prompt: cloze ? "The capital of [France] is [Paris|city]." : "", focus: .front)
+                if !cloze {
+                    field("Answer", text: $back, prompt: "", focus: .back)
+                }
+            } else {
+                ForEach(Array(noteFields.enumerated()), id: \.element) { index, name in
+                    field(name, text: value(name), prompt: "", focus: .note(index))
+                        .dropDestination(for: URL.self) { files, _ in drop(files, into: name) }
+                }
             }
             field("Tags", text: $tags, prompt: "Separated by spaces", focus: .tags, multiline: false)
 
@@ -149,17 +193,50 @@ private struct QuickAddView: View {
                     Text(error)
                         .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if let noteCards {
+                    Text(noteCards == 1 ? "Makes 1 card" : "Makes \(noteCards) cards")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
                 Spacer()
                 Button("Cancel", action: close)
                     .keyboardShortcut(.cancelAction)
-                Button("Add Card", action: add)
+                Button(noteFields.isEmpty ? "Add Card" : "Add Note", action: add)
                     .keyboardShortcut(.return, modifiers: .command)
                     .buttonStyle(.glassProminent)
-                    .disabled(front.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(noteFields.isEmpty ? front.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : (noteCards ?? 0) == 0)
             }
         }
-        .onChange(of: cloze) { error = nil }
+        .onChange(of: kind) {
+            error = nil
+            focus = firstField
+        }
+        // A deck with notes offers its note type.
+        .onChange(of: deckSelection.wrappedValue, initial: true) {
+            if let noteType = model.deckNames.first(where: { $0.name == deckSelection.wrappedValue })?.noteType {
+                kind = "note:\(noteType)"
+            }
+        }
+    }
+
+    private func value(_ name: String) -> Binding<String> {
+        Binding(get: { values[name] ?? "" }, set: { values[name] = $0 })
+    }
+
+    /// Copies dropped images and sounds into the media folder and links them in the field.
+    private func drop(_ files: [URL], into name: String) {
+        let links = files.filter(\.isFileURL).compactMap { file -> String? in
+            switch model.addMedia(deck: deckSelection.wrappedValue, file: file) {
+            case .success(let link): return link
+            case .failure(let failure):
+                error = failure.localizedDescription
+                return nil
+            }
+        }
+        guard !links.isEmpty else { return }
+        let current = values[name] ?? ""
+        values[name] = ([current].filter { !$0.isEmpty } + links).joined(separator: " ")
+        error = nil
     }
 
     private func field(_ title: String, text: Binding<String>, prompt: String, focus field: Field, multiline: Bool = true) -> some View {
@@ -181,6 +258,7 @@ private struct QuickAddView: View {
         switch field {
         case .front: focus = cloze ? .tags : .back
         case .back: focus = .tags
+        case .note(let index): focus = index + 1 < noteFields.count ? .note(index + 1) : .tags
         case .tags: add()
         }
     }
@@ -199,6 +277,10 @@ private struct QuickAddView: View {
     }
 
     private func add() {
+        if !noteFields.isEmpty {
+            addNote()
+            return
+        }
         let card = NewCard(
             deck: deckSelection.wrappedValue,
             kind: cloze ? .cloze : .basic,
@@ -215,6 +297,24 @@ private struct QuickAddView: View {
         back = ""
         error = nil
         focus = .front
+        close()
+    }
+
+    private func addNote() {
+        guard let noteTypeInfo else { return }
+        let note = NewNote(
+            deck: deckSelection.wrappedValue,
+            noteType: noteTypeInfo.name,
+            values: noteValues,
+            tags: tags.split(whereSeparator: \.isWhitespace).map(String.init)
+        )
+        if let message = model.addNote(note) {
+            error = message
+            return
+        }
+        values = [:]
+        error = nil
+        focus = firstField
         close()
     }
 }

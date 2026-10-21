@@ -1,4 +1,4 @@
-import type { BrowseCard } from "../lib/types";
+import type { BrowseCard, NoteTypeInfo } from "../lib/types";
 
 // The browse search. Words must all match; see the README for the syntax.
 
@@ -133,8 +133,23 @@ function tagTest(tag: string): Test {
   return (c) => c.tags.some((t) => fold(t) === want);
 }
 
+/** A field name as typed in a search: folded, without spaces, so `wordmeaning:` finds `Word Meaning`. */
+function fieldKey(name: string): string {
+  return fold(name).replace(/\s+/g, "");
+}
+
+/** Notes with a field named `key` whose text has `word`. */
+function fieldTest(key: string, word: string, noteTypes: NoteTypeInfo[]): Test {
+  const index = new Map(noteTypes.map((t) => [t.name, t.fields.findIndex((f) => fieldKey(f) === key)]));
+  const needle = fold(word);
+  return (c) => {
+    const i = c.noteType === null ? -1 : (index.get(c.noteType) ?? -1);
+    return i >= 0 && fold(c.fields[i] ?? "").includes(needle);
+  };
+}
+
 /** What one token tests; null if it matches everything, like a filter still being typed (`deck:`). */
-function compile(token: Token, now: number): Test | null {
+function compile(token: Token, now: number, noteTypes: NoteTypeInfo[]): Test | null {
   const { key, operator, value } = token;
   if (key === null && token.raw.startsWith("#")) {
     return value.length > 1 ? tagTest(value.slice(1)) : null;
@@ -164,21 +179,29 @@ function compile(token: Token, now: number): Test | null {
           if (!value) return null;
           const state = STATES[value.toLowerCase()];
           if (state) return state(now);
+          break;
+        }
+        default: {
+          const field = fieldKey(key);
+          if (noteTypes.some((t) => t.fields.some((f) => fieldKey(f) === field))) {
+            return value ? fieldTest(field, value, noteTypes) : null;
+          }
         }
       }
     }
   }
   const word = text(token);
-  return word ? textTest(word, (c) => [c.front, c.back, ...c.tags]) : null;
+  // A note's fields count too, with those no card shows.
+  return word ? textTest(word, (c) => [c.front, c.back, ...c.tags, ...c.fields]) : null;
 }
 
 /**
  * Turns a search into a test for cards. Never fails: anything that isn't a known
  * filter is searched as text, so `12:30` and links still work.
  */
-export function parseQuery(query: string, now = Date.now() / 1000): Test {
+export function parseQuery(query: string, now = Date.now() / 1000, noteTypes: NoteTypeInfo[] = []): Test {
   const tests = tokenize(query).flatMap((token) => {
-    const test = compile(token, now);
+    const test = compile(token, now, noteTypes);
     if (!test) return [];
     return [token.negated ? (c: BrowseCard) => !test(c) : test];
   });

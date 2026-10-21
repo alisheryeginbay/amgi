@@ -22,8 +22,16 @@
 //!
 //! A card's last lines may hold tags: `#korean #verbs`. A file may start with TOML
 //! front matter between `+++` lines, giving the deck a `name` and default `tags`.
+//!
+//! A note starts at a line `@Vocabulary` naming its note type, defined in
+//! `note-types/Vocabulary.toml` by its `fields` and `cards`, the rules for which cards
+//! each note makes, such as `"Word -> Meaning"`. `Field: value` lines follow; each rule
+//! makes one basic card from the note, its sides the rule's fields in order.
 
 use std::fmt::Write;
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::Deserialize;
 
@@ -45,6 +53,16 @@ pub struct ParsedCard {
     pub line: u32,
     /// The deck's default tags, then the card's own, without `#`.
     pub tags: Vec<String>,
+    /// The note the card comes from, shared by its cards; `None` for `Q:` and `C:` cards.
+    pub note: Option<Arc<Note>>,
+}
+
+/// A note's type and the Markdown of each of its fields, in the type's order; empty
+/// for a field the note doesn't fill.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Note {
+    pub note_type: String,
+    pub values: Vec<String>,
 }
 
 /// Cards with this tag, on the card or in the deck's front matter, are never studied.
@@ -79,12 +97,91 @@ struct FrontMatter {
     tags: Vec<String>,
 }
 
+/// Folder at the collection root holding note types, one `Name.toml` file each.
+pub const NOTE_TYPES_DIR: &str = "note-types";
+
+/// The collection's note types by name. `None` for a file with errors, so notes of
+/// that type say so instead of that it is missing.
+#[derive(Debug, Default, Clone)]
+pub struct NoteTypes {
+    types: HashMap<String, Option<NoteType>>,
+}
+
+impl NoteTypes {
+    pub(crate) fn get(&self, name: &str) -> Option<&NoteType> {
+        self.types.get(name)?.as_ref()
+    }
+
+    /// Add note type `name` from its TOML file, returning the file's problems.
+    pub fn insert(&mut self, name: &str, toml: &str) -> Vec<ParseWarning> {
+        let mut warnings = Vec::new();
+        let note_type = NoteType::from_toml(toml, &mut warnings);
+        self.types.insert(name.to_string(), note_type);
+        warnings
+    }
+}
+
+/// A note type's name and fields, for adding and browsing notes.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, uniffi::Record)]
+pub struct NoteTypeInfo {
+    pub name: String,
+    pub fields: Vec<String>,
+}
+
+impl NoteTypes {
+    /// The note types without errors, by name.
+    pub fn list(&self) -> Vec<NoteTypeInfo> {
+        let mut list: Vec<NoteTypeInfo> = self
+            .types
+            .iter()
+            .filter_map(|(name, t)| Some(NoteTypeInfo { name: name.clone(), fields: t.as_ref()?.fields.clone() }))
+            .collect();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct NoteTypeFile {
+    fields: Vec<String>,
+    cards: Vec<String>,
+}
+
+/// The fields of a deck's notes and the cards each note makes.
+#[derive(Debug, Clone)]
+pub(crate) struct NoteType {
+    fields: Vec<String>,
+    rules: Vec<Rule>,
+}
+
+/// One card per note: these fields on the front, these on the back, as indexes into
+/// `NoteType::fields`.
+#[derive(Debug, Clone, PartialEq)]
+struct Rule {
+    front: Vec<usize>,
+    back: Vec<usize>,
+}
+
+impl NoteType {
+    /// The field a line starts, as in `Word: hola`, and the rest of the line.
+    fn marker<'a>(&self, line: &'a str) -> Option<(usize, &'a str)> {
+        self.fields.iter().enumerate().find_map(|(i, name)| {
+            let rest = line.strip_prefix(name.as_str())?.strip_prefix(':')?;
+            Some((i, rest.trim_start()))
+        })
+    }
+}
+
 const FRONT_MATTER: &str = "+++";
 
+#[derive(Clone, Copy)]
 enum Field {
     Question,
     Answer,
     Cloze,
+    /// The last of `Pending::values`.
+    Note,
 }
 
 struct Pending {
@@ -93,13 +190,29 @@ struct Pending {
     question: Vec<String>,
     answer: Vec<String>,
     cloze: Vec<String>,
+    /// A note's type, as its `@` line names it.
+    note_type: String,
+    /// A note's fields as written: the field's index and its lines.
+    values: Vec<(usize, Vec<String>)>,
 }
 
+/// Cards in a deck file, without notes: they need their note types.
 pub fn parse(source: &str) -> ParseResult {
+    parse_deck(source, &NoteTypes::default())
+}
+
+/// Cards in a deck file, with notes of `types`.
+pub fn parse_deck(source: &str, types: &NoteTypes) -> ParseResult {
     let mut out = ParseResult::default();
+    let body_start = front_matter(source, &mut out);
+    parse_body(source, body_start, types, out)
+}
+
+/// The cards in `source` from line `body_start` on, into `out`, which holds what its
+/// front matter says.
+fn parse_body(source: &str, body_start: usize, types: &NoteTypes, mut out: ParseResult) -> ParseResult {
     let mut pending: Option<Pending> = None;
     let mut fence = Fences::default();
-    let body_start = front_matter(source, &mut out);
 
     for (idx, raw) in source.lines().enumerate().skip(body_start) {
         let line_no = idx as u32 + 1;
@@ -114,16 +227,34 @@ pub fn parse(source: &str) -> ParseResult {
         }
 
         if line.trim().is_empty() {
-            finish(pending.take(), &mut out);
+            finish(pending.take(), types, &mut out);
             continue;
         }
 
+        // In a note, the field a line starts, if any.
+        let field = pending.as_ref().and_then(|p| p.note_type(types)).and_then(|t| t.marker(line));
         if let Some(rest) = marker(line, "Q:") {
-            finish(pending.take(), &mut out);
+            finish(pending.take(), types, &mut out);
             pending = Some(Pending::new(line_no, Field::Question, rest));
         } else if let Some(rest) = marker(line, "C:") {
-            finish(pending.take(), &mut out);
+            finish(pending.take(), types, &mut out);
             pending = Some(Pending::new(line_no, Field::Cloze, rest));
+        } else if let Some(name) = note_start(&pending, line) {
+            finish(pending.take(), types, &mut out);
+            match types.types.get(name) {
+                Some(Some(_)) => {
+                    let mut p = Pending::new(line_no, Field::Note, "");
+                    p.note_type = name.to_string();
+                    pending = Some(p);
+                }
+                found => out.warnings.push(ParseWarning {
+                    line: line_no,
+                    message: match found {
+                        Some(None) => format!("note type `{name}` has errors, see `{NOTE_TYPES_DIR}/{name}.toml`"),
+                        _ => format!("there's no note type `{name}` in `{NOTE_TYPES_DIR}/`"),
+                    },
+                }),
+            }
         } else if let Some(rest) = marker(line, "A:") {
             match pending.as_mut() {
                 Some(p) if matches!(p.field, Field::Question) => {
@@ -135,11 +266,28 @@ pub fn parse(source: &str) -> ParseResult {
                     message: "`A:` without a preceding `Q:`".into(),
                 }),
             }
+        } else if let Some(p) = pending.as_mut().filter(|p| matches!(p.field, Field::Note)) {
+            match field {
+                Some((f, rest)) if p.values.iter().all(|(given, _)| *given != f) => p.values.push((f, vec![rest.to_string()])),
+                Some(_) => out.warnings.push(ParseWarning {
+                    line: line_no,
+                    message: "field given twice in a note; start another with its `@` line".into(),
+                }),
+                None if p.values.is_empty() => out.warnings.push(ParseWarning {
+                    line: line_no,
+                    message: format!("`@{}` is followed by a line that isn't one of its fields", p.note_type),
+                }),
+                None => p.current().push(line.to_string()),
+            }
         } else if let Some(p) = pending.as_mut() {
             p.current().push(line.to_string());
         }
         // A fence opens on a marker line too, as in `A: ```r`.
-        let content = ["Q:", "A:", "C:"].iter().find_map(|m| marker(line, m)).unwrap_or(line);
+        let content = ["Q:", "A:", "C:"]
+            .iter()
+            .find_map(|m| marker(line, m))
+            .or_else(|| field.map(|(_, rest)| rest))
+            .unwrap_or(line);
         fence.step(content);
         if fence.inside() {
             fence.start = line_no;
@@ -151,8 +299,17 @@ pub fn parse(source: &str) -> ParseResult {
             message: "code block has no closing fence".into(),
         });
     }
-    finish(pending, &mut out);
+    finish(pending, types, &mut out);
     out
+}
+
+/// The note type named by a line `@Name` that starts a note: outside a `Q:` or `C:`
+/// card, where such a line is just text.
+fn note_start<'a>(pending: &Option<Pending>, line: &'a str) -> Option<&'a str> {
+    if pending.as_ref().is_some_and(|p| !matches!(p.field, Field::Note)) {
+        return None;
+    }
+    line.strip_prefix('@').map(str::trim).filter(|name| !name.is_empty())
 }
 
 /// Tracks fenced code blocks line by line, as CommonMark does: a run of three or more
@@ -220,6 +377,106 @@ fn front_matter(source: &str, out: &mut ParseResult) -> usize {
     len + 2
 }
 
+impl NoteType {
+    /// A note type from its file's `fields` and `cards`. Without `cards`, a note's
+    /// first field is the front and the rest the back. `None` if it has no usable
+    /// fields; rules with problems are left out.
+    fn from_toml(toml: &str, warnings: &mut Vec<ParseWarning>) -> Option<NoteType> {
+        match toml::from_str::<NoteTypeFile>(toml) {
+            Ok(file) => {
+                // A problem's line is the first that mentions it, from `cards` on for a rule.
+                let lines: Vec<&str> = toml.lines().collect();
+                let cards = lines.iter().position(|l| l.trim_start().starts_with("cards")).unwrap_or(0);
+                let line_of = |needle: &str, rule: bool| {
+                    let (from, needle) = if rule { (cards, toml_string(needle)) } else { (0, needle.to_string()) };
+                    lines[from..].iter().position(|l| l.contains(&needle)).map_or(1, |i| (from + i) as u32 + 1)
+                };
+                note_type(&file.fields, &file.cards, &mut |message, needle, rule| {
+                    warnings.push(ParseWarning { line: line_of(needle, rule), message })
+                })
+            }
+            Err(e) => {
+                let line = e.span().map_or(1, |span| toml[..span.start].lines().count().max(1) as u32);
+                warnings.push(ParseWarning { line, message: format!("invalid note type: {}", e.message()) });
+                None
+            }
+        }
+    }
+}
+
+/// `warn` takes a problem, the text it is about and whether that is a card rule.
+fn note_type(fields: &[String], cards: &[String], warn: &mut dyn FnMut(String, &str, bool)) -> Option<NoteType> {
+    let mut names: Vec<String> = Vec::new();
+    for name in fields.iter().map(|f| f.trim()) {
+        if name.is_empty() || name.contains(':') || ["Q", "A", "C"].contains(&name) {
+            warn(format!("`{name}` can't be a field name"), name, false);
+        } else if names.iter().any(|n| n == name) {
+            warn(format!("field `{name}` is listed twice"), name, false);
+        } else {
+            names.push(name.to_string());
+        }
+    }
+    if names.is_empty() {
+        if !cards.is_empty() {
+            warn("`cards` needs `fields`".into(), "cards", false);
+        }
+        return None;
+    }
+    let mut rules: Vec<Rule> = Vec::new();
+    if cards.is_empty() {
+        if names.len() < 2 {
+            warn("notes need two fields, or `cards` to say which make a card".into(), "fields", false);
+            return None;
+        }
+        rules.push(Rule { front: vec![0], back: (1..names.len()).collect() });
+    }
+    'rules: for text in cards {
+        let Some((front, back)) = text.split_once("->") else {
+            warn(format!("card rule `{text}` has no `->`"), text, true);
+            continue;
+        };
+        let mut side = |part: &str| -> Option<Vec<usize>> {
+            let mut out = Vec::new();
+            for name in part.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+                match names.iter().position(|n| n == name) {
+                    Some(i) => out.push(i),
+                    None => {
+                        warn(format!("card rule `{text}` names `{name}`, which isn't in `fields`"), text, true);
+                        return None;
+                    }
+                }
+            }
+            if out.is_empty() {
+                warn(format!("card rule `{text}` has an empty side"), text, true);
+                return None;
+            }
+            Some(out)
+        };
+        let (Some(front), Some(back)) = (side(front), side(back)) else { continue 'rules };
+        if rules.iter().any(|r| r.front == front) {
+            warn(format!("card rule `{text}` has the same front as another"), text, true);
+            continue;
+        }
+        rules.push(Rule { front, back });
+    }
+    Some(NoteType { fields: names, rules })
+}
+
+/// A TOML basic string.
+pub(crate) fn toml_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// A tag without its `#`, or `None` if empty or containing whitespace.
 fn clean_tag(tag: &str) -> Option<String> {
     let tag = tag.trim().trim_start_matches('#');
@@ -247,6 +504,74 @@ fn take_tags(lines: &mut Vec<String>) -> Vec<String> {
         tags.splice(0..0, line_tags);
     }
     tags
+}
+
+/// A new note of type `note_type` as Markdown ending in a newline, starting with its
+/// `@` line, with the ids of the cards it makes; or why it can't be written. `values`
+/// follow the note type's fields; empty ones are left out. Blank lines outside code
+/// blocks are dropped, and lines that would start a field, a card, a note or a tag
+/// line are escaped.
+pub fn write_note(note_type: &str, types: &NoteTypes, values: &[String], tags: &[String]) -> Result<(String, Vec<String>), String> {
+    let Some(Some(t)) = types.types.get(note_type) else {
+        return Err(format!("There's no note type “{note_type}”."));
+    };
+    let mut out = format!("@{note_type}\n");
+    for (name, value) in t.fields.iter().zip(values) {
+        let mut fence = Fences::default();
+        let mut lines: Vec<String> = Vec::new();
+        for line in value.lines().map(str::trim_end) {
+            if fence.inside() || !line.trim().is_empty() {
+                lines.push(line.to_string());
+            }
+            fence.step(line);
+        }
+        let Some((first, rest)) = lines.split_first_mut() else { continue };
+        let mut fence = Fences::default();
+        fence.step(first);
+        for line in rest.iter_mut() {
+            if !fence.inside() {
+                escape_line(line, t);
+            }
+            fence.step(line);
+        }
+        writeln!(out, "{name}: {}", first.trim_start()).unwrap();
+        for line in rest.iter() {
+            writeln!(out, "{line}").unwrap();
+        }
+    }
+    let mut own: Vec<String> = Vec::new();
+    for tag in tags.iter().flat_map(|t| t.split_whitespace()).filter_map(clean_tag) {
+        if !own.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
+            own.push(tag);
+        }
+    }
+    if !own.is_empty() {
+        let line: Vec<String> = own.iter().map(|t| format!("#{t}")).collect();
+        writeln!(out, "{}", line.join(" ")).unwrap();
+    }
+    let parsed = parse_deck(&out, types);
+    if let Some(warning) = parsed.warnings.iter().find(|w| !w.message.starts_with("note makes no cards")) {
+        return Err(sentence(&warning.message));
+    }
+    if parsed.cards.is_empty() {
+        return Err("Fill in a field for the front of a card and one for its back.".into());
+    }
+    Ok((out, parsed.cards.into_iter().map(|c| c.id).collect()))
+}
+
+/// Escape a line inside a note's field that would otherwise start a field of `t`, a
+/// card, a note or a tag line. The backslash doesn't show: Markdown drops it.
+pub(crate) fn escape_line(line: &mut String, t: &NoteType) {
+    let colon = ["Q:", "A:", "C:"]
+        .into_iter()
+        .find(|m| line.starts_with(m))
+        .map(|m| m.len() - 1)
+        .or_else(|| t.marker(line).map(|(f, _)| t.fields[f].len()));
+    if let Some(at) = colon {
+        line.insert(at, '\\');
+    } else if line.starts_with('@') || tag_line(line).is_some() {
+        line.insert(0, '\\');
+    }
 }
 
 /// A new card as Markdown, ending in a newline, or why it can't be written. A basic
@@ -321,23 +646,37 @@ fn sentence(message: &str) -> String {
 /// Add or remove `#tag` on the card starting at 1-based `line`, in the card's own tag
 /// lines; the rest of the file is kept byte for byte. `None` when no card starts
 /// there or its own tags already say so (a front matter tag cannot be removed here).
-pub fn set_card_tag(source: &str, line: u32, tag: &str, present: bool) -> Option<String> {
+pub fn set_card_tag(source: &str, types: &NoteTypes, line: u32, tag: &str, present: bool) -> Option<String> {
     let mut lines: Vec<String> = source.split_inclusive('\n').map(String::from).collect();
     let start = line.checked_sub(1)? as usize;
     let first = lines.get(start)?.trim_end();
-    if marker(first, "Q:").is_none() && marker(first, "C:").is_none() {
-        return None;
+    fn card_marker(l: &str) -> Option<&str> {
+        marker(l, "Q:").or(marker(l, "C:"))
     }
-    // The card runs to the next blank line or card marker outside a code block, as
-    // when parsing.
+    // The card runs to the next blank line or card marker outside a code block, and a
+    // note also to the next note, as when parsing.
     let mut fence = Fences::default();
-    fence.step(marker(first, "Q:").or(marker(first, "C:")).unwrap_or(first));
+    let note_type = match card_marker(first) {
+        Some(rest) => {
+            fence.step(rest);
+            None
+        }
+        None => match types.types.get(note_start(&None, first)?) {
+            Some(Some(t)) => Some(t),
+            _ => return None,
+        },
+    };
     let mut end = start + 1;
     while let Some(l) = lines.get(end).map(|l| l.trim_end()) {
-        if !fence.inside() && (l.trim().is_empty() || marker(l, "Q:").is_some() || marker(l, "C:").is_some()) {
+        let ends_note = note_type.is_some() && note_start(&None, l).is_some();
+        if !fence.inside() && (l.trim().is_empty() || card_marker(l).is_some() || ends_note) {
             break;
         }
-        let content = if fence.inside() { l } else { marker(l, "A:").unwrap_or(l) };
+        let content = match note_type {
+            _ if fence.inside() => l,
+            Some(t) => t.marker(l).map_or(l, |(_, rest)| rest),
+            None => marker(l, "A:").unwrap_or(l),
+        };
         fence.step(content);
         end += 1;
     }
@@ -393,9 +732,21 @@ impl Pending {
             question: Vec::new(),
             answer: Vec::new(),
             cloze: Vec::new(),
+            note_type: String::new(),
+            values: Vec::new(),
         };
-        p.current().push(first.to_string());
+        if !matches!(field, Field::Note) {
+            p.current().push(first.to_string());
+        }
         p
+    }
+
+    /// A note's type, if this is a note of a known one.
+    fn note_type<'a>(&self, types: &'a NoteTypes) -> Option<&'a NoteType> {
+        if !matches!(self.field, Field::Note) {
+            return None;
+        }
+        types.types.get(&self.note_type)?.as_ref()
     }
 
     fn current(&mut self) -> &mut Vec<String> {
@@ -403,6 +754,11 @@ impl Pending {
             Field::Question => &mut self.question,
             Field::Answer => &mut self.answer,
             Field::Cloze => &mut self.cloze,
+            Field::Note => match self.values.last_mut() {
+                Some((_, lines)) => lines,
+                // Before its first field: tags only, kept for `take_tags`.
+                None => &mut self.question,
+            },
         }
     }
 }
@@ -411,7 +767,7 @@ fn join(lines: &[String]) -> String {
     lines.join("\n").trim().to_string()
 }
 
-fn finish(pending: Option<Pending>, out: &mut ParseResult) {
+fn finish(pending: Option<Pending>, types: &NoteTypes, out: &mut ParseResult) {
     let Some(mut p) = pending else { return };
     let mut tags = out.deck_tags.clone();
     for tag in take_tags(p.current()) {
@@ -441,10 +797,49 @@ fn finish(pending: Option<Pending>, out: &mut ParseResult) {
                 back,
                 line: p.line,
                 tags,
+                note: None,
             });
         }
         Field::Cloze => parse_cloze(&join(&p.cloze), p.line, tags, out),
+        Field::Note => note_cards(&p, types, tags, out),
     }
+}
+
+/// One basic card for each of the note type's rules with a front field and a back
+/// field the note fills. Each side is its filled fields in the rule's order, a blank
+/// line apart. A card's id is that of a `Q:` card with the same front.
+fn note_cards(p: &Pending, types: &NoteTypes, tags: Vec<String>, out: &mut ParseResult) {
+    let Some(note_type) = p.note_type(types) else { return };
+    let value = |field: usize| p.values.iter().find(|(f, _)| *f == field).map(|(_, lines)| join(lines)).filter(|v| !v.is_empty());
+    let side = |fields: &[usize]| fields.iter().filter_map(|&f| value(f)).collect::<Vec<_>>().join("\n\n");
+    let note = Arc::new(Note {
+        note_type: p.note_type.clone(),
+        values: (0..note_type.fields.len()).map(|f| value(f).unwrap_or_default()).collect(),
+    });
+    let mut cards = Vec::new();
+    for rule in &note_type.rules {
+        let back = side(&rule.back);
+        let front = side(&rule.front);
+        if front.is_empty() || back.is_empty() {
+            continue;
+        }
+        cards.push(ParsedCard {
+            id: card_id(&["basic", &normalize(&front)]),
+            kind: CardKind::Basic,
+            front,
+            back,
+            line: p.line,
+            tags: tags.clone(),
+            note: Some(note.clone()),
+        });
+    }
+    if cards.is_empty() {
+        out.warnings.push(ParseWarning {
+            line: p.line,
+            message: "note makes no cards: each card needs a front field and a back field filled in".into(),
+        });
+    }
+    out.cards.extend(cards);
 }
 
 enum Segment<'a> {
@@ -661,6 +1056,7 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
             back,
             line,
             tags: tags.clone(),
+            note: None,
         });
     }
 }
@@ -830,13 +1226,13 @@ mod tests {
     fn suspending_edits_only_the_card() {
         let source = "+++\ntags = [\"x\"]\n+++\n\nQ: one\nA: 1\n#geo\n\nC: The [capital] is here.\r\nmore text\r\n\nQ: last\nA: 3";
         // Joins an existing tag line.
-        let a = set_card_tag(source, 5, SUSPENDED_TAG, true).unwrap();
+        let a = set_card_tag(source, &NoteTypes::default(), 5, SUSPENDED_TAG, true).unwrap();
         assert!(a.contains("A: 1\n#geo #suspended\n\nC:"));
         // Gets a tag line of its own, with the file's line ending.
-        let b = set_card_tag(&a, 9, SUSPENDED_TAG, true).unwrap();
+        let b = set_card_tag(&a, &NoteTypes::default(), 9, SUSPENDED_TAG, true).unwrap();
         assert!(b.contains("more text\r\n#suspended\r\n\nQ: last"));
         // The last card, without a final newline.
-        let c = set_card_tag(&b, 13, SUSPENDED_TAG, true).unwrap();
+        let c = set_card_tag(&b, &NoteTypes::default(), 13, SUSPENDED_TAG, true).unwrap();
         assert!(c.ends_with("A: 3\n#suspended"));
         let cards = parse(&c).cards;
         assert!(cards.iter().all(ParsedCard::is_suspended));
@@ -845,15 +1241,15 @@ mod tests {
 
         let mut back = c;
         for line in [13, 9, 5] {
-            back = set_card_tag(&back, line, "Suspended", false).unwrap();
+            back = set_card_tag(&back, &NoteTypes::default(), line, "Suspended", false).unwrap();
         }
         // Removing restores the file, now with a final newline.
         assert_eq!(back, format!("{source}\n"));
         // Nothing to do, or no card at that line.
-        assert_eq!(set_card_tag(source, 5, SUSPENDED_TAG, false), None);
-        assert_eq!(set_card_tag(source, 6, SUSPENDED_TAG, true), None);
+        assert_eq!(set_card_tag(source, &NoteTypes::default(), 5, SUSPENDED_TAG, false), None);
+        assert_eq!(set_card_tag(source, &NoteTypes::default(), 6, SUSPENDED_TAG, true), None);
         // A deck tag cannot be removed from one card.
-        assert_eq!(set_card_tag(source, 5, "x", false), None);
+        assert_eq!(set_card_tag(source, &NoteTypes::default(), 5, "x", false), None);
     }
 
     #[test]
@@ -867,7 +1263,7 @@ mod tests {
         assert_eq!(r.cards[1].back, "~~~\n````\n~~~");
 
         // Tags go after the closing fence, past the blank line inside the block.
-        let tagged = set_card_tag(source, 1, SUSPENDED_TAG, true).unwrap();
+        let tagged = set_card_tag(source, &NoteTypes::default(), 1, SUSPENDED_TAG, true).unwrap();
         assert!(tagged.contains("```\n#code #suspended\n\nQ: next"));
 
         let r = parse("Q: a\nA: ```\nopen\n\nQ: b\nA: c");
@@ -919,5 +1315,170 @@ mod tests {
         assert_eq!(r.cards.len(), 2);
         assert_eq!(r.cards[0].front, "The interval $[0, 1]$ has **[size]** and $|x|$ is absolute.");
         assert_eq!(r.cards[0].back, "The interval $[0, 1]$ has **length $1$** and $|x|$ is absolute.");
+    }
+
+    const FOOD: &str = "+++\nname = \"Spanish\"\n+++\n";
+
+    fn types() -> NoteTypes {
+        let mut types = NoteTypes::default();
+        let food = "fields = [\"Word\", \"Meaning\", \"Audio\", \"Sentence\"]\ncards = [\"Word, Audio -> Meaning, Sentence\", \"Meaning -> Word\"]\n";
+        assert!(types.insert("Food", food).is_empty());
+        assert!(types.insert("Pair", "fields = [\"Word\", \"Word Audio\"]").is_empty());
+        assert!(types.insert("Code", "fields = [\"Task\", \"Code\"]").is_empty());
+        types.insert("Broken", "fields = 3");
+        types
+    }
+
+    fn food(source: &str) -> ParseResult {
+        parse_deck(source, &types())
+    }
+
+    #[test]
+    fn notes_make_a_card_per_rule() {
+        let source = format!("{FOOD}\n@Food\nWord: manzana\nMeaning: apple\nAudio: ![](media/manzana.mp3)\nSentence: Me como\nuna manzana.\n#food\n\nQ: plain?\nA: still works\n");
+        let r = food(&source);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.cards.len(), 3);
+        let (a, b) = (&r.cards[0], &r.cards[1]);
+        assert_eq!(a.front, "manzana\n\n![](media/manzana.mp3)");
+        assert_eq!(a.back, "apple\n\nMe como\nuna manzana.");
+        assert_eq!((b.front.as_str(), b.back.as_str()), ("apple", "manzana"));
+        assert_eq!((a.line, a.tags.clone()), (5, vec!["food".to_string()]));
+        assert_eq!(a.kind, CardKind::Basic);
+        let note = a.note.as_ref().unwrap();
+        assert_eq!((note.note_type.as_str(), note.values[1].as_str()), ("Food", "apple"));
+        // A note's card is identified like a `Q:` card with its front.
+        assert_eq!(b.id, parse("Q: apple\nA: something").cards[0].id);
+        assert_eq!(r.cards[2].front, "plain?");
+    }
+
+    #[test]
+    fn note_ids_follow_the_front() {
+        let ids = |note: &str| food(&format!("@Food\n{note}")).cards.into_iter().map(|c| c.id).collect::<Vec<_>>();
+        let before = ids("Word: pan\nMeaning: bread\nAudio: ![](pan.mp3)");
+        // Back fields, field order and a new field elsewhere keep history.
+        assert_eq!(before, ids("Meaning: bread\nAudio: ![](pan.mp3)\nWord: pan\nSentence: Compro pan."));
+        assert_ne!(before[0], ids("Word: pan!\nMeaning: bread\nAudio: ![](pan.mp3)")[0]);
+    }
+
+    #[test]
+    fn notes_skip_cards_with_missing_fields() {
+        // No audio: the first card shows only the word.
+        let r = food("@Food\nWord: queso\nMeaning: cheese\n");
+        assert_eq!(r.cards.iter().map(|c| c.front.as_str()).collect::<Vec<_>>(), ["queso", "cheese"]);
+        // Nothing on a card's back.
+        let r = food("@Food\nWord: queso\nAudio: ![](q.mp3)\n");
+        assert!(r.cards.is_empty());
+        let r = food("Q: a\nA: b\n\n@Food\nSentence: only this\n");
+        assert_eq!(r.cards.len(), 1);
+        assert!(r.warnings[0].message.starts_with("note makes no cards"));
+        assert_eq!(r.warnings[0].line, 4);
+    }
+
+    #[test]
+    fn notes_start_at_their_type() {
+        let r = food("@Food\nWord: uno\nMeaning: one\n@ Food \nWord: dos\nMeaning: two\nnotes in prose\nare part of it\nQ: next\nA: card\n");
+        let cards: Vec<_> = r.cards.iter().map(|c| (c.front.as_str(), c.back.as_str(), c.line)).collect();
+        let two = "two\nnotes in prose\nare part of it";
+        assert_eq!(cards, [("uno", "one", 1), ("one", "uno", 1), ("dos", two, 4), (two, "dos", 4), ("next", "card", 9)]);
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        // A field given twice, and a line before the first field.
+        let r = food("@Food\nnot a field\nWord: uno\nMeaning: one\nWord: dos\n");
+        let warnings: Vec<_> = r.warnings.iter().map(|w| (w.line, w.message.as_str())).collect();
+        assert_eq!(
+            warnings,
+            [
+                (2, "`@Food` is followed by a line that isn't one of its fields"),
+                (5, "field given twice in a note; start another with its `@` line"),
+            ]
+        );
+        assert_eq!(r.cards[0].front, "uno");
+        // Unknown and broken note types; their fields are left alone.
+        let messages = |source: &str| food(source).warnings.into_iter().map(|w| w.message).collect::<Vec<_>>();
+        assert_eq!(messages("@Nope\nWord: x\nMeaning: y\n"), ["there's no note type `Nope` in `note-types/`"]);
+        assert_eq!(messages("@Broken\nWord: x\n"), ["note type `Broken` has errors, see `note-types/Broken.toml`"]);
+        assert!(food("@Nope\nWord: x\nMeaning: y\n").cards.is_empty());
+        // Without note types, there are no notes.
+        assert!(parse("@Food\nWord: x\nMeaning: y\n").cards.is_empty());
+    }
+
+    #[test]
+    fn note_lines_inside_cards_are_text() {
+        let r = food("Q: What is it?\nA: A fruit.\n@Food\nMeaning: apple\n");
+        assert_eq!(r.cards.len(), 1);
+        assert_eq!(r.cards[0].back, "A fruit.\n@Food\nMeaning: apple");
+        // Field lines outside a note are ignored, as other lines between cards are.
+        assert!(food("Word: hola\nMeaning: hello").cards.is_empty());
+        // `Word Audio:` is not `Word:`.
+        let r = food("@Pair\nWord Audio: ![](a.mp3)\nWord: hola\n");
+        assert_eq!((r.cards[0].front.as_str(), r.cards[0].back.as_str()), ("hola", "![](a.mp3)"));
+    }
+
+    #[test]
+    fn fields_hold_code_blocks() {
+        let r = food("@Code\nTask: Print\nCode: ```python\nTask: not a field\n\n@Food\nprint(1)\n```\n");
+        assert_eq!(r.cards.len(), 1);
+        assert_eq!(r.cards[0].back, "```python\nTask: not a field\n\n@Food\nprint(1)\n```");
+    }
+
+    #[test]
+    fn note_type_problems() {
+        let warnings = |toml: &str| NoteTypes::default().insert("X", toml).into_iter().map(|w| (w.line, w.message)).collect::<Vec<_>>();
+        assert_eq!(warnings("cards = [\"a -> b\"]"), [(1, "`cards` needs `fields`".to_string())]);
+        assert_eq!(warnings("fields = [\"Only\"]")[0].1, "notes need two fields, or `cards` to say which make a card");
+        assert!(warnings("fields = 3")[0].1.starts_with("invalid note type"));
+        assert!(warnings("feilds = []")[0].1.contains("unknown field"));
+        let messages: Vec<_> = warnings("fields = [\"A\", \"x\", \"x\", \"y\"]\ncards = [\n  \"x\",\n  \"x -> z\",\n  \"x -> \",\n  \"x -> y\",\n  \"x -> y, x\",\n]");
+        assert_eq!(
+            messages,
+            [
+                (1, "`A` can't be a field name".to_string()),
+                (1, "field `x` is listed twice".to_string()),
+                (3, "card rule `x` has no `->`".to_string()),
+                (4, "card rule `x -> z` names `z`, which isn't in `fields`".to_string()),
+                (5, "card rule `x -> ` has an empty side".to_string()),
+                (7, "card rule `x -> y, x` has the same front as another".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn write_note_reads_back() {
+        let values = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (block, ids) = write_note(
+            "Food",
+            &types(),
+            &values(&["manzana", " apple \n\nMeaning: not a field\n@Food\nA: no\n#red", "", "Q: a fruit\n```\n\nMeaning: code\n```"]),
+            &["#food".into(), "fruit food".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            block,
+            "@Food\nWord: manzana\nMeaning: apple\nMeaning\\: not a field\n\\@Food\nA\\: no\n\\#red\nSentence: Q: a fruit\n```\n\nMeaning: code\n```\n#food #fruit\n"
+        );
+        let r = food(&format!("{FOOD}{block}"));
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        assert_eq!(r.cards.iter().map(|c| c.id.clone()).collect::<Vec<_>>(), ids);
+        assert_eq!(r.cards[0].back, "apple\nMeaning\\: not a field\n\\@Food\nA\\: no\n\\#red\n\nQ: a fruit\n```\n\nMeaning: code\n```");
+        assert_eq!(r.cards[0].tags, ["food", "fruit"]);
+
+        let err = |note_type: &str, v: &[&str]| write_note(note_type, &types(), &values(v), &[]).unwrap_err();
+        assert_eq!(err("Food", &["", "", "", "only a sentence"]), "Fill in a field for the front of a card and one for its back.");
+        assert_eq!(err("Nope", &["a", "b"]), "There's no note type “Nope”.");
+    }
+
+    #[test]
+    fn suspending_a_note_tags_its_last_line() {
+        let source = format!("{FOOD}\n@Food\nWord: uno\nMeaning: one\n@Food\nWord: dos\nMeaning: two\n```\n\n```\n#n\n\nQ: x\nA: y\n");
+        let once = set_card_tag(&source, &types(), 8, SUSPENDED_TAG, true).unwrap();
+        assert!(once.contains("Word: uno\nMeaning: one\n@Food"));
+        assert!(once.contains("```\n#n #suspended\n\nQ: x"));
+        let first = set_card_tag(&source, &types(), 5, SUSPENDED_TAG, true).unwrap();
+        assert!(first.contains("Meaning: one\n#suspended\n@Food"));
+        let r = food(&first);
+        assert_eq!(r.cards.iter().map(|c| c.is_suspended()).collect::<Vec<_>>(), [true, true, false, false, false]);
+        assert_eq!(set_card_tag(&first, &types(), 5, SUSPENDED_TAG, false).unwrap(), source);
+        // A line that starts no note or card.
+        assert_eq!(set_card_tag(&source, &types(), 6, SUSPENDED_TAG, true), None);
     }
 }

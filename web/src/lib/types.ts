@@ -66,6 +66,15 @@ export interface BrowseCard {
   lapses: number;
   /** Tagged `#suspended`, so never studied. */
   suspended: boolean;
+  /** The note type of the note the card comes from; null for `Q:` and `C:` cards. */
+  noteType: string | null;
+  /** The note's fields as Markdown, in its note type's order; empty without a note. */
+  fields: string[];
+}
+
+export interface NoteTypeInfo {
+  name: string;
+  fields: string[];
 }
 
 /** Which of the cards to browse. */

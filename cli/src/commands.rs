@@ -108,7 +108,7 @@ pub fn search(c: &CardCollection, out: Output, query: &str, view: Option<&str>, 
         query = format!("{} {query}", found.query);
     }
     let now = text::now();
-    let matcher = Query::parse(&query, now);
+    let matcher = Query::parse_with(&query, now, &c.note_types());
     let cards: Vec<_> = c.cards(StudyScope::All).into_iter().filter(|card| matcher.matches(card)).collect();
     // Like grep: a search that finds nothing fails, for scripts.
     let code = if cards.is_empty() { ExitCode::FAILURE } else { ExitCode::SUCCESS };
@@ -197,7 +197,7 @@ fn resolve<'a>(c: &CardCollection, cards: &'a [BrowseCard], arg: &str) -> Result
         };
         return Ok(cards.iter().filter(|card| card.path == path && card.line == start).collect());
     }
-    let matcher = Query::parse(arg, text::now());
+    let matcher = Query::parse_with(arg, text::now(), &c.note_types());
     let found: Vec<_> = cards.iter().filter(|card| matcher.matches(card)).collect();
     match found.first() {
         None => Err(format!("no card matches {arg:?}").into()),

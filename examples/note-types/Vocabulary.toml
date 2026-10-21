@@ -1,0 +1,5 @@
+fields = ["Word", "Meaning", "Sentence"]
+cards = [
+  "Word -> Meaning, Sentence",
+  "Meaning -> Word",
+]

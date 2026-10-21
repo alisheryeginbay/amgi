@@ -71,6 +71,49 @@ its cards across decks. Right-click a tag and choose **Choose Icon…** to give 
 type to search by name or keyword, use the arrow keys to move, and press <kbd>Return</kbd> to
 choose. Icons are kept in `.amgi.sqlite`.
 
+## Notes with fields
+
+Besides `Q:` and `A:`, a card can come from a **note**: named fields, such as a word, its
+meaning, its audio and an example sentence, that make one or more cards. Which fields a
+note has, and which cards it makes, is its **note type**: a file in the `note-types`
+folder at the root of the collection.
+
+```toml
+# note-types/Vocabulary.toml
+fields = ["Word", "Meaning", "Audio", "Sentence"]
+cards = [
+  "Word, Audio -> Meaning, Sentence",
+  "Meaning -> Word",
+]
+```
+
+A note starts with a line naming its note type after `@`, then its fields:
+
+```markdown
+@Vocabulary
+Word: manzana
+Meaning: apple
+Audio: ![](media/manzana.mp3)
+Sentence: Me como una manzana.
+#food
+```
+
+- Fields can come in any order and continue onto later lines. The note ends at a blank
+  line, a `Q:` or `C:`, or the next `@` line. Tags go on its last lines, as on any card.
+- Each rule in `cards` makes one card: the fields before `->` on the front, the ones
+  after it on the back, in that order. The note above makes two cards.
+- Empty or missing fields are left out of a card, so a note without `Audio` shows just
+  the word. A card is made only when it has a front field and a back field to show.
+- Without `cards`, the first field is the front and the rest the back.
+- Notes of any types and `Q:`/`C:` cards can share a deck. Field names are
+  case-sensitive, and a line such as `Meaning: …` outside a note, or an `@` line inside a
+  `Q:` or `C:` card, is just text.
+- A card is identified by its front, like a `Q:` card with the same question. Editing
+  back fields, reordering a note's lines or renaming a field keeps its history; editing
+  a front field starts that card over. Suspending a card suspends its whole note.
+- Problems in a note type, such as a rule naming a field that isn't in `fields`, are
+  reported at its file; an `@` line naming a note type that doesn't exist says so.
+
 ## Suspending cards
 
 A card tagged `#suspended` never comes up for study, and isn't counted as due or new;

@@ -5,6 +5,9 @@
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
+use std::collections::HashMap;
+
+use crate::parser::NoteTypeInfo;
 use crate::{BrowseCard, CardKind};
 
 /// Forgotten this many times or more, as in Anki.
@@ -25,9 +28,15 @@ pub struct Query {
 impl Query {
     /// `now` is in Unix seconds, for `is:due` and `due<7`.
     pub fn parse(query: &str, now: i64) -> Self {
+        Self::parse_with(query, now, &[])
+    }
+
+    /// As `parse`, with `name:text` searching the field of that name in notes of
+    /// these types.
+    pub fn parse_with(query: &str, now: i64, note_types: &[NoteTypeInfo]) -> Self {
         let tests = tokenize(query)
             .into_iter()
-            .filter_map(|token| compile(&token, now as f64).map(|test| (token.negated, test)))
+            .filter_map(|token| compile(&token, now as f64, note_types).map(|test| (token.negated, test)))
             .collect();
         Query { tests }
     }
@@ -46,6 +55,8 @@ enum Test {
     Tag { want: String, prefix: bool },
     State(State, f64),
     Number { field: Number, op: Op, value: f64, now: f64 },
+    /// Folded needle, searched in a field: its index in each note type that has it.
+    Field { needle: String, index: HashMap<String, usize> },
 }
 
 #[derive(Clone, Copy)]
@@ -90,9 +101,18 @@ impl Test {
                 match fields {
                     Fields::Front => found(&c.front),
                     Fields::Back => found(&c.back),
-                    Fields::All => found(&c.front) || found(&c.back) || c.tags.iter().any(|t| found(t)),
+                    // A note's fields count too, with those no card shows.
+                    Fields::All => {
+                        found(&c.front) || found(&c.back) || c.tags.iter().any(|t| found(t)) || c.fields.iter().any(|f| found(f))
+                    }
                 }
             }
+            Test::Field { needle, index } => c
+                .note_type
+                .as_ref()
+                .and_then(|t| index.get(t))
+                .and_then(|&i| c.fields.get(i))
+                .is_some_and(|f| fold(f).contains(needle.as_str())),
             Test::Deck(want) => {
                 let deck = fold(&c.deck);
                 let parts: Vec<&str> = deck.split('/').collect();
@@ -212,8 +232,13 @@ fn text(word: &str, fields: Fields) -> Option<Test> {
     (!word.is_empty()).then(|| Test::Text { needle: fold(word), fields })
 }
 
+/// A field name as typed in a search: folded, without spaces, so `wordmeaning:` finds `Word Meaning`.
+fn field_key(name: &str) -> String {
+    fold(name).split_whitespace().collect()
+}
+
 /// What one token tests; `None` if it matches everything, like a filter still being typed (`deck:`).
-fn compile(token: &Token, now: f64) -> Option<Test> {
+fn compile(token: &Token, now: f64, note_types: &[NoteTypeInfo]) -> Option<Test> {
     let value = token.value.as_str();
     let Some(key) = &token.key else {
         if token.raw.starts_with('#') {
@@ -272,7 +297,16 @@ fn compile(token: &Token, now: f64) -> Option<Test> {
                     return Some(Test::State(state, now));
                 }
             }
-            _ => {}
+            _ => {
+                let key = field_key(key);
+                let index: HashMap<String, usize> = note_types
+                    .iter()
+                    .filter_map(|t| Some((t.name.clone(), t.fields.iter().position(|f| field_key(f) == key)?)))
+                    .collect();
+                if !index.is_empty() {
+                    return (!value.is_empty()).then(|| Test::Field { needle: fold(value), index });
+                }
+            }
         }
     }
     // Anything else is searched as typed.
@@ -297,6 +331,8 @@ mod tests {
             front: String::new(),
             back: String::new(),
             due: None,
+            note_type: None,
+            fields: vec![],
             reps: 0,
             lapses: 0,
             suspended: false,
@@ -463,5 +499,30 @@ mod tests {
         check("is:nothing", &[]);
         check("lapses>many", &[]);
         check("H2O", &["water"]);
+    }
+
+    #[test]
+    fn field_filters_search_notes() {
+        let types = vec![NoteTypeInfo {
+            name: "Vocab".into(),
+            fields: vec!["Word".into(), "Word Meaning".into(), "Notes".into()],
+        }];
+        let note = |id: &str, values: [&str; 3]| BrowseCard {
+            note_type: Some("Vocab".into()),
+            fields: values.iter().map(|v| v.to_string()).collect(),
+            ..card(id)
+        };
+        let all = [note("uno", ["uno", "one", "a number"]), note("dos", ["dos", "two", ""]), card("plain")];
+        let find = |q: &str| {
+            let query = Query::parse_with(q, NOW, &types);
+            all.iter().filter(|c| query.matches(c)).map(|c| c.id.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(find("wordmeaning:one"), ["uno"]);
+        assert_eq!(find("Word:DOS"), ["dos"]);
+        assert_eq!(find("-word:uno"), ["dos", "plain"]);
+        assert_eq!(find("number"), ["uno"]);
+        assert_eq!(find("word:"), ["uno", "dos", "plain"]);
+        // Without note types, it's text.
+        assert!(!Query::parse("word:uno", NOW).matches(&all[0]));
     }
 }

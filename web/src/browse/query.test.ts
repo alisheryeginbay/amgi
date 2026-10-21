@@ -9,7 +9,7 @@ const DAY = 86_400;
 function card(id: string, fields: Partial<BrowseCard>): BrowseCard {
   return {
     id, deck: "geography", tags: [], path: "geography.md", line: 1, kind: "basic",
-    front: "", back: "", due: null, reps: 0, lapses: 0, suspended: false, ...fields,
+    front: "", back: "", due: null, reps: 0, lapses: 0, suspended: false, noteType: null, fields: [], ...fields,
   };
 }
 
@@ -116,4 +116,22 @@ test("anything else is searched as text", () => {
   assert.deepEqual(search("is:nothing"), []);
   assert.deepEqual(search("lapses>many"), []);
   assert.deepEqual(search("H2O"), ["water"]);
+});
+
+test("field filters search a note's fields", () => {
+  const types = [{ name: "Vocab", fields: ["Word", "Word Meaning", "Notes"] }];
+  const notes = [
+    card("uno", { noteType: "Vocab", fields: ["uno", "one", "a number"], front: "uno", back: "one" }),
+    card("dos", { noteType: "Vocab", fields: ["dos", "two", ""], front: "dos", back: "two" }),
+    ...CARDS,
+  ];
+  const find = (query: string) => notes.filter(parseQuery(query, NOW, types)).map((c) => c.id);
+  assert.deepEqual(find("wordmeaning:one"), ["uno"]);
+  assert.deepEqual(find("Word:DOS"), ["dos"]);
+  assert.deepEqual(find("-word:uno"), ["dos", "paris", "cafe", "water", "leech"]);
+  // A field no card shows is searched by plain words too.
+  assert.deepEqual(find("number"), ["uno"]);
+  // Not a field of any note type: searched as text, as before.
+  assert.deepEqual(find("12:30"), ["leech"]);
+  assert.deepEqual(find("word:"), ["uno", "dos", "paris", "cafe", "water", "leech"]);
 });

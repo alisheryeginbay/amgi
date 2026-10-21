@@ -98,6 +98,9 @@ pub struct DeckInfo {
     pub learning: u32,
     /// New cards available today, capped by the daily new-card limit.
     pub new: u32,
+    /// The note type most of the deck file's notes have, for adding notes to it;
+    /// `None` without notes.
+    pub note_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -140,6 +143,11 @@ pub struct BrowseCard {
     pub lapses: u32,
     /// Tagged `#suspended`, so never studied.
     pub suspended: bool,
+    /// The note type of the note the card comes from; `None` for `Q:` and `C:` cards.
+    #[serde(rename = "noteType")]
+    pub note_type: Option<String>,
+    /// The note's fields as Markdown, in its note type's order; empty without a note.
+    pub fields: Vec<String>,
 }
 
 /// Everything known about one card: its content, schedule, memory and review history.
@@ -218,11 +226,26 @@ pub struct NewCard {
     pub tags: Vec<String>,
 }
 
+/// A note to add to a deck.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct NewNote {
+    /// As in `DeckInfo::name`; its file is created if needed.
+    pub deck: String,
+    /// As in `NoteTypeInfo::name`.
+    pub note_type: String,
+    /// Markdown for each of the note type's fields, in order; empty ones are left out.
+    pub values: Vec<String>,
+    /// With or without `#`.
+    pub tags: Vec<String>,
+}
+
 /// Decks brought in from another app, with the review history it kept.
 #[derive(Debug, Default)]
 pub struct Import {
     /// Deck path relative to the root, without `.md`, and its Markdown.
     pub decks: Vec<(String, String)>,
+    /// Note type name and its file's TOML, for the note types the decks name.
+    pub note_types: Vec<(String, String)>,
     /// Card id and its history, oldest first.
     pub histories: Vec<(String, Vec<HistoryEntry>)>,
 }
@@ -331,8 +354,12 @@ struct Inner {
     index: HashMap<String, usize>,
     /// Deck → name from its front matter.
     deck_titles: HashMap<String, String>,
+    /// The note type most of each deck file's notes have, for those with notes.
+    deck_note_types: HashMap<String, String>,
     states: HashMap<String, CardState>,
     warnings: Vec<CollectionWarning>,
+    /// From the `note-types` folder, read with the decks.
+    note_types: parser::NoteTypes,
     /// CJK scripts in the deck files, for the fonts the app fetches.
     scripts: Scripts,
     new_per_day: u32,
@@ -404,6 +431,12 @@ impl CardCollection {
     pub fn cards_json(&self, scope: StudyScope) -> String {
         // Plain structs of strings and numbers always serialize.
         serde_json::to_string(&self.lock().browse(&scope)).expect("cards serialize")
+    }
+
+    /// The collection's note types as a JSON array, each with its `name` and `fields`,
+    /// for the browse pane.
+    pub fn note_types_json(&self) -> String {
+        serde_json::to_string(&self.note_types()).expect("note types serialize")
     }
 
     /// The cards with these ids, in file order. Unknown ids are skipped.
@@ -489,6 +522,51 @@ impl CardCollection {
         self.lock().add_card(&card)
     }
 
+    /// Append a note to the end of its deck's file. Returns the ids of the cards it makes.
+    pub fn add_note(&self, note: NewNote) -> Result<Vec<String>> {
+        self.lock().add_note(&note)
+    }
+
+    /// How many cards a note of `note_type` would make: 0 if it can't be added as it is.
+    pub fn note_card_count(&self, note_type: String, values: Vec<String>) -> u32 {
+        parser::write_note(&note_type, &self.lock().note_types, &values, &[]).map_or(0, |(_, ids)| ids.len() as u32)
+    }
+
+    /// The note types without errors, by name.
+    pub fn note_types(&self) -> Vec<parser::NoteTypeInfo> {
+        self.lock().note_types.list()
+    }
+
+    /// Copy an image or sound into the `media` folder for a card in `deck`, and return
+    /// the Markdown that shows it there. A file with the same name and contents is
+    /// shared; one that differs keeps its name, and the copy gets another.
+    pub fn add_media(&self, deck: String, path: String) -> Result<String> {
+        let root = self.root();
+        let source = PathBuf::from(&path);
+        let bytes = fs::read(&source)?;
+        let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "media".into());
+        let (stem, ext) = match name.rsplit_once('.') {
+            Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
+            _ => (name.clone(), String::new()),
+        };
+        let dir = root.join(MEDIA_DIR);
+        fs::create_dir_all(&dir)?;
+        let mut file = name.clone();
+        for n in 2.. {
+            match fs::read(dir.join(&file)) {
+                Ok(existing) if existing == bytes => break,
+                Ok(_) => file = format!("{stem} {n}{ext}"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    fs::write(dir.join(&file), &bytes)?;
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        let link = format!("{}{MEDIA_DIR}/{file}", "../".repeat(deck.matches('/').count()));
+        Ok(if link.contains([' ', '(', ')', '<', '>']) { format!("![](<{link}>)") } else { format!("![]({link})") })
+    }
+
     pub fn today(&self) -> Result<TodayStats> {
         self.lock().today(unix_now())
     }
@@ -530,8 +608,10 @@ impl CardCollection {
             cards: Vec::new(),
             index: HashMap::new(),
             deck_titles: HashMap::new(),
+            deck_note_types: HashMap::new(),
             states,
             warnings: Vec::new(),
+            note_types: parser::NoteTypes::default(),
             scripts: Scripts::default(),
             new_per_day: 20,
             utc_offset_secs: 0,
@@ -586,14 +666,23 @@ impl Inner {
         self.cards.clear();
         self.index.clear();
         self.deck_titles.clear();
+        self.deck_note_types.clear();
         self.warnings.clear();
         self.scripts = Scripts::default();
+        self.load_note_types()?;
         for file in files {
             let rel = relative(&self.root, &file);
             let deck = rel.strip_suffix(".md").unwrap_or(&rel).to_string();
             let text = fs::read_to_string(&file)?;
             self.scripts.scan(&text);
-            let result = parser::parse(&text);
+            let result = parser::parse_deck(&text, &self.note_types);
+            let mut counts: HashMap<&str, usize> = HashMap::new();
+            for note in result.cards.iter().filter_map(|c| c.note.as_ref()) {
+                *counts.entry(&note.note_type).or_default() += 1;
+            }
+            if let Some((name, _)) = counts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(a.0))) {
+                self.deck_note_types.insert(deck.clone(), name.to_string());
+            }
             if let Some(name) = result.name {
                 self.deck_titles.insert(deck.clone(), name);
             }
@@ -620,6 +709,32 @@ impl Inner {
                     deck: deck.clone(),
                     path: rel.clone(),
                 });
+            }
+        }
+        Ok(())
+    }
+
+    /// Every `note-types/Name.toml`, as note type `Name`.
+    fn load_note_types(&mut self) -> Result<()> {
+        self.note_types = parser::NoteTypes::default();
+        let dir = self.root.join(parser::NOTE_TYPES_DIR);
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|e| e == "toml") && p.is_file())
+            .collect();
+        files.sort();
+        for file in files {
+            let Some(name) = file.file_stem().map(|s| s.to_string_lossy().into_owned()) else { continue };
+            if name.starts_with('.') {
+                continue;
+            }
+            for w in self.note_types.insert(&name, &fs::read_to_string(&file)?) {
+                self.warnings.push(CollectionWarning { path: relative(&self.root, &file), line: w.line, message: w.message });
             }
         }
         Ok(())
@@ -691,6 +806,7 @@ impl Inner {
                     due: 0,
                     learning: 0,
                     new: 0,
+                    note_type: None,
                 });
                 deck.total += total;
                 deck.due += due;
@@ -705,6 +821,7 @@ impl Inner {
                     d.name.rsplit('/').next().unwrap_or_default().to_string()
                 }),
                 new: d.new.min(remaining),
+                note_type: self.deck_note_types.get(&d.name).cloned(),
                 ..d
             })
             .collect())
@@ -732,6 +849,8 @@ impl Inner {
                     reps: state.map_or(0, |s| s.reps),
                     lapses: state.map_or(0, |s| s.lapses),
                     suspended: card.suspended(),
+                    note_type: card.parsed.note.as_ref().map(|n| n.note_type.clone()),
+                    fields: card.parsed.note.as_ref().map(|n| n.values.clone()).unwrap_or_default(),
                 }
             })
             .collect()
@@ -895,6 +1014,30 @@ impl Inner {
             return Err(AmgiError::InvalidCard { message: format!("This card is already in {path}.") });
         }
 
+        self.append(deck, &block, &ids)?;
+        Ok(ids)
+    }
+
+    fn add_note(&mut self, note: &NewNote) -> Result<Vec<String>> {
+        let deck = note.deck.trim().trim_matches('/');
+        if deck.is_empty() || deck.split('/').any(|part| part.trim().is_empty() || part.starts_with('.')) {
+            return Err(AmgiError::InvalidCard { message: "Choose a deck for the note.".into() });
+        }
+        let (block, ids) = parser::write_note(&note.note_type, &self.note_types, &note.values, &note.tags)
+            .map_err(|message| AmgiError::InvalidCard { message })?;
+        if let Some(existing) = ids.iter().find_map(|id| self.index.get(id)) {
+            let card = &self.cards[*existing];
+            return Err(AmgiError::InvalidCard {
+                message: format!("A card with the same front is already in {}:{}.", card.path, card.parsed.line),
+            });
+        }
+        self.append(deck, &block, &ids)?;
+        Ok(ids)
+    }
+
+    /// Append `block` to the end of `deck`'s file, which is created if needed, and
+    /// check that it makes the cards `ids`; if not, the file is put back.
+    fn append(&mut self, deck: &str, block: &str, ids: &[String]) -> Result<()> {
         let path = self.root.join(format!("{deck}.md"));
         let before = match fs::read_to_string(&path) {
             Ok(source) => Some(source),
@@ -908,7 +1051,7 @@ impl Inner {
             source.truncate(end);
             source.push_str("\n\n");
         }
-        source.push_str(&block);
+        source.push_str(block);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -917,7 +1060,7 @@ impl Inner {
 
         // The end of the file can swallow the card, as an unclosed code block would.
         if ids.iter().all(|id| self.index.contains_key(id)) {
-            return Ok(ids);
+            return Ok(());
         }
         match before {
             Some(before) => fs::write(&path, before)?,
@@ -943,7 +1086,7 @@ impl Inner {
             let before = changed;
             // From the bottom up, so an added line never moves a card still to edit.
             for &line in lines.iter().rev() {
-                if let Some(edited) = parser::set_card_tag(&source, line, parser::SUSPENDED_TAG, suspended) {
+                if let Some(edited) = parser::set_card_tag(&source, &self.note_types, line, parser::SUSPENDED_TAG, suspended) {
                     source = edited;
                     changed += 1;
                 }
@@ -1013,7 +1156,42 @@ impl Inner {
 
     fn import(&mut self, import: Import) -> Result<Imported> {
         let mut files = Vec::new();
+        // A note type already here with the same definition is shared; a different one
+        // keeps its file, and the new one takes the next free name.
+        let mut renamed: Vec<(String, String)> = Vec::new();
+        let dir = self.root.join(parser::NOTE_TYPES_DIR);
+        for (name, toml) in &import.note_types {
+            for n in 1.. {
+                let candidate = if n == 1 { name.clone() } else { format!("{name} {n}") };
+                let path = dir.join(format!("{candidate}.toml"));
+                match fs::read_to_string(&path) {
+                    Ok(existing) if existing == *toml => {}
+                    Ok(_) => continue,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        fs::create_dir_all(&dir)?;
+                        fs::write(&path, toml)?;
+                        files.push(relative(&self.root, &path));
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+                if candidate != *name {
+                    renamed.push((name.clone(), candidate));
+                }
+                break;
+            }
+        }
         for (deck, markdown) in &import.decks {
+            let mut markdown = markdown.clone();
+            if !renamed.is_empty() {
+                let lines: Vec<String> = markdown
+                    .split_inclusive('\n')
+                    .map(|line| match renamed.iter().find(|(old, _)| line.trim_end() == format!("@{old}")) {
+                        Some((_, new)) => format!("@{new}\n"),
+                        None => line.to_string(),
+                    })
+                    .collect();
+                markdown = lines.concat();
+            }
             let path = unused_path(&self.root, deck);
             if let Some(dir) = path.parent() {
                 fs::create_dir_all(dir)?;
@@ -1042,7 +1220,7 @@ impl Inner {
         let written: HashSet<String> = import
             .decks
             .iter()
-            .flat_map(|(_, markdown)| parser::parse(markdown).cards)
+            .flat_map(|(_, markdown)| parser::parse_deck(markdown, &self.note_types).cards)
             .map(|card| card.id)
             .collect();
         let studied = written.iter().filter(|id| self.states.contains_key(*id)).count() as u32;
@@ -1156,16 +1334,22 @@ pub fn format_interval(seconds: i64) -> String {
     }
 }
 
+/// Deck files under `dir`, leaving out hidden ones and the root's note types.
 fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    collect_deck_files(dir, true, out)
+}
+
+fn collect_deck_files(dir: &Path, root: bool, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if entry.file_name().to_string_lossy().starts_with('.') {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') || (root && name == parser::NOTE_TYPES_DIR) {
             continue;
         }
         let ty = entry.file_type()?;
         if ty.is_dir() {
-            collect_markdown(&path, out)?;
+            collect_deck_files(&path, false, out)?;
         } else if path.extension().is_some_and(|e| e == "md") {
             out.push(path);
         }
@@ -1600,6 +1784,7 @@ mod tests {
         };
         let import = || Import {
             decks: vec![("Default".into(), studied.into()), ("Lang/Verbs".into(), "Q: fresh\nA: no\n".into())],
+            note_types: Vec::new(),
             histories: vec![(id.clone(), vec![review(0, 1), review(1, 3)]), (id.clone(), vec![review(0, 1)])],
         };
         let imported = c.import(import()).unwrap();
@@ -1618,6 +1803,103 @@ mod tests {
         // Importing again keeps the history already here and says so.
         let again = c.import(import()).unwrap();
         assert_eq!((again.reviewed_cards, again.existing_history, again.new_cards), (0, 1, 1));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn notes_use_note_types_from_their_folder() {
+        let vocab = "fields = [\"Word\", \"Meaning\"]\ncards = [\"Word -> Meaning\", \"Meaning -> Word\"]\n";
+        let (dir, c) = collection(&[
+            ("note-types/Vocab.toml", vocab),
+            ("note-types/Bad.toml", "fields = [\"Only\"]\n"),
+            ("note-types/README.md", "Q: not a deck\nA: -\n"),
+            ("es.md", "@Vocab\nWord: uno\nMeaning: one\n@Vocab\nWord: dos\nMeaning: two\n\nQ: plain\nA: card\n"),
+            ("bad.md", "Q: a\nA: b\n\n@Bad\nOnly: x\n"),
+        ]);
+        let warnings: Vec<_> = c.warnings().into_iter().map(|w| format!("{}:{}: {}", w.path, w.line, w.message)).collect();
+        assert_eq!(
+            warnings,
+            [
+                "note-types/Bad.toml:1: notes need two fields, or `cards` to say which make a card",
+                "bad.md:4: note type `Bad` has errors, see `note-types/Bad.toml`",
+            ]
+        );
+        // Browsed cards carry their note's fields, and the note types say what they are.
+        let browsed = c.cards(StudyScope::All);
+        let dos = browsed.iter().find(|b| b.front == "dos").unwrap();
+        assert_eq!((dos.note_type.as_deref(), dos.fields.clone()), (Some("Vocab"), vec!["dos".to_string(), "two".into()]));
+        assert!(c.cards_json(StudyScope::All).contains(r#""noteType":"Vocab","fields":["dos","two"]"#));
+        assert_eq!(c.note_types_json(), r#"[{"name":"Vocab","fields":["Word","Meaning"]}]"#);
+
+        let inner = c.lock();
+        let fronts: Vec<_> = inner.cards.iter().filter(|c| c.path == "es.md").map(|c| c.parsed.front.as_str()).collect();
+        assert_eq!(fronts, ["uno", "one", "dos", "two", "plain"]);
+        let two = inner.cards[3].parsed.id.clone();
+        drop(inner);
+        // The deck's note type is the one most of its notes have.
+        let decks = c.decks().unwrap();
+        assert_eq!(decks.iter().find(|d| d.name == "es").unwrap().note_type.as_deref(), Some("Vocab"));
+        assert_eq!(decks.iter().find(|d| d.name == "bad").unwrap().note_type, None);
+
+        // Suspending a card suspends its note.
+        assert_eq!(c.set_suspended(vec![two], true).unwrap(), 1);
+        assert!(fs::read_to_string(dir.join("es.md")).unwrap().contains("Word: dos\nMeaning: two\n#suspended\n\nQ: plain"));
+
+        // An imported note type like one already here shares its file; a different one
+        // with the same name gets a file of its own, and its notes name that.
+        let deck = |name: &str, word: &str| format!("@{name}\nWord: {word}\nMeaning: -\n");
+        let import = Import {
+            decks: vec![("a".into(), deck("Vocab", "tres")), ("b".into(), deck("Other", "cuatro"))],
+            note_types: vec![("Vocab".into(), vocab.into()), ("Other".into(), vocab.into())],
+            histories: Vec::new(),
+        };
+        let other = Import {
+            decks: vec![("c".into(), deck("Vocab", "cinco"))],
+            note_types: vec![("Vocab".into(), "fields = [\"Word\", \"Meaning\"]\n".into())],
+            histories: Vec::new(),
+        };
+        assert_eq!(c.import(import).unwrap().files, ["note-types/Other.toml", "a.md", "b.md"]);
+        assert_eq!(c.import(other).unwrap().files, ["note-types/Vocab 2.toml", "c.md"]);
+        assert_eq!(fs::read_to_string(dir.join("c.md")).unwrap(), "@Vocab 2\nWord: cinco\nMeaning: -\n");
+        let inner = c.lock();
+        let fronts: Vec<_> = inner.cards.iter().filter(|c| c.path == "c.md").map(|c| c.parsed.front.as_str()).collect();
+        assert_eq!(fronts, ["cinco"]);
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn add_notes_and_media() {
+        let (dir, c) = collection(&[
+            ("note-types/Vocab.toml", "fields = [\"Word\", \"Meaning\", \"Audio\"]\ncards = [\"Word, Audio -> Meaning\", \"Meaning -> Word\"]\n"),
+            ("lang/es.md", "+++\nname = \"Spanish\"\n+++\n"),
+        ]);
+
+        let sound = dir.join("hola (1).mp3");
+        fs::write(&sound, b"sound").unwrap();
+        let link = c.add_media("lang/es".into(), sound.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(link, "![](<../media/hola (1).mp3>)");
+        // The same file again is shared; another with its name is kept beside it.
+        assert_eq!(c.add_media("lang/es".into(), sound.to_string_lossy().into_owned()).unwrap(), link);
+        fs::write(&sound, b"other").unwrap();
+        assert_eq!(c.add_media("es".into(), sound.to_string_lossy().into_owned()).unwrap(), "![](<media/hola (1) 2.mp3>)");
+
+        let values = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(c.note_card_count("Vocab".into(), values(&["hola", "hello", ""])), 2);
+        assert_eq!(c.note_card_count("Vocab".into(), values(&["hola", "", ""])), 0);
+        assert_eq!(c.note_card_count("Nope".into(), values(&["hola", "hello", ""])), 0);
+        let note = NewNote {
+            deck: "lang/es".into(),
+            note_type: "Vocab".into(),
+            values: values(&["hola", "hello", &link]),
+            tags: vec!["greeting".into()],
+        };
+        assert_eq!(c.add_note(note.clone()).unwrap().len(), 2);
+        assert_eq!(
+            fs::read_to_string(dir.join("lang/es.md")).unwrap(),
+            "+++\nname = \"Spanish\"\n+++\n\n@Vocab\nWord: hola\nMeaning: hello\nAudio: ![](<../media/hola (1).mp3>)\n#greeting\n"
+        );
+        assert!(matches!(c.add_note(note), Err(AmgiError::InvalidCard { message }) if message.contains("lang/es.md:5")));
         fs::remove_dir_all(dir).unwrap();
     }
 
