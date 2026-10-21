@@ -39,6 +39,14 @@ private struct StudySettings: View {
                 Text("Desired retention")
                 Text("How likely you should be to remember a card when it comes due. Higher means shorter intervals and more reviews. 90% suits most people.")
             }
+            Picker(selection: $model.rolloverHour) {
+                ForEach(0..<24, id: \.self) { hour in
+                    Text(Self.hourLabel(hour)).tag(hour)
+                }
+            } label: {
+                Text("Next day starts at")
+                Text("Cards are due for the whole day. Studying after midnight but before this hour counts as the day before. 4 AM suits most people.")
+            }
             Toggle(isOn: $autoplaySounds) {
                 Text("Play audio automatically")
                 Text("Sounds play when a card or its answer appears. Press R to replay them.")
@@ -50,6 +58,12 @@ private struct StudySettings: View {
         }
         .formStyle(.grouped)
         .frame(width: 440)
+    }
+
+    /// The hour as the Mac shows times, such as `4 AM` or `04:00`.
+    private static func hourLabel(_ hour: Int) -> String {
+        let date = Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: .now) ?? .now
+        return date.formatted(date: .omitted, time: .shortened)
     }
 }
 

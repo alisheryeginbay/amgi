@@ -13,9 +13,10 @@ export function fold(s: string): string {
 
 type Test = (card: BrowseCard) => boolean;
 
-const STATES: Record<string, (now: number) => Test> = {
+/** States, given when the study day started: a card is due for the whole day it falls on. */
+const STATES: Record<string, (today: number) => Test> = {
   new: () => (c) => c.due === null,
-  due: (now) => (c) => !c.suspended && c.due !== null && c.due <= now,
+  due: (today) => (c) => !c.suspended && c.due !== null && c.due < today + DAY_SECS,
   suspended: () => (c) => c.suspended,
   leech: () => (c) => c.lapses >= LEECH_LAPSES,
   cloze: () => (c) => c.kind === "cloze",
@@ -32,11 +33,12 @@ const COMPARES: Record<string, Compare> = {
   ":": (a, b) => a === b,
 };
 
-/** Numbers a card can be compared on. `due` is in days from now; new cards have none. */
-const NUMBERS: Record<string, (card: BrowseCard, now: number) => number | null> = {
+/** Numbers a card can be compared on. `due` is in study days from today, negative when
+ *  overdue; new cards have none. */
+const NUMBERS: Record<string, (card: BrowseCard, today: number) => number | null> = {
   reviews: (c) => c.reps,
   lapses: (c) => c.lapses,
-  due: (c, now) => (c.due === null ? null : (c.due - now) / DAY_SECS),
+  due: (c, today) => (c.due === null ? null : Math.floor((c.due - today) / DAY_SECS)),
 };
 
 interface Token {
@@ -149,7 +151,7 @@ function fieldTest(key: string, word: string, noteTypes: NoteTypeInfo[]): Test {
 }
 
 /** What one token tests; null if it matches everything, like a filter still being typed (`deck:`). */
-function compile(token: Token, now: number, noteTypes: NoteTypeInfo[]): Test | null {
+function compile(token: Token, today: number, noteTypes: NoteTypeInfo[]): Test | null {
   const { key, operator, value } = token;
   if (key === null && token.raw.startsWith("#")) {
     return value.length > 1 ? tagTest(value.slice(1)) : null;
@@ -163,7 +165,7 @@ function compile(token: Token, now: number, noteTypes: NoteTypeInfo[]): Test | n
       if (Number.isFinite(n)) {
         const compare = COMPARES[operator];
         return (c) => {
-          const v = number(c, now);
+          const v = number(c, today);
           return v !== null && compare(v, n);
         };
       }
@@ -178,7 +180,7 @@ function compile(token: Token, now: number, noteTypes: NoteTypeInfo[]): Test | n
         case "is": {
           if (!value) return null;
           const state = STATES[value.toLowerCase()];
-          if (state) return state(now);
+          if (state) return state(today);
           break;
         }
         default: {
@@ -197,11 +199,12 @@ function compile(token: Token, now: number, noteTypes: NoteTypeInfo[]): Test | n
 
 /**
  * Turns a search into a test for cards. Never fails: anything that isn't a known
- * filter is searched as text, so `12:30` and links still work.
+ * filter is searched as text, so `12:30` and links still work. `today` is when the
+ * current study day started, in Unix seconds, for `is:due` and `due<7`.
  */
-export function parseQuery(query: string, now = Date.now() / 1000, noteTypes: NoteTypeInfo[] = []): Test {
+export function parseQuery(query: string, today: number, noteTypes: NoteTypeInfo[] = []): Test {
   const tests = tokenize(query).flatMap((token) => {
-    const test = compile(token, now, noteTypes);
+    const test = compile(token, today, noteTypes);
     if (!test) return [];
     return [token.negated ? (c: BrowseCard) => !test(c) : test];
   });

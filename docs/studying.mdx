@@ -21,6 +21,15 @@ resize it, or hide it with **Hide Card** in the toolbar.
 For a card from a [note](/card-format#notes-with-fields), the note's fields are listed
 under it, by name, with the empty ones left out.
 
+## When cards are due
+
+A card you remember comes back a whole number of days later, and is due for that whole
+day. A card you forget (**Again**) comes back after 10 minutes; when nothing else is
+left, it is shown up to 20 minutes early. Cards from the next day never are.
+
+A new day starts at 4 AM, so studying after midnight counts as the day before. Change the
+hour in **Settings** (<kbd>⌘,</kbd>) under **Next day starts at**.
+
 ## Adding cards
 
 **Add Card** (<kbd>⌥⌘N</kbd> from any app, or <kbd>⌘N</kbd> in Amgi) opens a small panel
@@ -66,6 +75,6 @@ ignoring case and accents. Words can also be filters:
 | `meaning:apple`, `wordmeaning:go` | from a note whose field of that name has the text; leave out spaces in the name |
 | `is:new` `is:due` `is:suspended` `is:leech` `is:cloze` `is:basic` | in that state or of that kind |
 | `lapses>3`, `reviews<=5` | compared by count (`<`, `<=`, `>`, `>=`, `=`) |
-| `due<7`, `due<0` | due within 7 days; overdue. New cards have no due date |
+| `due<1`, `due<7`, `due<0` | due today; within 7 days; overdue (before today). New cards have no due date |
 
 Anything else, such as `12:30`, is searched as text.

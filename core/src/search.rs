@@ -12,7 +12,7 @@ use crate::{BrowseCard, CardKind};
 
 /// Forgotten this many times or more, as in Anki.
 pub const LEECH_LAPSES: u32 = 8;
-const DAY_SECS: f64 = 86_400.0;
+const DAY_SECS: i64 = 86_400;
 
 /// Case- and accent-insensitive, like Finder's search.
 pub fn fold(s: &str) -> String {
@@ -26,17 +26,18 @@ pub struct Query {
 }
 
 impl Query {
-    /// `now` is in Unix seconds, for `is:due` and `due<7`.
-    pub fn parse(query: &str, now: i64) -> Self {
-        Self::parse_with(query, now, &[])
+    /// `today` is when the current study day started (Unix seconds), for `is:due`
+    /// and `due<7`: a card is due for the whole day it falls on.
+    pub fn parse(query: &str, today: i64) -> Self {
+        Self::parse_with(query, today, &[])
     }
 
     /// As `parse`, with `name:text` searching the field of that name in notes of
     /// these types.
-    pub fn parse_with(query: &str, now: i64, note_types: &[NoteTypeInfo]) -> Self {
+    pub fn parse_with(query: &str, today: i64, note_types: &[NoteTypeInfo]) -> Self {
         let tests = tokenize(query)
             .into_iter()
-            .filter_map(|token| compile(&token, now as f64, note_types).map(|test| (token.negated, test)))
+            .filter_map(|token| compile(&token, today, note_types).map(|test| (token.negated, test)))
             .collect();
         Query { tests }
     }
@@ -53,8 +54,9 @@ enum Test {
     Deck(Vec<String>),
     /// Folded tag; a prefix when it ended in `*`.
     Tag { want: String, prefix: bool },
-    State(State, f64),
-    Number { field: Number, op: Op, value: f64, now: f64 },
+    /// With the start of the study day.
+    State(State, i64),
+    Number { field: Number, op: Op, value: f64, today: i64 },
     /// Folded needle, searched in a field: its index in each note type that has it.
     Field { needle: String, index: HashMap<String, usize> },
 }
@@ -80,7 +82,7 @@ enum State {
 enum Number {
     Reviews,
     Lapses,
-    /// Days from now; new cards have none.
+    /// Study days from today, negative when overdue; new cards have none.
     Due,
 }
 
@@ -122,20 +124,20 @@ impl Test {
                 let t = fold(t);
                 if *prefix { t.starts_with(want.as_str()) } else { t == *want }
             }),
-            Test::State(state, now) => match state {
+            Test::State(state, today) => match state {
                 State::New => c.due.is_none(),
-                State::Due => !c.suspended && c.due.is_some_and(|d| d as f64 <= *now),
+                State::Due => !c.suspended && c.due.is_some_and(|d| d < today + DAY_SECS),
                 State::Suspended => c.suspended,
                 State::Leech => c.lapses >= LEECH_LAPSES,
                 State::Cloze => c.kind == CardKind::Cloze,
                 State::Basic => c.kind == CardKind::Basic,
             },
-            Test::Number { field, op, value, now } => {
+            Test::Number { field, op, value, today } => {
                 let v = match field {
                     Number::Reviews => f64::from(c.reps),
                     Number::Lapses => f64::from(c.lapses),
                     Number::Due => match c.due {
-                        Some(d) => (d as f64 - now) / DAY_SECS,
+                        Some(d) => (d - today).div_euclid(DAY_SECS) as f64,
                         None => return false,
                     },
                 };
@@ -238,7 +240,7 @@ fn field_key(name: &str) -> String {
 }
 
 /// What one token tests; `None` if it matches everything, like a filter still being typed (`deck:`).
-fn compile(token: &Token, now: f64, note_types: &[NoteTypeInfo]) -> Option<Test> {
+fn compile(token: &Token, today: i64, note_types: &[NoteTypeInfo]) -> Option<Test> {
     let value = token.value.as_str();
     let Some(key) = &token.key else {
         if token.raw.starts_with('#') {
@@ -270,7 +272,7 @@ fn compile(token: &Token, now: f64, note_types: &[NoteTypeInfo]) -> Option<Test>
                 ">=" => Op::Ge,
                 _ => Op::Eq,
             };
-            return Some(Test::Number { field, op, value: n, now });
+            return Some(Test::Number { field, op, value: n, today });
         }
     } else if token.operator == ":" {
         match key.to_lowercase().as_str() {
@@ -294,7 +296,7 @@ fn compile(token: &Token, now: f64, note_types: &[NoteTypeInfo]) -> Option<Test>
                     _ => None,
                 };
                 if let Some(state) = state {
-                    return Some(Test::State(state, now));
+                    return Some(Test::State(state, today));
                 }
             }
             _ => {
@@ -484,6 +486,20 @@ mod tests {
         check("due<7", &["paris", "cafe", "leech"]);
         check("due>1", &["cafe"]);
         check("due>-2", &["paris", "cafe", "leech"]);
+    }
+
+    #[test]
+    fn due_counts_whole_study_days() {
+        // `NOW` is the start of today: a card due this evening is due already, and one
+        // due early tomorrow is not.
+        let mut evening = card("evening");
+        evening.due = Some(NOW + DAY - 1);
+        let mut tomorrow = card("tomorrow");
+        tomorrow.due = Some(NOW + DAY);
+        let due = Query::parse("is:due", NOW);
+        assert!(due.matches(&evening) && !due.matches(&tomorrow));
+        let today = Query::parse("due<1", NOW);
+        assert!(today.matches(&evening) && !today.matches(&tomorrow));
     }
 
     #[test]

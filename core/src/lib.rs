@@ -32,9 +32,10 @@ pub const MEDIA_DIR: &str = "media";
 /// Folder at the collection root that holds the decks; `media` and `note-types` sit beside it.
 pub const CARDS_DIR: &str = "cards";
 const DAY_SECS: i64 = 86_400;
-/// The scheduling day rolls over at 4am local time, so late-night study counts as the same day.
-const DAY_ROLLOVER_SECS: i64 = 4 * 3600;
-/// When nothing else is left, cards due within this window are shown early.
+/// The study day rolls over at 4am local time unless set otherwise, so late-night
+/// study counts as the same day.
+const DEFAULT_ROLLOVER_HOUR: u8 = 4;
+/// When nothing else is left, a failed card due back within this window is shown early.
 const LEARN_AHEAD_SECS: i64 = 20 * 60;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -371,6 +372,8 @@ struct Inner {
     scripts: Scripts,
     new_per_day: u32,
     utc_offset_secs: i64,
+    /// When the study day starts, in seconds after local midnight.
+    rollover_secs: i64,
     /// Why the database was reopened while the collection was open, shown with the
     /// warnings until the app restarts.
     store_notice: Option<CollectionWarning>,
@@ -412,6 +415,18 @@ impl CardCollection {
     /// Local time zone offset, used to decide when the study day rolls over.
     pub fn set_utc_offset(&self, seconds: i32) {
         self.lock().utc_offset_secs = seconds.into();
+    }
+
+    /// The hour (0–23, local time) a new study day starts. Cards on intervals of a day
+    /// or more are due from the start of their day.
+    pub fn set_rollover_hour(&self, hour: u8) {
+        self.lock().rollover_secs = i64::from(hour.min(23)) * 3600;
+    }
+
+    /// When the current study day started (Unix seconds), for searches like `is:due`.
+    pub fn day_start(&self) -> i64 {
+        let inner = self.lock();
+        inner.day_start(unix_now())
     }
 
     /// Target probability of recall when a card comes due, between 0.7 and 0.99.
@@ -623,6 +638,7 @@ impl CardCollection {
             scripts: Scripts::default(),
             new_per_day: 20,
             utc_offset_secs: 0,
+            rollover_secs: i64::from(DEFAULT_ROLLOVER_HOUR) * 3600,
             store_notice: None,
             answered: Vec::new(),
         };
@@ -788,8 +804,18 @@ impl Inner {
     }
 
     fn day_start(&self, now: i64) -> i64 {
-        let local = now + self.utc_offset_secs - DAY_ROLLOVER_SECS;
-        local.div_euclid(DAY_SECS) * DAY_SECS + DAY_ROLLOVER_SECS - self.utc_offset_secs
+        let local = now + self.utc_offset_secs - self.rollover_secs;
+        local.div_euclid(DAY_SECS) * DAY_SECS + self.rollover_secs - self.utc_offset_secs
+    }
+
+    /// Whether a card is due at `now`. A failed card, back after minutes, is due at its
+    /// time; a card on an interval of days is due for the whole study day it falls on.
+    fn is_due(&self, state: &CardState, now: i64) -> bool {
+        if state.interval_secs < DAY_SECS {
+            state.due <= now
+        } else {
+            state.due < self.day_start(now) + DAY_SECS
+        }
     }
 
     fn new_remaining(&self, now: i64) -> Result<u32> {
@@ -835,7 +861,7 @@ impl Inner {
                 continue;
             }
             match self.states.get(&card.parsed.id) {
-                Some(s) if s.due <= now => counts.1 += 1,
+                Some(s) if self.is_due(s, now) => counts.1 += 1,
                 Some(s) if s.interval_secs < DAY_SECS => counts.2 += 1,
                 Some(_) => {}
                 None => counts.3 += 1,
@@ -906,8 +932,14 @@ impl Inner {
     fn next_card(&self, scope: &StudyScope, now: i64) -> Result<Option<StudyCard>> {
         let studied = || self.in_scope(scope).filter(|c| !c.suspended());
         let seen = || studied().filter_map(|c| self.states.get(&c.parsed.id).map(|s| (s, c)));
-        let earliest_due_before = |limit: i64| {
-            seen().filter(|(s, _)| s.due <= limit).min_by_key(|(s, _)| s.due).map(|(_, c)| c)
+        // When nothing else is left, a failed card due back soon is shown early, but
+        // never one from the next study day.
+        let ahead = || {
+            let limit = (now + LEARN_AHEAD_SECS).min(self.day_start(now) + DAY_SECS - 1);
+            seen()
+                .filter(|(s, _)| s.interval_secs < DAY_SECS && s.due <= limit)
+                .min_by_key(|(s, _)| s.due)
+                .map(|(_, c)| c)
         };
         // A failed card comes back within minutes, ahead of reviews, while the
         // lapse is fresh. Its due date alone can't tell: a review due tomorrow
@@ -920,7 +952,7 @@ impl Inner {
         // and keeps its order when the app restarts.
         let review = || {
             seen()
-                .filter(|(s, _)| s.due <= now)
+                .filter(|(s, _)| self.is_due(s, now))
                 .min_by_key(|(s, c)| {
                     let last_review = s.last_review.to_string();
                     (self.day_start(s.due), parser::stable_hash(&[&c.parsed.id, &last_review]))
@@ -932,8 +964,8 @@ impl Inner {
             Some(c) => Some(c),
             None if self.new_remaining(now)? > 0 => studied()
                 .find(|c| !self.states.contains_key(&c.parsed.id))
-                .or_else(|| earliest_due_before(now + LEARN_AHEAD_SECS)),
-            None => earliest_due_before(now + LEARN_AHEAD_SECS),
+                .or_else(ahead),
+            None => ahead(),
         };
         card.map(|c| self.study_card(c, now)).transpose()
     }
@@ -1150,7 +1182,7 @@ impl Inner {
 
     fn dashboard(&self, activity_days: u32, now: i64) -> Result<Dashboard> {
         // Day `n` starts at `n * DAY_SECS - shift`, matching `day_start`.
-        let shift = self.utc_offset_secs - DAY_ROLLOVER_SECS;
+        let shift = self.utc_offset_secs - self.rollover_secs;
         let today = (now + shift).div_euclid(DAY_SECS);
         let first = today - i64::from(activity_days.max(1)) + 1;
 
@@ -1519,6 +1551,50 @@ mod tests {
     }
 
     #[test]
+    fn reviews_are_due_for_their_whole_study_day() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: -\n\nQ: 2\nA: -\n")]);
+        let mut inner = c.lock();
+        let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
+        let hour = 3600;
+        // UTC, so today's study day starts at 4 am.
+        let today = inner.day_start(T0);
+        let state = |due, interval_secs| CardState {
+            memory: Memory { stability: 5.0, difficulty: 5.0 },
+            due,
+            last_review: due - interval_secs,
+            reps: 1,
+            lapses: 0,
+            interval_secs,
+        };
+        let next = |inner: &Inner, now| inner.next_card(&StudyScope::All, now).unwrap().map(|c| c.id);
+        let due = |inner: &Inner, now| inner.decks(now).unwrap()[0].due;
+        inner.states.insert(ids[0].clone(), state(today + 20 * hour, 2 * DAY_SECS));
+        inner.states.insert(ids[1].clone(), state(today + DAY_SECS + 5 * 60, 2 * DAY_SECS));
+
+        // Due this evening: due from the start of the day.
+        assert_eq!((due(&inner, today), next(&inner, today)), (1, Some(ids[0].clone())));
+        inner.answer(&ids[0], Rating::Good, today).unwrap();
+        // Due five minutes into tomorrow: not shown early, though nothing else is left.
+        let late = today + DAY_SECS - 10 * 60;
+        assert_eq!((due(&inner, late), next(&inner, late)), (0, None));
+        assert_eq!(next(&inner, today + DAY_SECS), Some(ids[1].clone()));
+
+        // A failed card is shown early when nothing else is left, but not past the
+        // day's end.
+        inner.answer(&ids[1], Rating::Again, today + 2 * hour).unwrap();
+        assert_eq!(next(&inner, today + 2 * hour + 60), Some(ids[1].clone()));
+        inner.answer(&ids[1], Rating::Again, late).unwrap();
+        assert_eq!(next(&inner, late + 60), None);
+        assert_eq!(next(&inner, late + scheduler::AGAIN_DELAY_SECS), Some(ids[1].clone()));
+
+        // A later rollover hour moves the day's start.
+        drop(inner);
+        c.set_rollover_hour(6);
+        assert_eq!(c.lock().day_start(T0 + DAY_SECS) - today, DAY_SECS + 2 * hour);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn review_order() {
         let (dir, c) = collection(&[
             ("a.md", "Q: 1\nA: -\n\nQ: 2\nA: -\n\nQ: 3\nA: -\n"),
@@ -1810,7 +1886,7 @@ mod tests {
         let inner = c.lock();
         // 2025-10-09 03:00 local (+05:00) is still the previous study day.
         let start = inner.day_start(1_759_960_800);
-        assert_eq!((start + 5 * 3600 - DAY_ROLLOVER_SECS).rem_euclid(DAY_SECS), 0);
+        assert_eq!((start + 5 * 3600 - 4 * 3600).rem_euclid(DAY_SECS), 0);
         assert!(start <= 1_759_960_800 && 1_759_960_800 - start < DAY_SECS);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
@@ -1988,7 +2064,8 @@ mod tests {
         let card = inner.cards.iter().find(|c| c.parsed.front == "сәлем").unwrap();
         let state = inner.states[&card.parsed.id];
         // Due on the card's day in Anki (day 5), not 3 days after its last review as logged.
-        assert_eq!((state.reps, state.last_review, state.due), (2, 1_700_086_400, 1_699_920_000 + 5 * DAY_SECS));
+        // Due on Anki's day 5, whole days after the last review.
+        assert_eq!((state.reps, state.last_review, state.due), (2, 1_700_086_400, 1_700_086_400 + 4 * DAY_SECS));
         assert_eq!(inner.store.state(&card.parsed.id).unwrap(), Some(state));
         drop(inner);
 

@@ -44,6 +44,7 @@ struct DeckName: Equatable {
 final class AppModel {
     private static let folderKey = "collectionPath"
     private static let retentionKey = "desiredRetention"
+    private static let rolloverKey = "rolloverHour"
     private static let quickAddShortcutKey = "quickAddShortcut"
     /// The range the core accepts.
     static let retentionRange = 0.7...0.99
@@ -63,6 +64,8 @@ final class AppModel {
     var editingView: SavedViewDraft?
     private(set) var warnings: [CollectionWarning] = []
     private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
+    /// When the current study day started (Unix seconds), for the browse search's `is:due`.
+    private(set) var dayStart: Int64?
     /// The card being studied, and whether its answer shows.
     private(set) var study: StudyState = .none
     /// What last showed an answer or rated a card, for whether the change animates.
@@ -106,6 +109,16 @@ final class AppModel {
             UserDefaults.standard.set(desiredRetention, forKey: Self.retentionKey)
             collection?.setDesiredRetention(retention: Float(desiredRetention))
             refreshIntervals()
+        }
+    }
+
+    /// The hour (0–23) a new study day starts. Applies to every collection.
+    var rolloverHour: Int = AppModel.savedRolloverHour() {
+        didSet {
+            guard oldValue != rolloverHour else { return }
+            UserDefaults.standard.set(rolloverHour, forKey: Self.rolloverKey)
+            collection?.setRolloverHour(hour: UInt8(rolloverHour))
+            refresh()
         }
     }
 
@@ -211,6 +224,7 @@ final class AppModel {
             let collection = try CardCollection.open(root: url.path)
             collection.setUtcOffset(seconds: Int32(TimeZone.current.secondsFromGMT()))
             collection.setDesiredRetention(retention: Float(desiredRetention))
+            collection.setRolloverHour(hour: UInt8(rolloverHour))
             self.collection = collection
             self.canUndoAnswer = false
             self.folder = url
@@ -293,6 +307,7 @@ final class AppModel {
             update(\.tagIcons, try collection.tagIcons())
             update(\.savedViews, try collection.savedViews())
             update(\.today, try collection.today())
+            update(\.dayStart, collection.dayStart())
             update(\.warnings, collection.warnings())
         }
         fonts.fetch(for: collection.scripts(), han: EnvironmentPayload.preferredHan)
@@ -318,6 +333,7 @@ final class AppModel {
             let decks = try collection.decks()
             update(\.decks, decks)
             update(\.today, try collection.today())
+            update(\.dayStart, collection.dayStart())
         }
     }
 
@@ -378,7 +394,7 @@ final class AppModel {
         }
         return WebState(
             pane: pane,
-            environment: .current,
+            environment: .current(dayStart: dayStart),
             fonts: fonts.stylesheets,
             icons: tagIcons,
             study: StudyPayload(
@@ -587,6 +603,11 @@ final class AppModel {
                 update(\.study, revealed ? .answer(next) : .question(next))
             }
         }
+    }
+
+    private static func savedRolloverHour() -> Int {
+        let saved = UserDefaults.standard.object(forKey: rolloverKey) as? Int ?? 4
+        return min(max(saved, 0), 23)
     }
 
     private static func savedRetention() -> Double {

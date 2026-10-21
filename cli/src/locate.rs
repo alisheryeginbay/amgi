@@ -23,6 +23,9 @@ pub fn open(dir: Option<&Path>) -> Result<Arc<CardCollection>, String> {
     }
     let collection = CardCollection::open(root.to_string_lossy().into_owned()).map_err(|e| e.to_string())?;
     collection.set_utc_offset(text::utc_offset(text::now()));
+    if let Some(hour) = app_setting("rolloverHour").and_then(|h| h.parse().ok()) {
+        collection.set_rollover_hour(hour);
+    }
     Ok(collection)
 }
 
@@ -35,9 +38,18 @@ fn find_upwards() -> Option<PathBuf> {
 /// The folder last opened in the app.
 fn app_folder() -> Option<PathBuf> {
     APP_DOMAINS.iter().find_map(|domain| {
-        let out = Command::new("defaults").args(["read", domain, "collectionPath"]).output().ok()?;
-        let path = String::from_utf8(out.stdout).ok()?;
-        let path = PathBuf::from(path.trim_end_matches('\n'));
-        (out.status.success() && path.is_dir()).then_some(path)
+        let path = PathBuf::from(read_default(domain, "collectionPath")?);
+        path.is_dir().then_some(path)
     })
+}
+
+/// A setting from the app, such as when the study day starts, from the first app that has it.
+fn app_setting(key: &str) -> Option<String> {
+    APP_DOMAINS.iter().find_map(|domain| read_default(domain, key))
+}
+
+fn read_default(domain: &str, key: &str) -> Option<String> {
+    let out = Command::new("defaults").args(["read", domain, key]).output().ok()?;
+    let value = String::from_utf8(out.stdout).ok()?;
+    out.status.success().then(|| value.trim_end_matches('\n').to_string())
 }

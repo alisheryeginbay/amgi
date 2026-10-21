@@ -54,6 +54,15 @@ ALTER TABLE review_log ADD COLUMN review_state INTEGER;
 -- With the rating, counting reviews per day reads only the index.
 DROP INDEX review_log_time;
 CREATE INDEX review_log_time ON review_log (reviewed_at, rating);
+"#, r#"
+-- Cards imported from Anki were due at the start of Anki's day, often 2 am, which
+-- falls in the previous amgi study day. Make them due whole days after their last
+-- review, as amgi schedules: the same calendar day, at the time of that review.
+-- Anki's days start on the quarter hour; amgi's own dues are whole days or ten
+-- minutes after the review.
+UPDATE card_state
+SET due = last_review + (due - last_review + 86399) / 86400 * 86400
+WHERE due - last_review > 900 AND (due - last_review) % 86400 != 0 AND due % 900 = 0;
 "#];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -562,5 +571,28 @@ mod tests {
         let store = Store::init(conn).unwrap();
         assert_eq!(store.reviews("abc").unwrap()[0].state, None);
         assert_eq!(store.last_review_state("abc").unwrap(), None);
+    }
+
+    #[test]
+    fn anki_due_dates_move_to_whole_days() {
+        let conn = Connection::open_in_memory().unwrap();
+        for sql in &MIGRATIONS[..5] {
+            conn.execute_batch(sql).unwrap();
+        }
+        // Reviewed 2026-10-12 at 16:55 (UTC+5): imported due at the start of Anki's day on
+        // the 22nd at 2 am, scheduled by amgi ten days on, and failed ten minutes ago.
+        let last = 1_791_806_155;
+        for (id, due) in [("anki", 1_792_616_400), ("amgi", last + 10 * 86_400), ("failed", last + 600)] {
+            conn.execute(
+                "INSERT INTO card_state VALUES (?1, 2, 5, ?2, ?3, 1, 0)",
+                params![id, due, last],
+            )
+            .unwrap();
+        }
+        conn.pragma_update(None, "user_version", 5).unwrap();
+        let states = Store::init(conn).unwrap().states().unwrap();
+        assert_eq!(states["anki"].due, last + 10 * 86_400);
+        assert_eq!(states["amgi"].due, last + 10 * 86_400);
+        assert_eq!(states["failed"].due, last + 600);
     }
 }

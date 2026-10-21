@@ -36,12 +36,16 @@ struct EnvironmentPayload: Encodable, Equatable {
     /// and Korean share Han characters but draw some differently, and cards don't say
     /// their language, so this picks the forms. Left out of the JSON when there is none.
     let han: String?
+    /// When the current study day started (Unix seconds), for `is:due`; absent with no
+    /// collection open.
+    let dayStart: Int64?
 
-    static var current: EnvironmentPayload {
+    static func current(dayStart: Int64?) -> EnvironmentPayload {
         EnvironmentPayload(
             locale: Locale.current.identifier(.bcp47),
             firstWeekday: Calendar.current.firstWeekday - 1,
-            han: preferredHan
+            han: preferredHan,
+            dayStart: dayStart
         )
     }
 

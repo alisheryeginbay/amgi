@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::{parser, AmgiError, CardCollection, HistoryEntry, Import, Rating, ReviewState, MEDIA_DIR};
+use crate::{parser, AmgiError, CardCollection, HistoryEntry, Import, Rating, ReviewState, DAY_SECS, MEDIA_DIR};
 pub use text::Media;
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -121,8 +121,17 @@ struct AnkiCard {
     ord: u32,
     is_new: bool,
     suspended: bool,
-    /// When Anki has the card due next (Unix seconds); `None` for new cards.
-    due: Option<i64>,
+    /// When Anki has the card due next; `None` for new cards.
+    due: Option<Due>,
+}
+
+/// When Anki has a card due.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Due {
+    /// At this time (Unix seconds), as a card in learning is.
+    At(i64),
+    /// On the Anki day starting at this time (Unix seconds), as a review card is.
+    Day(i64),
 }
 
 /// One entry of Anki's review log.
@@ -497,8 +506,8 @@ pub struct History {
     /// amgi card id.
     pub id: String,
     pub log: Vec<Revlog>,
-    /// When Anki has the card due (Unix seconds).
-    pub due: Option<i64>,
+    /// When Anki has the card due.
+    pub due: Option<Due>,
 }
 
 impl History {
@@ -508,7 +517,13 @@ impl History {
     fn entries(&self) -> (String, Vec<HistoryEntry>) {
         let mut entries: Vec<HistoryEntry> = self.log.iter().filter_map(Revlog::history).collect();
         if let (Some(due), Some(last)) = (self.due, self.log.last()) {
-            entries.push(HistoryEntry::Reschedule { time: last.time, interval_secs: due - last.time });
+            let interval_secs = match due {
+                Due::At(time) => time - last.time,
+                // Whole days from the last review, as amgi schedules: due on the same
+                // calendar day as in Anki, whatever hour Anki's day starts at.
+                Due::Day(start) => (start - last.time + DAY_SECS - 1).div_euclid(DAY_SECS) * DAY_SECS,
+            };
+            entries.push(HistoryEntry::Reschedule { time: last.time, interval_secs });
         }
         (self.id.clone(), entries)
     }
@@ -551,14 +566,14 @@ impl Timing {
         })
     }
 
-    /// A card's `due` as Unix seconds: a time for cards in learning, a day number
-    /// otherwise. `None` for new cards.
-    fn due(&self, kind: i64, due: i64) -> Option<i64> {
+    /// A card's `due`, which Anki stores as a time for cards in learning and a day
+    /// number otherwise. `None` for new cards.
+    fn due(&self, kind: i64, due: i64) -> Option<Due> {
         match kind {
             0 => None,
             // Learning cards due later than today hold a day number too.
-            1 | 3 if due > 1_000_000_000 => Some(due),
-            _ => Some(self.day_start(due)),
+            1 | 3 if due > 1_000_000_000 => Some(Due::At(due)),
+            _ => Some(Due::Day(self.day_start(due))),
         }
     }
 
@@ -1288,7 +1303,7 @@ pub(crate) mod tests {
         assert_eq!(out.histories[0].log[1], Revlog { time: 1_700_086_400, ease: 3, kind: 1, interval: 3, factor: 2500 });
         // Day 5 of the collection: the card was in a filtered deck, which keeps its
         // own due date in `odue`.
-        assert_eq!(out.histories[0].due, Some(1_699_920_000 + 5 * 86_400));
+        assert_eq!(out.histories[0].due, Some(Due::Day(1_699_920_000 + 5 * 86_400)));
         // The cloze history belongs to the `c1` deletion only.
         let cloze = parser::parse(&out.decks[0].1).cards;
         assert_eq!(out.histories[1].id, cloze[0].id);
@@ -1297,10 +1312,21 @@ pub(crate) mod tests {
     #[test]
     fn history_ends_at_anki_due_date() {
         let review = Revlog { time: 1_000, ease: 3, kind: 1, interval: 3, factor: 2500 };
-        let history = History { id: "a".into(), log: vec![review], due: Some(1_000 + 10 * 86_400) };
+        let history = History { id: "a".into(), log: vec![review], due: Some(Due::At(1_000 + 10 * 86_400)) };
         let (_, entries) = history.entries();
         // Anki moved the card from 3 days out to 10 without logging it.
         assert_eq!(entries[1], HistoryEntry::Reschedule { time: 1_000, interval_secs: 10 * 86_400 });
+    }
+
+    #[test]
+    fn review_due_is_whole_days_after_last_review() {
+        // Reviewed 2026-10-12 at 16:55 and due on the Anki day that starts 2026-10-22
+        // at 2 am (UTC+5): ten days later, at 16:55, so the card isn't due before the
+        // 22nd starts in amgi.
+        let review = Revlog { time: 1_791_806_155, ease: 3, kind: 1, interval: 10, factor: 2500 };
+        let history = History { id: "a".into(), log: vec![review], due: Some(Due::Day(1_792_616_400)) };
+        let (_, entries) = history.entries();
+        assert_eq!(entries[1], HistoryEntry::Reschedule { time: 1_791_806_155, interval_secs: 10 * DAY_SECS });
     }
 
     #[test]
@@ -1309,9 +1335,9 @@ pub(crate) mod tests {
         let timing = Timing { created: 1_756_144_800, offsets: Some((-240, -300)), rollover_hour: 2 };
         // Day 422 starts on 2026-10-21 at 2 am, UTC+5.
         assert_eq!(timing.day_start(422), 1_792_530_000);
-        assert_eq!(timing.due(2, 422), Some(1_792_530_000));
-        assert_eq!(timing.due(1, 1_792_000_000), Some(1_792_000_000));
-        assert_eq!(timing.due(3, 422), Some(1_792_530_000));
+        assert_eq!(timing.due(2, 422), Some(Due::Day(1_792_530_000)));
+        assert_eq!(timing.due(1, 1_792_000_000), Some(Due::At(1_792_000_000)));
+        assert_eq!(timing.due(3, 422), Some(Due::Day(1_792_530_000)));
         assert_eq!(timing.due(0, 7), None);
     }
 

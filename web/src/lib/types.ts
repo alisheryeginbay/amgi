@@ -98,6 +98,8 @@ export interface Environment {
   firstWeekday: number;
   /** The Mac's first CJK language, which picks how Han characters are drawn. */
   han?: "ko" | "ja" | "zh-hans" | "zh-hant";
+  /** When the current study day started, in Unix seconds; absent with no collection open. */
+  dayStart?: number;
 }
 
 /** What showed an answer or rated a card. */

@@ -38,18 +38,20 @@
   );
 
   const collator = $derived(new Intl.Collator(app.environment.locale, { numeric: true, sensitivity: "base" }));
+  // When the study day started, for `is:due`; the app sends it with a collection open.
+  const today = $derived(app.environment.dayStart ?? Date.now() / 1000);
   const cards = $derived.by(() => {
     const browse = app.browse;
     if (!browse) return [];
     const { deck, query } = browse;
     const inDeck = deck === undefined ? app.cards : app.cards.filter((c) => c.deck === deck || c.deck.startsWith(`${deck}/`));
-    return query ? inDeck.filter(parseQuery(query, undefined, app.noteTypes)) : inDeck;
+    return query ? inDeck.filter(parseQuery(query, today, app.noteTypes)) : inDeck;
   });
   // The window subtitle counts them.
   $effect(() => post({ type: "count", count: cards.length }));
   const query = $derived(app.search.trim());
   const rows = $derived.by(() => {
-    const matches = parseQuery(query, undefined, app.noteTypes);
+    const matches = parseQuery(query, today, app.noteTypes);
     return sorted(query ? cards.filter(matches) : cards, sort, collator);
   });
   const rowIndex = $derived(new Map(rows.map((card, i) => [card.id, i])));

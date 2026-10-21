@@ -26,7 +26,8 @@ the root, and note tags become `#tag` lines.
   or whose cards are in different decks or only partly suspended.
 - Cloze notes become `C:` cards, with `Back Extra` kept as a note under the card. Anki
   can test several deletions together (`c1` used twice); amgi gives each its own card.
-- Review history is replayed through amgi's FSRS scheduler, and due dates follow Anki's.
+- Review history is replayed through amgi's FSRS scheduler, and cards are due on the
+  same day as in Anki, whatever hour Anki's day starts at.
 - MathJax `\(…\)` and `\[…\]` become `$…$` and `$$…$$`. A cloze inside math is
   taken out of it, so the gap holds its own math.
 - `[sound:…]` references become sound links. Text-to-speech (`{{tts:…}}`) is left out.

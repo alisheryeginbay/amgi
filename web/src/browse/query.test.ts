@@ -98,11 +98,20 @@ test("numbers compare with <, <=, >, >=, = or :", () => {
   assert.deepEqual(search("reviews<=2"), ["cafe", "water"]);
 });
 
-test("due compares days from now, and never matches new cards", () => {
+test("due compares study days from today, and never matches new cards", () => {
   assert.deepEqual(search("due<0"), ["paris", "leech"]);
   assert.deepEqual(search("due<7"), ["paris", "cafe", "leech"]);
   assert.deepEqual(search("due>1"), ["cafe"]);
   assert.deepEqual(search("due>-2"), ["paris", "cafe", "leech"]);
+});
+
+test("a card is due for the whole study day it falls on", () => {
+  // `NOW` is the start of today: due this evening is due already; early tomorrow is not.
+  const evening = card("evening", { due: NOW + DAY - 1 });
+  const tomorrow = card("tomorrow", { due: NOW + DAY });
+  for (const query of ["is:due", "due<1"]) {
+    assert.deepEqual([evening, tomorrow].filter(parseQuery(query, NOW)).map((c) => c.id), ["evening"], query);
+  }
 });
 
 test("filters still being typed match everything", () => {

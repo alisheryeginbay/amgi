@@ -86,11 +86,13 @@ pub fn check(c: &CardCollection, out: Output) -> Result {
     Ok(code)
 }
 
-/// `new`, `suspended`, `due now`, `overdue 3d` or `in 2d`.
-fn schedule_label(card: &BrowseCard, now: i64) -> String {
+/// `new`, `suspended`, `due now`, `due today`, `overdue 3d` or `in 2d`.
+fn schedule_label(card: &BrowseCard, now: i64, tomorrow: i64) -> String {
     match card.due {
         _ if card.suspended => "suspended".into(),
         None => "new".into(),
+        // Due for the whole study day it falls on, as `is:due` counts it.
+        Some(due) if due > now && due < tomorrow => "due today".into(),
         Some(due) if due > now => format!("in {}", format_interval(due - now)),
         Some(due) if now - due < DAY => "due now".into(),
         Some(due) => format!("overdue {}", format_interval(now - due)),
@@ -108,7 +110,7 @@ pub fn search(c: &CardCollection, out: Output, query: &str, view: Option<&str>, 
         query = format!("{} {query}", found.query);
     }
     let now = text::now();
-    let matcher = Query::parse_with(&query, now, &c.note_types());
+    let matcher = Query::parse_with(&query, c.day_start(), &c.note_types());
     let cards: Vec<_> = c.cards(StudyScope::All).into_iter().filter(|card| matcher.matches(card)).collect();
     // Like grep: a search that finds nothing fails, for scripts.
     let code = if cards.is_empty() { ExitCode::FAILURE } else { ExitCode::SUCCESS };
@@ -126,9 +128,10 @@ pub fn search(c: &CardCollection, out: Output, query: &str, view: Option<&str>, 
         eprintln!("No cards match.");
         return Ok(code);
     }
+    let tomorrow = c.day_start() + DAY;
     let rows: Vec<_> = cards
         .iter()
-        .map(|card| (format!("{}:{}", card.path, card.line), schedule_label(card, now), one_line(&card.front)))
+        .map(|card| (format!("{}:{}", card.path, card.line), schedule_label(card, now, tomorrow), one_line(&card.front)))
         .collect();
     let place_width = rows.iter().map(|r| width(&r.0)).max().unwrap_or(0);
     let label_width = rows.iter().map(|r| width(&r.1)).max().unwrap_or(0);
@@ -197,7 +200,7 @@ fn resolve<'a>(c: &CardCollection, cards: &'a [BrowseCard], arg: &str) -> Result
         };
         return Ok(cards.iter().filter(|card| card.path == path && card.line == start).collect());
     }
-    let matcher = Query::parse_with(arg, text::now(), &c.note_types());
+    let matcher = Query::parse_with(arg, c.day_start(), &c.note_types());
     let found: Vec<_> = cards.iter().filter(|card| matcher.matches(card)).collect();
     match found.first() {
         None => Err(format!("no card matches {arg:?}").into()),
