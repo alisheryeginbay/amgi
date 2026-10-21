@@ -4,6 +4,7 @@
 //! state lives in `.amgi.sqlite` at the collection root.
 
 pub mod anki;
+pub mod media;
 pub mod parser;
 pub mod scheduler;
 pub mod scripts;

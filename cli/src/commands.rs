@@ -379,3 +379,34 @@ pub fn stats(c: &CardCollection, out: Output, days: u32) -> Result {
     }
     Ok(ExitCode::SUCCESS)
 }
+
+pub fn prune(c: &CardCollection, out: Output, trash: bool) -> Result {
+    let root = c.root();
+    let unused = amgi_core::media::unused(&root)?;
+    if trash && !unused.is_empty() {
+        let status = std::process::Command::new("/usr/bin/trash")
+            .arg("-s")
+            .args(unused.iter().map(|m| root.join(&m.path)))
+            .status()?;
+        if !status.success() {
+            return Err("couldn't move every file to the Trash".into());
+        }
+    }
+    if out.json {
+        return print_json(&json!({ "files": unused, "trashed": trash }));
+    }
+    let bytes: u64 = unused.iter().map(|m| m.bytes).sum();
+    for m in &unused {
+        println!("{}", m.path);
+    }
+    let files = count(unused.len() as u32, "unused file", "unused files");
+    match (unused.is_empty(), trash) {
+        (true, _) => println!("No unused media."),
+        (false, true) => println!("Moved {files} ({}) to the Trash.", text::size(bytes)),
+        (false, false) => {
+            let them = if unused.len() == 1 { "it" } else { "them" };
+            println!("{files}, {}. Run `amgi prune --trash` to move {them} to the Trash.", text::size(bytes));
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}

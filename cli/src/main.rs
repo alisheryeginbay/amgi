@@ -55,6 +55,13 @@ enum Command {
         /// A card id, `path:line` (any line of the card), or a search matching one card.
         card: Vec<String>,
     },
+    /// Files in the `media` folder that no card links to. Lists them; `--trash` moves
+    /// them to the Trash.
+    Prune {
+        /// Move the unused files to the Trash.
+        #[arg(long)]
+        trash: bool,
+    },
     /// Streak, retention, card counts, recent reviews and the coming days' workload.
     Stats {
         /// Days of review history to show.
@@ -80,6 +87,7 @@ fn main() -> ExitCode {
         Command::Decks => commands::decks(&collection, out),
         Command::Tags => commands::tags(&collection, out),
         Command::Info { card } => commands::info(&collection, out, &card.join(" ")),
+        Command::Prune { trash } => commands::prune(&collection, out, trash),
         Command::Stats { days } => commands::stats(&collection, out, days),
     };
     match result {

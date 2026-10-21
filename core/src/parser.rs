@@ -1002,6 +1002,12 @@ pub fn math_len(s: &str) -> Option<usize> {
 
 /// Byte length of a Markdown image `![alt](path)` or `![alt](<path>)` at the start of `s`.
 pub fn image_len(s: &str) -> Option<usize> {
+    image(s).map(|(len, ..)| len)
+}
+
+/// A Markdown image at the start of `s`: its byte length, its path, and whether the
+/// path was written in angle brackets.
+pub fn image(s: &str) -> Option<(usize, &str, bool)> {
     // Alt text may hold balanced brackets.
     let mut depth = 0;
     let alt_len = s.strip_prefix("![")?.char_indices().find_map(|(i, c)| {
@@ -1015,14 +1021,16 @@ pub fn image_len(s: &str) -> Option<usize> {
     })?;
     let dest_start = 2 + alt_len + 2;
     let dest = s[dest_start - 1..].strip_prefix('(')?;
-    let dest_len = match dest.strip_prefix('<') {
+    match dest.strip_prefix('<') {
         Some(angled) => {
             let close = angled.find('>')?;
-            angled[close + 1..].starts_with(')').then_some(close + 2)?
+            angled[close + 1..].starts_with(')').then_some((dest_start + close + 3, &angled[..close], true))
         }
-        None => dest.find(')')?,
-    };
-    Some(dest_start + dest_len + 1)
+        None => {
+            let close = dest.find(')')?;
+            Some((dest_start + close + 1, &dest[..close], false))
+        }
+    }
 }
 
 fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) {

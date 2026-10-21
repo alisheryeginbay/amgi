@@ -110,3 +110,19 @@ pub fn bar(value: u32, max: u32, width: usize) -> String {
 pub fn count(n: u32, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
+
+/// `840 bytes`, `12 KB`, `3.4 MB`, in decimal units as Finder shows them.
+pub fn size(bytes: u64) -> String {
+    let units = ["KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    if value < 1000.0 {
+        return count(bytes as u32, "byte", "bytes");
+    }
+    for unit in units {
+        value /= 1000.0;
+        if value < 999.95 || unit == "TB" {
+            return if value < 10.0 { format!("{value:.1} {unit}") } else { format!("{value:.0} {unit}") };
+        }
+    }
+    unreachable!()
+}
