@@ -304,7 +304,7 @@ private final class SchemeHandler: NSObject, WKURLSchemeHandler {
     static let pageURL = URL(string: "amgi://app/index.html")!
 
     var collectionRoot: URL?
-    private let pageRoot = Bundle.module.url(forResource: "Web", withExtension: nil)
+    private let pageRoot = Bundle.resources.url(forResource: "Web", withExtension: nil)
     /// Tasks still running; WebKit forbids answering one it has stopped.
     private var running: Set<ObjectIdentifier> = []
 

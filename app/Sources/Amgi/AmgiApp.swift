@@ -91,6 +91,20 @@ let appName = isDevBuild ? "Amgi Dev" : "Amgi"
 /// The dev build's petals, in place of forget-me-not blue.
 let devViolet = NSColor(srgbRed: 0x91 / 255, green: 0x5b / 255, blue: 0xef / 255, alpha: 1)
 
+extension Bundle {
+    /// The app's own resources (web panes, emoji, artwork). Amgi.app keeps them in
+    /// Contents/Resources, where SwiftPM's `Bundle.module` doesn't look: it checks the
+    /// app's top folder and the folder it was built in, so it only finds them on the
+    /// Mac that built the app. The dev build falls back to `Bundle.module`.
+    static let resources: Bundle = {
+        if let url = Bundle.main.resourceURL?.appending(path: "Amgi_Amgi.bundle"),
+           let bundle = Bundle(url: url) {
+            return bundle
+        }
+        return .module
+    }()
+}
+
 /// Replaces the Help menu's search-only "Amgi Help" item, as there is no help book.
 private struct HelpCommands: Commands {
     @Environment(\.openWindow) private var openWindow
@@ -113,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         // A bare executable has no icon of its own.
-        if isDevBuild, let url = Bundle.module.url(forResource: "AmgiDev", withExtension: "icns") {
+        if isDevBuild, let url = Bundle.resources.url(forResource: "AmgiDev", withExtension: "icns") {
             NSApp.applicationIconImage = NSImage(contentsOf: url)
         }
         NSApp.activate()

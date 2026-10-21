@@ -45,7 +45,7 @@ build="$(git rev-list --count HEAD)"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/Amgi" "$app/Contents/MacOS/Amgi"
-# SwiftPM's `Bundle.module` looks for its resources in the app's Resources folder.
+# `Bundle.resources` (AmgiApp.swift) finds them here; SwiftPM's `Bundle.module` wouldn't.
 cp -R "$bin/Amgi_Amgi.bundle" "$app/Contents/Resources/"
 # Drop debug symbols, which also name the object files they came from.
 strip -S -x "$app/Contents/MacOS/Amgi"

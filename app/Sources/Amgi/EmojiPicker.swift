@@ -79,7 +79,7 @@ enum EmojiCatalog {
     }
 
     private static func load() -> [EmojiCategory] {
-        guard let url = Bundle.module.url(forResource: "Emoji", withExtension: "tsv"),
+        guard let url = Bundle.resources.url(forResource: "Emoji", withExtension: "tsv"),
               let text = try? String(contentsOf: url, encoding: .utf8)
         else { return [] }
         var categories: [EmojiCategory] = []

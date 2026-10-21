@@ -85,7 +85,7 @@ private struct HandwrittenLogo: NSViewRepresentable {
         view.underPageBackgroundColor = .clear
         view.setAccessibilityElement(true)
         view.setAccessibilityLabel("Amgi")
-        if let url = Bundle.module.url(forResource: "Amgi", withExtension: "svg"),
+        if let url = Bundle.resources.url(forResource: "Amgi", withExtension: "svg"),
            let svg = try? String(contentsOf: url, encoding: .utf8) {
             view.loadHTMLString(Self.page(svg), baseURL: nil)
         }
