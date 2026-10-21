@@ -55,6 +55,17 @@ pub struct ParsedCard {
     pub tags: Vec<String>,
     /// The note the card comes from, shared by its cards; `None` for `Q:` and `C:` cards.
     pub note: Option<Arc<Note>>,
+    /// The answer to type, for a card of a `=>` rule.
+    pub typed: Option<Typed>,
+}
+
+/// The answer a card asks to have typed in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Typed {
+    /// The field it comes from, which the typing box names.
+    pub field: String,
+    /// Markdown.
+    pub answer: String,
 }
 
 /// A note's type and the Markdown of each of its fields, in the type's order; empty
@@ -161,6 +172,8 @@ pub(crate) struct NoteType {
 struct Rule {
     front: Vec<usize>,
     back: Vec<usize>,
+    /// Written with `=>`: the first back field filled is typed in.
+    typed: bool,
 }
 
 impl NoteType {
@@ -428,13 +441,16 @@ fn note_type(fields: &[String], cards: &[String], warn: &mut dyn FnMut(String, &
             warn("notes need two fields, or `cards` to say which make a card".into(), "fields", false);
             return None;
         }
-        rules.push(Rule { front: vec![0], back: (1..names.len()).collect() });
+        rules.push(Rule { front: vec![0], back: (1..names.len()).collect(), typed: false });
     }
     'rules: for text in cards {
-        let Some((front, back)) = text.split_once("->") else {
-            warn(format!("card rule `{text}` has no `->`"), text, true);
+        let arrow = [text.find("->"), text.find("=>")].into_iter().flatten().min();
+        let Some(at) = arrow else {
+            warn(format!("card rule `{text}` has no `->` or `=>`"), text, true);
             continue;
         };
+        let typed = text[at..].starts_with("=>");
+        let (front, back) = (&text[..at], &text[at + 2..]);
         let mut side = |part: &str| -> Option<Vec<usize>> {
             let mut out = Vec::new();
             for name in part.split(',').map(str::trim).filter(|n| !n.is_empty()) {
@@ -457,7 +473,7 @@ fn note_type(fields: &[String], cards: &[String], warn: &mut dyn FnMut(String, &
             warn(format!("card rule `{text}` has the same front as another"), text, true);
             continue;
         }
-        rules.push(Rule { front, back });
+        rules.push(Rule { front, back, typed });
     }
     Some(NoteType { fields: names, rules })
 }
@@ -798,6 +814,7 @@ fn finish(pending: Option<Pending>, types: &NoteTypes, out: &mut ParseResult) {
                 line: p.line,
                 tags,
                 note: None,
+                typed: None,
             });
         }
         Field::Cloze => parse_cloze(&join(&p.cloze), p.line, tags, out),
@@ -807,7 +824,8 @@ fn finish(pending: Option<Pending>, types: &NoteTypes, out: &mut ParseResult) {
 
 /// One basic card for each of the note type's rules with a front field and a back
 /// field the note fills. Each side is its filled fields in the rule's order, a blank
-/// line apart. A card's id is that of a `Q:` card with the same front.
+/// line apart. A card's id is that of a `Q:` card with the same front, so it's the
+/// same whether its answer is typed or not.
 fn note_cards(p: &Pending, types: &NoteTypes, tags: Vec<String>, out: &mut ParseResult) {
     let Some(note_type) = p.note_type(types) else { return };
     let value = |field: usize| p.values.iter().find(|(f, _)| *f == field).map(|(_, lines)| join(lines)).filter(|v| !v.is_empty());
@@ -831,6 +849,10 @@ fn note_cards(p: &Pending, types: &NoteTypes, tags: Vec<String>, out: &mut Parse
             line: p.line,
             tags: tags.clone(),
             note: Some(note.clone()),
+            typed: rule
+                .typed
+                .then(|| rule.back.iter().find_map(|&f| Some(Typed { field: note_type.fields[f].clone(), answer: value(f)? })))
+                .flatten(),
         });
     }
     if cards.is_empty() {
@@ -1057,6 +1079,7 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
             line,
             tags: tags.clone(),
             note: None,
+            typed: None,
         });
     }
 }
@@ -1353,6 +1376,23 @@ mod tests {
     }
 
     #[test]
+    fn typed_rules_ask_for_their_first_back_field() {
+        let mut types = NoteTypes::default();
+        let spell = "fields = [\"Word\", \"Audio\", \"Meaning\"]\ncards = [\"Meaning => Audio, Word\", \"Word -> Meaning\"]";
+        assert!(types.insert("Spell", spell).is_empty());
+        let r = parse_deck("@Spell\nWord: hola\nMeaning: hello\n", &types);
+        // The audio is missing, so the word is what's typed.
+        let typed = r.cards[0].typed.as_ref().unwrap();
+        assert_eq!((r.cards[0].front.as_str(), typed.field.as_str(), typed.answer.as_str()), ("hello", "Word", "hola"));
+        assert_eq!(r.cards[1].typed, None);
+        // Typed or not, a card is the same card.
+        let plain = "fields = [\"Word\", \"Audio\", \"Meaning\"]\ncards = [\"Meaning -> Audio, Word\"]";
+        let mut other = NoteTypes::default();
+        other.insert("Spell", plain);
+        assert_eq!(parse_deck("@Spell\nWord: hola\nMeaning: hello\n", &other).cards[0].id, r.cards[0].id);
+    }
+
+    #[test]
     fn note_ids_follow_the_front() {
         let ids = |note: &str| food(&format!("@Food\n{note}")).cards.into_iter().map(|c| c.id).collect::<Vec<_>>();
         let before = ids("Word: pan\nMeaning: bread\nAudio: ![](pan.mp3)");
@@ -1434,7 +1474,7 @@ mod tests {
             [
                 (1, "`A` can't be a field name".to_string()),
                 (1, "field `x` is listed twice".to_string()),
-                (3, "card rule `x` has no `->`".to_string()),
+                (3, "card rule `x` has no `->` or `=>`".to_string()),
                 (4, "card rule `x -> z` names `z`, which isn't in `fields`".to_string()),
                 (5, "card rule `x -> ` has an empty side".to_string()),
                 (7, "card rule `x -> y, x` has the same front as another".to_string()),

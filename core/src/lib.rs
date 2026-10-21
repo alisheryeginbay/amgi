@@ -120,6 +120,10 @@ pub struct StudyCard {
     pub is_new: bool,
     /// Seconds until the card is due again for Again, Hard, Good, Easy.
     pub intervals: Vec<i64>,
+    /// The answer to type before it shows, as Markdown; `None` unless the card asks for one.
+    pub typed: Option<String>,
+    /// The field that answer comes from, such as `Word`, which the typing box names.
+    pub typed_field: Option<String>,
 }
 
 /// A card as listed when browsing a deck.
@@ -917,6 +921,8 @@ impl Inner {
             back: card.parsed.back.clone(),
             is_new: state.is_none(),
             intervals: preview.iter().map(|o| o.interval_secs).collect(),
+            typed: card.parsed.typed.as_ref().map(|t| t.answer.clone()),
+            typed_field: card.parsed.typed.as_ref().map(|t| t.field.clone()),
         })
     }
 

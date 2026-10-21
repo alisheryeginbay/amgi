@@ -6,6 +6,10 @@ Again/Hard/Good/Easy, <kbd>⌘Z</kbd> takes back the last rating and shows that 
 and <kbd>⌘1</kbd>–<kbd>⌘3</kbd> go to Dashboard, Review and Decks. Files also reload
 whenever the app comes to the front.
 
+A card that asks you to [type its answer](card-format.md#notes-with-fields) has a box
+under the question: type, then press <kbd>Return</kbd> to see the answer with what you
+typed checked against it. Rate it with <kbd>1</kbd>–<kbd>4</kbd> as usual.
+
 **Review** in the sidebar studies the whole collection. Pick a deck or tag to browse its
 cards in a table: search (<kbd>⌘F</kbd>), sort by any column, and double-click a card to open its file.
 The selected card shows beside the table as it looks when studied; drag the divider to

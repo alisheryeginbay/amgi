@@ -1,7 +1,8 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import Markdown from "../components/Markdown.svelte";
-  import { clozeGap } from "../lib/markdown";
+  import { compare } from "../lib/diff";
+  import { clozeGap, oneLine, renderInline } from "../lib/markdown";
   import type { StudyCard } from "../lib/types";
 
   /** A card to study, a sheet lifted off the window. Once `revealed`, a basic card's answer
@@ -20,6 +21,29 @@
   const gap = $derived(cloze ? clozeGap(card.front, card.back) : null);
 
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /** What was typed, for a card that asks for its answer. */
+  let typedText = $state("");
+  /** The answer to type as plain text, without its images and sounds. */
+  const expected = $derived.by(() => {
+    if (card.typed == null) return "";
+    const media = /!\[(?:[^\[\]]|\[[^\[\]]*\])*\]\((?:<[^>\n]*>|[^)\s]*)\)/g;
+    const html = renderInline(oneLine(card.typed.replace(media, "")));
+    return new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
+  });
+  const comparison = $derived(revealed && typedText.trim() ? compare(typedText, expected) : null);
+
+  /** Focus the box as the card appears, so typing goes straight in. */
+  function focusOnMount(node: HTMLInputElement) {
+    node.focus({ preventScroll: true });
+  }
+
+  function onTypedKey(event: KeyboardEvent) {
+    if (event.key === "Enter" && !event.isComposing) {
+      event.preventDefault();
+      onreveal();
+    }
+  }
 
   function onclick() {
     // Not when the click ends a text selection.
@@ -73,6 +97,34 @@
     {:else}
       <div class="question">
         <Markdown source={card.front} cardPath={card.path} inlineSounds />
+        {#if card.typed != null}
+          {#if !shown}
+            <input
+              class="typed"
+              type="text"
+              bind:value={typedText}
+              placeholder={card.typedField ? `Type the ${card.typedField}` : "Type the answer"}
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              aria-label={card.typedField ?? "Your answer"}
+              use:focusOnMount
+              onkeydown={onTypedKey}
+              onclick={(e) => e.stopPropagation()}
+            />
+          {:else if comparison}
+            <div class="comparison" class:correct={comparison.correct}>
+              {#if comparison.correct}
+                <span class="mark" aria-label="Right">✓</span> {typedText.trim()}
+              {:else}
+                <!-- prettier-ignore -->
+                <div class="yours"><span class="mark" aria-label="Typed">✗</span> {#each comparison.typed as piece, i (i)}<span class={piece.kind}>{piece.text}</span>{/each}</div>
+                <!-- prettier-ignore -->
+                <div class="right"><span class="mark" aria-hidden="true"></span> {#each comparison.answer as piece, i (i)}<span class={piece.kind}>{piece.text}</span>{/each}</div>
+              {/if}
+            </div>
+          {/if}
+        {/if}
       </div>
       <!-- Takes no room until it shows, so the card's size gives nothing away. -->
       <div class="answer" inert={!shown}>
@@ -153,6 +205,59 @@
   .question {
     padding-bottom: 10px;
     border-bottom: 1px solid var(--separator);
+  }
+
+  /* A typed answer: a box under the question, then what was typed against the answer. */
+  .typed {
+    display: block;
+    width: 100%;
+    margin: 18px 0 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--separator);
+    border-radius: 8px;
+    background: var(--text-background);
+    color: var(--label);
+    font: inherit;
+    font-size: 18px;
+    outline: none;
+  }
+
+  .typed:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+
+  .typed::placeholder {
+    color: var(--tertiary-label);
+  }
+
+  .comparison {
+    margin: 16px 0 6px;
+    font-size: 18px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+
+  .comparison .mark {
+    display: inline-block;
+    width: 1.2em;
+    font-family: system-ui;
+    color: var(--red);
+  }
+
+  .comparison.correct .mark {
+    color: var(--green);
+  }
+
+  .comparison .extra {
+    color: var(--red);
+    text-decoration: line-through;
+  }
+
+  .comparison .missing {
+    color: var(--green);
+    background: color-mix(in srgb, var(--green) 14%, transparent);
+    border-radius: 3px;
   }
 
   .answer {

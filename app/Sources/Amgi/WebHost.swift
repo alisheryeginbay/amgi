@@ -86,6 +86,11 @@ final class WebHost: NSObject {
             post("noteTypes", json: noteTypes)
         }
         send("study", state.study, &sentStudy)
+        // A card that asks for its answer takes the keyboard, for its typing box.
+        if state.pane == .study, state.study.card?.typed != nil, !state.study.revealed,
+           let window = webView.window, window.firstResponder !== webView {
+            window.makeFirstResponder(webView)
+        }
         if let dashboard = state.dashboard {
             send("dashboard", dashboard, &sentDashboard)
         }

@@ -814,6 +814,8 @@ struct NoteLayout {
 struct LayoutRule {
     front: Vec<usize>,
     back: Vec<usize>,
+    /// The question has a typing box: the first back field is typed in.
+    typed: bool,
 }
 
 impl NoteLayout {
@@ -823,7 +825,8 @@ impl NoteLayout {
         let names: Vec<String> = self.fields.iter().map(|f| parser::toml_string(f)).collect();
         let mut out = format!("fields = [{}]\ncards = [\n", names.join(", "));
         for rule in &self.rules {
-            let rule = format!("{} -> {}", list(&rule.front), list(&rule.back));
+            let arrow = if rule.typed { "=>" } else { "->" };
+            let rule = format!("{} {arrow} {}", list(&rule.front), list(&rule.back));
             writeln!(out, "  {},", parser::toml_string(&rule)).unwrap();
         }
         out.push_str("]\n");
@@ -861,11 +864,27 @@ fn note_layout(notetype: &Notetype) -> Option<NoteLayout> {
             return None;
         }
         let front = indexes(shown_fields(qfmt, true)?, &[]);
-        let back = indexes(shown_fields(&text::answer_template(afmt), false)?, &front);
+        let answer = shown_fields(&text::answer_template(afmt), false)?;
+        let mut back = indexes(answer.clone(), &front);
+        // Fields the answer shows right after a question's field, such as a word's
+        // audio after the word, come first, rather than beside some other field.
+        let follows_front = |f: &usize| {
+            let at = answer.iter().position(|n| *n == fields[*f]);
+            at.is_some_and(|at| at > 0 && fields.iter().position(|n| *n == answer[at - 1]).is_some_and(|p| front.contains(&p)))
+        };
+        let (mut first, rest): (Vec<usize>, Vec<usize>) = back.iter().partition(|f| follows_front(f));
+        first.extend(rest);
+        back = first;
+        // The field typed in leads the answer.
+        let typed = typed_field(qfmt).and_then(|name| fields.iter().position(|f| *f == name));
+        if let Some(t) = typed {
+            back.retain(|&f| f != t);
+            back.insert(0, t);
+        }
         if front.is_empty() || back.is_empty() || rules.iter().any(|r| r.front == front) {
             return None;
         }
-        rules.push(LayoutRule { front, back });
+        rules.push(LayoutRule { front, back, typed: typed.is_some() });
     }
     Some(NoteLayout { name: String::new(), fields, rules })
 }
@@ -935,6 +954,13 @@ fn shown_fields(template: &str, front: bool) -> Option<Vec<String>> {
         i += rest.chars().next().map_or(1, char::len_utf8);
     }
     Some(names)
+}
+
+/// The field a question's typing box, `{{type:Word}}` or `{{type:nc:Word}}`, asks for.
+fn typed_field(template: &str) -> Option<String> {
+    let start = template.find("{{type:")? + "{{type:".len();
+    let tag = &template[start..start + template[start..].find("}}")?];
+    Some(tag.strip_prefix("nc:").unwrap_or(tag).trim().to_string())
 }
 
 /// Whether a template shows words or numbers besides its fields.
@@ -1212,7 +1238,7 @@ pub(crate) mod tests {
             types,
             [
                 "Phrase.toml\nfields = [\"Text\", \"Translation\", \"Notes\"]\ncards = [\n  \"Text -> Translation\",\n]\n",
-                "Vocab.toml\nfields = [\"Word\", \"Meaning\", \"Audio\", \"Sentence\"]\ncards = [\n  \"Word, Audio -> Meaning, Sentence\",\n  \"Meaning -> Word, Audio\",\n]\n",
+                "Vocab.toml\nfields = [\"Word\", \"Meaning\", \"Audio\", \"Sentence\"]\ncards = [\n  \"Word, Audio -> Meaning, Sentence\",\n  \"Meaning => Word, Audio\",\n]\n",
             ]
         );
         assert_eq!((out.notes, out.cards, out.skipped_notes, out.suspended_cards), (5, 8, 0, 1));
@@ -1335,6 +1361,25 @@ pub(crate) mod tests {
         let modern = [0x0a, 0x07, 0x0a, 0x05, b'a', b'.', b'p', b'n', b'g', 0x0a, 0x0a, 0x0a, 0x05, b'b', b'.', b'p', b'n', b'g', 0xf8, 0x0f, 0x07];
         let modern = media_index(&modern).unwrap();
         assert_eq!((modern["a.png"].as_str(), modern["b.png"].as_str()), ("0", "7"));
+    }
+
+    #[test]
+    fn layouts_follow_templates() {
+        let notetype = |templates: Vec<(&str, &str)>| Notetype {
+            name: "Vocab".into(),
+            cloze: false,
+            fields: ["Word", "Word Audio", "Meaning", "Hanja", "Sentence", "Sentence Audio"].map(String::from).to_vec(),
+            templates: templates.into_iter().map(|(q, a)| ("Card".to_string(), q.to_string(), a.to_string())).collect(),
+        };
+        let rules = |templates| note_layout(&notetype(templates)).unwrap().toml().lines().skip(2).collect::<Vec<_>>().join("\n");
+        // Audio the answer shows after a question's field comes first, not after Hanja.
+        let kaishi = "{{Word}} {{Word Audio}}<div>{{Meaning}}</div>{{#Hanja}}{{Hanja}}{{/Hanja}}<hr>{{Sentence}}{{Sentence Audio}}";
+        assert_eq!(rules(vec![("{{Word}}<hr>{{Sentence}}", kaishi)]), "  \"Word, Sentence -> Word Audio, Sentence Audio, Meaning, Hanja\",\n]");
+        // A typing box makes its field typed in, first on the answer.
+        assert_eq!(
+            rules(vec![("{{Meaning}} {{type:nc:Word}}", "{{FrontSide}}<hr id=answer>{{Hanja}} {{type:nc:Word}}")]),
+            "  \"Meaning => Word, Hanja\",\n]"
+        );
     }
 
     #[test]

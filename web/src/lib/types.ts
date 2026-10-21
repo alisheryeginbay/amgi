@@ -15,6 +15,10 @@ export interface StudyCard {
   front: string;
   /** Markdown. */
   back: string;
+  /** The answer to type before it shows, as Markdown; null unless the card asks for one. */
+  typed?: string | null;
+  /** The field that answer comes from, such as `Word`, which the typing box names. */
+  typedField?: string | null;
 }
 
 export interface StudyState {

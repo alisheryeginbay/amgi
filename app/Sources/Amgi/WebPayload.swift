@@ -133,6 +133,8 @@ struct CardPayload: Encodable {
     let kind: String
     let front: String
     let back: String
+    let typed: String?
+    let typedField: String?
 
     init(_ card: StudyCard) {
         id = card.id
@@ -143,6 +145,8 @@ struct CardPayload: Encodable {
         kind = card.kind.name
         front = card.front
         back = card.back
+        typed = card.typed
+        typedField = card.typedField
     }
 }
 

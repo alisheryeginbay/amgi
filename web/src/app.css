@@ -10,6 +10,8 @@
   --separator: #0000001a;
   --accent: #0a84ff;
   --yellow: #ffcc00;
+  --red: #ff3b30;
+  --green: #28cd41;
   --selected-row: #0064e1;
   --unfocused-selected-row: #dcdcdc;
   --selected-text: #ffffff;
@@ -65,6 +67,8 @@
     --quaternary-label: #ffffff1a;
     --separator: #ffffff1a;
     --yellow: #ffd60a;
+    --red: #ff453a;
+    --green: #32d74b;
     --unfocused-selected-row: #464646;
     --text-background: #1e1e1e;
     --card-background: #2c2c2e;
@@ -81,6 +85,8 @@
     --separator: -apple-system-separator;
     --accent: -apple-system-control-accent;
     --yellow: -apple-system-yellow;
+    --red: -apple-system-red;
+    --green: -apple-system-green;
     --selected-row: -apple-system-selected-content-background;
     --unfocused-selected-row: -apple-system-unemphasized-selected-content-background;
     --selected-text: -apple-system-alternate-selected-text;

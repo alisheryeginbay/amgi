@@ -102,6 +102,13 @@ Sentence: Me como una manzana.
   line, a `Q:` or `C:`, or the next `@` line. Tags go on its last lines, as on any card.
 - Each rule in `cards` makes one card: the fields before `->` on the front, the ones
   after it on the back, in that order. The note above makes two cards.
+- With `=>` instead of `->`, as in `"Meaning => Word"`, you type the answer: the first
+  back field the note fills. A box under the question takes it, <kbd>Return</kbd> shows
+  the answer, and what you typed is shown against it, with wrong letters struck out and
+  missing ones marked. Changing a rule between `->` and `=>` keeps its cards' history.
+- Put an audio field right after the field it belongs to, as in
+  `"Meaning -> Word, Word Audio"`: a sound after text plays from a button at the end of
+  that text.
 - Empty or missing fields are left out of a card, so a note without `Audio` shows just
   the word. A card is made only when it has a front field and a back field to show.
 - Without `cards`, the first field is the front and the rest the back.

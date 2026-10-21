@@ -101,6 +101,8 @@
 
   function onkeydown(event: KeyboardEvent) {
     if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+    // Keys typed into a typed answer are its text.
+    if (event.target instanceof HTMLInputElement) return;
     if (handleKey(event.key)) event.preventDefault();
   }
 </script>

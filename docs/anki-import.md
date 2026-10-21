@@ -9,7 +9,10 @@ the root, and note tags become `#tag` lines.
   image and sentence, keep their fields: each note becomes an `@` line and a block of
   `Field: value` lines, and the note type a file in `note-types`, with a rule per card
   type made from the fields its template shows on each side (see
-  [Notes with fields](card-format.md#notes-with-fields)). A note type file already there
+  [Notes with fields](card-format.md#notes-with-fields)). A typing box, `{{type:Word}}`,
+  makes its rule a typed one (`=>`) with that field first on the back, and fields the
+  answer shows right after a question's field, such as the word's audio, come first on
+  the back, so they don't end up beside another field. A note type file already there
   with the same definition is shared; one that differs is kept, and the imported one is
   named `Vocabulary 2` and so on.
 - Other note types become `Q:`/`A:` cards rendered from their templates: those with two
