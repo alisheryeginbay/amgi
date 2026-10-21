@@ -7,8 +7,7 @@
 
   /** A card to study, a sheet lifted off the window. Once `revealed`, a basic card's answer
    *  fades in below its question, which stays where it is, and a cloze's gap opens to its
-   *  answer in the sentence. Clicking the card reveals it. An `instant` reveal, from a key,
-   *  shows the answer at once. */
+   *  answer in the sentence. An `instant` reveal, from a key, shows the answer at once. */
   let {
     card,
     revealed,
@@ -43,11 +42,6 @@
       event.preventDefault();
       onreveal();
     }
-  }
-
-  function onclick() {
-    // Not when the click ends a text selection.
-    if (!revealed && (window.getSelection()?.isCollapsed ?? true)) onreveal();
   }
 
   // A cloze's gap widens from its hint to its answer, so the words around it slide
@@ -110,7 +104,6 @@
               aria-label={card.typedField ?? "Your answer"}
               use:focusOnMount
               onkeydown={onTypedKey}
-              onclick={(e) => e.stopPropagation()}
             />
           {:else if comparison}
             <div class="comparison" class:correct={comparison.correct}>
@@ -134,8 +127,7 @@
   </div>
 {/snippet}
 
-<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: Space reveals, handled by the page. -->
-<div class="card" class:revealed class:instant {onclick}>
+<div class="card" class:revealed class:instant>
   <div class="layers">
     <div class="layer" bind:this={live}>{@render content(revealed)}</div>
     {#if cloze}
@@ -155,10 +147,6 @@
     border-radius: 14px;
     background: var(--card-background);
     box-shadow: var(--card-shadow);
-  }
-
-  .card:not(.revealed) {
-    cursor: pointer;
   }
 
   .layers {
