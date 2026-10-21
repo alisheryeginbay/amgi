@@ -101,7 +101,7 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>SUFeedURL</key>
-    <string>https://github.com/alisheryeginbay/amgi/releases/latest/download/appcast.xml</string>
+    <string>https://amgi.study/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>TShzf8QQ88x/3EE1dfKeQ2QFi59r2r7/zXfZK808aXY=</string>
 </dict>

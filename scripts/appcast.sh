@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Write target/bundle/appcast.xml, the feed Amgi.app checks for updates (its SUFeedURL
-# points at the copy attached to the latest release). Run after scripts/notarize.sh: it
+# Write target/bundle/appcast.xml, the feed Amgi.app checks for updates. Its SUFeedURL,
+# https://amgi.study/appcast.xml, redirects to the copy attached to the latest release;
+# copies from 0.4.0 and earlier read that copy directly. Run after scripts/notarize.sh: it
 # signs Amgi-<version>.zip with the Sparkle EdDSA key, taken from
 # SPARKLE_ED_PRIVATE_KEY if set (what the release workflow uses), otherwise from the
 # login keychain, where Sparkle's generate_keys saved it.

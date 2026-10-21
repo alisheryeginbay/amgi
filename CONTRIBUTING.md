@@ -59,8 +59,12 @@ has to match the version in `Cargo.toml`.
 
 The release also carries `appcast.xml`, the feed that installed copies check through
 [Sparkle](https://sparkle-project.org) (Amgi ▸ Check for Updates…). It lists the zip,
-signed with an EdDSA key (`scripts/appcast.sh`). The app reads the feed from the latest
-published release, so a draft isn't offered until it's published. Keep the private
+signed with an EdDSA key (`scripts/appcast.sh`). The app reads the feed from
+`https://amgi.study/appcast.xml`, which redirects to
+`https://github.com/alisheryeginbay/amgi/releases/latest/download/appcast.xml`, the copy on
+the latest published release, so a draft isn't offered until it's published. Copies from
+0.4.0 and earlier read the GitHub address directly, so keep attaching `appcast.xml` to
+releases even if the redirect later points elsewhere. Keep the private
 key safe: without it, installed copies can't be updated.
 
 The disk image is made by [dmgbuild](https://dmgbuild.readthedocs.io), run through
