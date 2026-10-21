@@ -3,7 +3,7 @@
 Amgi is a macOS flash-card app: a Rust core, a SwiftUI shell and Svelte panes in a web
 view. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the layout and build, and
 [docs/](docs/) for what the app does. The card format is in
-[docs/card-format.md](docs/card-format.md).
+[docs/card-format.mdx](docs/card-format.mdx).
 
 ## Commands
 
@@ -28,6 +28,10 @@ Use `PROFILE=debug make build` for a faster core build while iterating.
   stable or review history is lost.
 - When a change affects what users see or type, update the matching page in `docs/`.
   Keep the README short; details belong in `docs/`.
+- `docs/` is a [Mintlify](https://mintlify.com) site: `.mdx` pages with front matter,
+  listed in `docs/docs.json`. Link between pages as `/card-format#anchor`, and keep `{`,
+  `}` and `<` in code spans, since MDX reads them as JSX. Check with
+  `cd docs && npx mint broken-links`.
 - Use neutral content in new examples and tests.
 
 ## Commits

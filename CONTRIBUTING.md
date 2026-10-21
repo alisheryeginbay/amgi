@@ -34,6 +34,13 @@ collection folder, so give it a copy of your decks rather than the ones you stud
 
 Debug builds can be inspected with Safari's Web Inspector (Develop ▸ your Mac ▸ Amgi Dev).
 
+## Docs
+
+`docs/` is a [Mintlify](https://mintlify.com) site; `docs/docs.json` sets the navigation
+and theme. Preview it with `cd docs && npx mint dev` and check its links with
+`npx mint broken-links`. The logo, favicon and screenshot in `docs/` are copies of the
+files in `media/`.
+
 ## Generated files
 
 - The emoji picker's names and keywords come from GitHub's

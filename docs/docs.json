@@ -1,0 +1,46 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Amgi",
+  "description": "Plain-text flash cards for macOS, scheduled with FSRS.",
+  "colors": {
+    "primary": "#1B2F5E",
+    "light": "#5B8DEF",
+    "dark": "#1B2F5E"
+  },
+  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get started",
+        "pages": ["index", "install"]
+      },
+      {
+        "group": "Guides",
+        "pages": ["card-format", "studying", "anki-import", "cli"]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/alisheryeginbay/amgi"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Download",
+      "href": "https://github.com/alisheryeginbay/amgi/releases/latest"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/alisheryeginbay/amgi"
+    }
+  }
+}

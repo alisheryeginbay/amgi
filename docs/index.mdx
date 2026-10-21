@@ -1,0 +1,59 @@
+---
+title: "Introduction"
+description: "Plain-text flash cards for macOS, scheduled with FSRS."
+---
+
+Amgi keeps your flash cards in Markdown files you can edit anywhere, and schedules
+them with [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm).
+
+<img
+  src="/images/screenshot.webp"
+  alt="Amgi reviewing a card: the deck sidebar on the left, the card in the middle and the Again, Hard, Good and Easy buttons below it"
+/>
+
+## Cards are text
+
+```markdown
+Q: What does **FSRS** stand for?
+A: Free Spaced Repetition Scheduler
+
+C: The capital of [France] is [Paris|city].
+```
+
+`Q:` / `A:` makes a basic card; in a `C:` cloze each `[answer]` becomes its own card, and
+`[answer|hint]` shows the hint. Cards can also hold images, sounds, math and highlighted
+code, and you can import your Anki decks.
+
+## A collection is a folder
+
+A collection is a folder with a `cards` folder of Markdown files inside. Each file is a
+deck, and folders nest decks: the `lang` deck holds `cards/lang.md` and everything in
+`cards/lang/`. Beside `cards` are `media` for images and sounds and `note-types` for
+[notes with fields](/card-format#notes-with-fields); review history is stored in
+`.amgi.sqlite`. Anything else in the folder, such as a README, is left alone.
+
+```text
+README.md
+cards/
+  Spanish.md
+  lang/Korean.md
+media/
+note-types/
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Install" icon="download" href="/install">
+    Download the app or build it from source.
+  </Card>
+  <Card title="Card format" icon="file-lines" href="/card-format">
+    Clozes, notes with fields, media, math, code and tags.
+  </Card>
+  <Card title="Studying" icon="graduation-cap" href="/studying">
+    Shortcuts, browsing, adding cards and search.
+  </Card>
+  <Card title="Importing from Anki" icon="file-import" href="/anki-import">
+    Bring your decks, media and review history.
+  </Card>
+</CardGroup>

@@ -1,0 +1,35 @@
+---
+title: "Install"
+description: "Download Amgi, or build it and the amgi command from source."
+---
+
+<Steps>
+  <Step title="Download">
+    Get the `.dmg` from the
+    [latest release](https://github.com/alisheryeginbay/amgi/releases/latest).
+  </Step>
+  <Step title="Install">
+    Open the `.dmg` and drag Amgi into Applications.
+  </Step>
+  <Step title="Open a collection">
+    Press <kbd>⌘O</kbd> and pick a folder for your cards. See
+    [Introduction](/#a-collection-is-a-folder) for how it's laid out.
+  </Step>
+</Steps>
+
+<Note>Amgi needs macOS 26 on Apple Silicon.</Note>
+
+Amgi checks for new versions itself and installs them in one click; you can also choose
+**Amgi ▸ Check for Updates…**.
+
+## Build from source
+
+Building needs macOS, Rust and [Bun](https://bun.sh).
+
+```sh
+make                         # build what changed, then run the app
+cargo install --path cli     # the amgi command
+```
+
+See [CONTRIBUTING.md](https://github.com/alisheryeginbay/amgi/blob/main/CONTRIBUTING.md)
+for the project layout, tests and releases.

@@ -1,4 +1,7 @@
-# Command line
+---
+title: "Command line"
+description: "Check, search and inspect a collection from the terminal with the amgi command."
+---
 
 `amgi` reads a collection from the terminal. Install it with `cargo install --path cli`.
 
@@ -12,7 +15,7 @@ amgi info cards/geography.md:12   # a card's schedule and history, by id, path:l
 amgi stats                   # streak, retention, recent reviews and the next two weeks
 ```
 
-`search` takes the same syntax as the app; see [Searching](studying.md#searching).
+`search` takes the same syntax as the app; see [Searching](/studying#searching).
 
 Every command takes `--json`. `search` exits 1 when nothing matches, and `--ids` prints
 only card ids. `--dir` (or `AMGI_DIR`) picks the collection; without it, `amgi` uses the

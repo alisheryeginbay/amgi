@@ -1,4 +1,7 @@
-# Importing from Anki
+---
+title: "Importing from Anki"
+description: "Turn .apkg and .colpkg files into Markdown decks, with their media and review history."
+---
 
 **File ▸ Import Anki Deck…** (<kbd>⇧⌘I</kbd>) converts an `.apkg` or `.colpkg` into Markdown
 files in the open folder's `cards` folder, one per deck (`Languages::Korean` becomes
@@ -10,7 +13,7 @@ the root, and note tags become `#tag` lines.
   image and sentence, keep their fields: each note becomes an `@` line and a block of
   `Field: value` lines, and the note type a file in `note-types`, with a rule per card
   type made from the fields its template shows on each side (see
-  [Notes with fields](card-format.md#notes-with-fields)). A typing box, `{{type:Word}}`,
+  [Notes with fields](/card-format#notes-with-fields)). A typing box, `{{type:Word}}`,
   makes its rule a typed one (`=>`) with that field first on the back, and fields the
   answer shows right after a question's field, such as the word's audio, come first on
   the back, so they don't end up beside another field. A note type file already there
