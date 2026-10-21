@@ -9,7 +9,7 @@
 - `web/`: the study, dashboard and browse panes in [Svelte](https://svelte.dev), shown in
   one web view. The app sends each pane its data and the page sends back what you do;
   cards' images and sounds are served from the collection at `amgi://collection/`.
-- `examples/`: a sample collection
+- `examples/`: a sample collection, its decks in `examples/cards/`
 
 ## Build & run
 

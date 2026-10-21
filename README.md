@@ -5,9 +5,20 @@
 
 Plain-text flash cards, scheduled with [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm).
 
-A collection is a folder of Markdown files. Each file is a deck, and folders nest
-decks: the `lang` deck holds `lang.md` and everything in `lang/`. Review history is
-stored in `.amgi.sqlite` at the root of the folder.
+A collection is a folder with a `cards` folder of Markdown files inside. Each file is a
+deck, and folders nest decks: the `lang` deck holds `cards/lang.md` and everything in
+`cards/lang/`. Beside `cards` are `media` for images and sounds and `note-types` for
+[notes with fields](docs/card-format.md#notes-with-fields); review history is stored
+in `.amgi.sqlite`. Anything else in the folder, such as a README, is left alone.
+
+```
+README.md
+cards/
+  Spanish.md
+  lang/Korean.md
+media/
+note-types/
+```
 
 <p align="center">
   <img src="media/screenshot.webp" alt="Amgi reviewing a card: the deck sidebar on the left, the card in the middle and the Again, Hard, Good and Easy buttons below it" />

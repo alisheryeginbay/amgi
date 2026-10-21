@@ -28,6 +28,8 @@ uniffi::setup_scaffolding!();
 pub const DB_FILE: &str = ".amgi.sqlite";
 /// Folder at the collection root that imported images are copied to.
 pub const MEDIA_DIR: &str = "media";
+/// Folder at the collection root that holds the decks; `media` and `note-types` sit beside it.
+pub const CARDS_DIR: &str = "cards";
 const DAY_SECS: i64 = 86_400;
 /// The scheduling day rolls over at 4am local time, so late-night study counts as the same day.
 const DAY_ROLLOVER_SECS: i64 = 4 * 3600;
@@ -567,7 +569,8 @@ impl CardCollection {
                 Err(e) => return Err(e.into()),
             }
         }
-        let link = format!("{}{MEDIA_DIR}/{file}", "../".repeat(deck.matches('/').count()));
+        // Up from the deck's file in `cards` to the collection root.
+        let link = format!("{}{MEDIA_DIR}/{file}", "../".repeat(deck.matches('/').count() + 1));
         Ok(if link.contains([' ', '(', ')', '<', '>']) { format!("![](<{link}>)") } else { format!("![]({link})") })
     }
 
@@ -662,8 +665,11 @@ impl Inner {
     }
 
     fn reload(&mut self) -> Result<()> {
+        let cards_dir = self.root.join(CARDS_DIR);
         let mut files = Vec::new();
-        collect_markdown(&self.root, &mut files)?;
+        if cards_dir.is_dir() {
+            collect_markdown(&cards_dir, &mut files)?;
+        }
         // By deck name, so a deck's own cards come before its subdecks'.
         files.sort_by_key(|f| f.with_extension(""));
 
@@ -674,9 +680,11 @@ impl Inner {
         self.warnings.clear();
         self.scripts = Scripts::default();
         self.load_note_types()?;
+        self.warn_about_stray_decks()?;
         for file in files {
             let rel = relative(&self.root, &file);
-            let deck = rel.strip_suffix(".md").unwrap_or(&rel).to_string();
+            let in_cards = relative(&cards_dir, &file);
+            let deck = in_cards.strip_suffix(".md").unwrap_or(&in_cards).to_string();
             let text = fs::read_to_string(&file)?;
             self.scripts.scan(&text);
             let result = parser::parse_deck(&text, &self.note_types);
@@ -714,6 +722,40 @@ impl Inner {
                     path: rel.clone(),
                 });
             }
+        }
+        Ok(())
+    }
+
+    /// Markdown files with cards outside `cards`, as from before decks moved there, are
+    /// left out; say so once, at the first of them.
+    fn warn_about_stray_decks(&mut self) -> Result<()> {
+        let mut files = Vec::new();
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || [CARDS_DIR, MEDIA_DIR, parser::NOTE_TYPES_DIR].contains(&name.as_str()) {
+                continue;
+            }
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                collect_markdown(&path, &mut files)?;
+            } else if path.extension().is_some_and(|e| e == "md") {
+                files.push(path);
+            }
+        }
+        files.sort();
+        let has_cards = |file: &PathBuf| {
+            fs::read_to_string(file).is_ok_and(|text| !parser::parse_deck(&text, &self.note_types).cards.is_empty())
+        };
+        let stray: Vec<&PathBuf> = files.iter().filter(|f| has_cards(f)).collect();
+        if let Some(first) = stray.first() {
+            let more = match stray.len() - 1 {
+                0 => String::new(),
+                1 => " and 1 more".into(),
+                n => format!(" and {n} more"),
+            };
+            let message = format!("decks are read from the `{CARDS_DIR}` folder, so this file{more} are left out: move them into it");
+            self.warnings.push(CollectionWarning { path: relative(&self.root, first), line: 0, message });
         }
         Ok(())
     }
@@ -1044,7 +1086,7 @@ impl Inner {
     /// Append `block` to the end of `deck`'s file, which is created if needed, and
     /// check that it makes the cards `ids`; if not, the file is put back.
     fn append(&mut self, deck: &str, block: &str, ids: &[String]) -> Result<()> {
-        let path = self.root.join(format!("{deck}.md"));
+        let path = self.root.join(CARDS_DIR).join(format!("{deck}.md"));
         let before = match fs::read_to_string(&path) {
             Ok(source) => Some(source),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -1198,7 +1240,7 @@ impl Inner {
                     .collect();
                 markdown = lines.concat();
             }
-            let path = unused_path(&self.root, deck);
+            let path = unused_path(&self.root.join(CARDS_DIR), deck);
             if let Some(dir) = path.parent() {
                 fs::create_dir_all(dir)?;
             }
@@ -1340,22 +1382,16 @@ pub fn format_interval(seconds: i64) -> String {
     }
 }
 
-/// Deck files under `dir`, leaving out hidden ones and the root's note types.
+/// Markdown files under `dir`, leaving out hidden ones.
 fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    collect_deck_files(dir, true, out)
-}
-
-fn collect_deck_files(dir: &Path, root: bool, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        let name = entry.file_name();
-        if name.to_string_lossy().starts_with('.') || (root && name == parser::NOTE_TYPES_DIR) {
+        if entry.file_name().to_string_lossy().starts_with('.') {
             continue;
         }
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            collect_deck_files(&path, false, out)?;
+        if entry.file_type()?.is_dir() {
+            collect_markdown(&path, out)?;
         } else if path.extension().is_some_and(|e| e == "md") {
             out.push(path);
         }
@@ -1408,8 +1444,10 @@ mod tests {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("amgi-test-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
+        // Decks go in `cards`; note types and media beside it.
         for (name, body) in files {
-            let path = dir.join(name);
+            let beside = [parser::NOTE_TYPES_DIR, MEDIA_DIR].iter().any(|d| name.starts_with(&format!("{d}/")));
+            let path = if beside { dir.join(name) } else { dir.join(CARDS_DIR).join(name) };
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, body).unwrap();
         }
@@ -1427,7 +1465,7 @@ mod tests {
         let mut inner = c.lock();
         assert_eq!(inner.cards.len(), 4);
         assert_eq!(inner.warnings.len(), 1);
-        assert!(inner.warnings[0].message.contains("duplicate of a.md:1"));
+        assert!(inner.warnings[0].message.contains("duplicate of cards/a.md:1"));
 
         let decks = inner.decks(T0).unwrap();
         let names: Vec<_> = decks.iter().map(|d| d.name.as_str()).collect();
@@ -1651,24 +1689,24 @@ mod tests {
             tags: vec!["#numbers".into()],
         };
         let ids = c.add_card(new("a", CardKind::Basic, "two")).unwrap();
-        assert_eq!(fs::read_to_string(dir.join("a.md")).unwrap(), "+++\ntags = [\"lang\"]\n+++\nQ: one\nA: 1\n\nQ: two\nA: 2\n#numbers\n");
+        assert_eq!(fs::read_to_string(dir.join("cards/a.md")).unwrap(), "+++\ntags = [\"lang\"]\n+++\nQ: one\nA: 1\n\nQ: two\nA: 2\n#numbers\n");
         let info = c.card_info(ids[0].clone()).unwrap().unwrap();
         assert_eq!(info.tags, ["lang", "numbers"]);
 
         // A new file in a new folder; a cloze makes a card per gap.
         let ids = c.add_card(new("sub/deck", CardKind::Cloze, "[Seoul] is in [Korea].")).unwrap();
         assert_eq!(ids.len(), 2);
-        assert_eq!(fs::read_to_string(dir.join("sub/deck.md")).unwrap(), "C: [Seoul] is in [Korea].\n#numbers\n");
+        assert_eq!(fs::read_to_string(dir.join("cards/sub/deck.md")).unwrap(), "C: [Seoul] is in [Korea].\n#numbers\n");
 
         let err = |card| match c.add_card(card) {
             Err(AmgiError::InvalidCard { message }) => message,
             other => panic!("{other:?}"),
         };
-        assert_eq!(err(new("b", CardKind::Basic, "two")), "This card is already in a.md.");
+        assert_eq!(err(new("b", CardKind::Basic, "two")), "This card is already in cards/a.md.");
         assert_eq!(err(new("../x", CardKind::Basic, "three")), "Choose a deck for the card.");
         // An unclosed code block would take the card in; the file is left as it was.
         assert!(err(new("b", CardKind::Basic, "three")).contains("unclosed code block"));
-        assert_eq!(fs::read_to_string(dir.join("b.md")).unwrap(), "```\nopen");
+        assert_eq!(fs::read_to_string(dir.join("cards/b.md")).unwrap(), "```\nopen");
         drop(c);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1754,12 +1792,12 @@ mod tests {
 
         // Unsuspending edits the file; a front matter tag stays.
         assert_eq!(inner.set_suspended(&ids[1..], false).unwrap(), 1);
-        assert_eq!(fs::read_to_string(dir.join("a.md")).unwrap(), "Q: kept\nA: 1\n\nQ: paused\nA: 2\n");
+        assert_eq!(fs::read_to_string(dir.join("cards/a.md")).unwrap(), "Q: kept\nA: 1\n\nQ: paused\nA: 2\n");
         assert_eq!(inner.next_card(&StudyScope::All, T0).unwrap().unwrap().front, "paused");
         // And suspending puts the tag back, keeping the card's history.
         assert_eq!(inner.set_suspended(&ids[..1], true).unwrap(), 1);
         assert!(inner.states.contains_key(&ids[0]));
-        assert_eq!(fs::read_to_string(dir.join("a.md")).unwrap(), "Q: kept\nA: 1\n#suspended\n\nQ: paused\nA: 2\n");
+        assert_eq!(fs::read_to_string(dir.join("cards/a.md")).unwrap(), "Q: kept\nA: 1\n#suspended\n\nQ: paused\nA: 2\n");
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1794,9 +1832,9 @@ mod tests {
             histories: vec![(id.clone(), vec![review(0, 1), review(1, 3)]), (id.clone(), vec![review(0, 1)])],
         };
         let imported = c.import(import()).unwrap();
-        assert_eq!(imported.files, ["Default 2.md", "Lang/Verbs.md"]);
+        assert_eq!(imported.files, ["cards/Default 2.md", "cards/Lang/Verbs.md"]);
         assert_eq!((imported.reviewed_cards, imported.existing_history, imported.new_cards), (1, 0, 1));
-        assert_eq!(fs::read_to_string(dir.join("Default.md")).unwrap(), "Q: mine\nA: kept\n");
+        assert_eq!(fs::read_to_string(dir.join("cards/Default.md")).unwrap(), "Q: mine\nA: kept\n");
 
         let inner = c.lock();
         let names: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.name).collect();
@@ -1827,7 +1865,7 @@ mod tests {
             warnings,
             [
                 "note-types/Bad.toml:1: notes need two fields, or `cards` to say which make a card",
-                "bad.md:4: note type `Bad` has errors, see `note-types/Bad.toml`",
+                "cards/bad.md:4: note type `Bad` has errors, see `note-types/Bad.toml`",
             ]
         );
         // Browsed cards carry their note's fields, and the note types say what they are.
@@ -1838,7 +1876,7 @@ mod tests {
         assert_eq!(c.note_types_json(), r#"[{"name":"Vocab","fields":["Word","Meaning"]}]"#);
 
         let inner = c.lock();
-        let fronts: Vec<_> = inner.cards.iter().filter(|c| c.path == "es.md").map(|c| c.parsed.front.as_str()).collect();
+        let fronts: Vec<_> = inner.cards.iter().filter(|c| c.path == "cards/es.md").map(|c| c.parsed.front.as_str()).collect();
         assert_eq!(fronts, ["uno", "one", "dos", "two", "plain"]);
         let two = inner.cards[3].parsed.id.clone();
         drop(inner);
@@ -1849,7 +1887,7 @@ mod tests {
 
         // Suspending a card suspends its note.
         assert_eq!(c.set_suspended(vec![two], true).unwrap(), 1);
-        assert!(fs::read_to_string(dir.join("es.md")).unwrap().contains("Word: dos\nMeaning: two\n#suspended\n\nQ: plain"));
+        assert!(fs::read_to_string(dir.join("cards/es.md")).unwrap().contains("Word: dos\nMeaning: two\n#suspended\n\nQ: plain"));
 
         // An imported note type like one already here shares its file; a different one
         // with the same name gets a file of its own, and its notes name that.
@@ -1864,13 +1902,29 @@ mod tests {
             note_types: vec![("Vocab".into(), "fields = [\"Word\", \"Meaning\"]\n".into())],
             histories: Vec::new(),
         };
-        assert_eq!(c.import(import).unwrap().files, ["note-types/Other.toml", "a.md", "b.md"]);
-        assert_eq!(c.import(other).unwrap().files, ["note-types/Vocab 2.toml", "c.md"]);
-        assert_eq!(fs::read_to_string(dir.join("c.md")).unwrap(), "@Vocab 2\nWord: cinco\nMeaning: -\n");
+        assert_eq!(c.import(import).unwrap().files, ["note-types/Other.toml", "cards/a.md", "cards/b.md"]);
+        assert_eq!(c.import(other).unwrap().files, ["note-types/Vocab 2.toml", "cards/c.md"]);
+        assert_eq!(fs::read_to_string(dir.join("cards/c.md")).unwrap(), "@Vocab 2\nWord: cinco\nMeaning: -\n");
         let inner = c.lock();
-        let fronts: Vec<_> = inner.cards.iter().filter(|c| c.path == "c.md").map(|c| c.parsed.front.as_str()).collect();
+        let fronts: Vec<_> = inner.cards.iter().filter(|c| c.path == "cards/c.md").map(|c| c.parsed.front.as_str()).collect();
         assert_eq!(fronts, ["cinco"]);
         drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn decks_are_read_from_cards() {
+        let (dir, c) = collection(&[("a.md", "Q: in cards\nA: yes\n")]);
+        fs::write(dir.join("README.md"), "# My cards\n\nWhat I'm learning.\n").unwrap();
+        fs::write(dir.join("old.md"), "Q: left out\nA: yes\n").unwrap();
+        fs::create_dir_all(dir.join("lang")).unwrap();
+        fs::write(dir.join("lang/ko.md"), "Q: also left out\nA: yes\n").unwrap();
+        c.reload().unwrap();
+        let fronts: Vec<_> = c.cards(StudyScope::All).into_iter().map(|c| (c.deck, c.path, c.front)).collect();
+        assert_eq!(fronts, [("a".to_string(), "cards/a.md".to_string(), "in cards".to_string())]);
+        // A README has no cards, so only the old decks are mentioned.
+        let warnings: Vec<_> = c.warnings().into_iter().map(|w| format!("{}: {}", w.path, w.message)).collect();
+        assert_eq!(warnings, ["lang/ko.md: decks are read from the `cards` folder, so this file and 1 more are left out: move them into it"]);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1884,11 +1938,11 @@ mod tests {
         let sound = dir.join("hola (1).mp3");
         fs::write(&sound, b"sound").unwrap();
         let link = c.add_media("lang/es".into(), sound.to_string_lossy().into_owned()).unwrap();
-        assert_eq!(link, "![](<../media/hola (1).mp3>)");
+        assert_eq!(link, "![](<../../media/hola (1).mp3>)");
         // The same file again is shared; another with its name is kept beside it.
         assert_eq!(c.add_media("lang/es".into(), sound.to_string_lossy().into_owned()).unwrap(), link);
         fs::write(&sound, b"other").unwrap();
-        assert_eq!(c.add_media("es".into(), sound.to_string_lossy().into_owned()).unwrap(), "![](<media/hola (1) 2.mp3>)");
+        assert_eq!(c.add_media("es".into(), sound.to_string_lossy().into_owned()).unwrap(), "![](<../media/hola (1) 2.mp3>)");
 
         let values = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(c.note_card_count("Vocab".into(), values(&["hola", "hello", ""])), 2);
@@ -1902,10 +1956,10 @@ mod tests {
         };
         assert_eq!(c.add_note(note.clone()).unwrap().len(), 2);
         assert_eq!(
-            fs::read_to_string(dir.join("lang/es.md")).unwrap(),
-            "+++\nname = \"Spanish\"\n+++\n\n@Vocab\nWord: hola\nMeaning: hello\nAudio: ![](<../media/hola (1).mp3>)\n#greeting\n"
+            fs::read_to_string(dir.join("cards/lang/es.md")).unwrap(),
+            "+++\nname = \"Spanish\"\n+++\n\n@Vocab\nWord: hola\nMeaning: hello\nAudio: ![](<../../media/hola (1).mp3>)\n#greeting\n"
         );
-        assert!(matches!(c.add_note(note), Err(AmgiError::InvalidCard { message }) if message.contains("lang/es.md:5")));
+        assert!(matches!(c.add_note(note), Err(AmgiError::InvalidCard { message }) if message.contains("cards/lang/es.md:5")));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1915,7 +1969,7 @@ mod tests {
         let package = dir.join("deck.apkg");
         anki::tests::write_package(&package);
         let summary = c.import_anki(package.to_string_lossy().into_owned()).unwrap();
-        assert_eq!(summary.files, ["Default 2.md", "Lang/Kazakh-Verbs.md"]);
+        assert_eq!(summary.files, ["cards/Default 2.md", "cards/Lang/Kazakh-Verbs.md"]);
         assert_eq!((summary.cards, summary.reviewed_cards, summary.skipped_notes), (5, 3, 1));
         assert_eq!((summary.existing_history, summary.new_cards, summary.suspended_cards), (0, 2, 2));
         assert_eq!((summary.images, summary.missing_images), (1, 0));
@@ -1924,7 +1978,7 @@ mod tests {
         assert_eq!(fs::read(dir.join("media/paris.mp3")).unwrap(), b"mp3 bytes");
 
         let inner = c.lock();
-        assert_eq!(fs::read_to_string(dir.join("Default.md")).unwrap(), "Q: mine\nA: kept\n");
+        assert_eq!(fs::read_to_string(dir.join("cards/Default.md")).unwrap(), "Q: mine\nA: kept\n");
         let names: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.name).collect();
         assert_eq!(names, ["Default", "Default 2", "Lang", "Lang/Kazakh-Verbs"]);
         assert_eq!(inner.decks(T0).unwrap()[3].title, "Kazakh/Verbs");

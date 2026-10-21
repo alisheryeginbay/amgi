@@ -767,7 +767,8 @@ impl Package {
 
     /// Path from a deck's file to the `media` folder at the collection root.
     fn media_prefix(&self, deck: i64) -> String {
-        "../".repeat(self.deck_path(deck).matches('/').count()) + "media/"
+        // Up from the deck's file in `cards` to the collection root.
+        "../".repeat(self.deck_path(deck).matches('/').count() + 1) + "media/"
     }
 
     fn deck_name(&self, id: i64) -> String {
@@ -1226,7 +1227,7 @@ pub(crate) mod tests {
         assert_eq!(paths, ["Spanish"]);
         assert_eq!(
             out.decks[0].1,
-            "@Vocab\nWord: manzana\nMeaning: apple\nAudio: ![](media/manzana.mp3)\nSentence: Me como una manzana.\nMeaning\\: not a field\n#food\n\n\
+            "@Vocab\nWord: manzana\nMeaning: apple\nAudio: ![](../media/manzana.mp3)\nSentence: Me como una manzana.\nMeaning\\: not a field\n#food\n\n\
              @Vocab\nWord: queso\nMeaning: cheese\n\n\
              @Phrase\nText: Buenos días\nTranslation: Good morning\nNotes: formal\n\n\
              Q: Plural of pan?\nA: panes\n\n\
@@ -1251,7 +1252,7 @@ pub(crate) mod tests {
         let parsed = parser::parse_deck(&out.decks[0].1, &types);
         assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
         let fronts: Vec<_> = parsed.cards.iter().map(|c| c.front.as_str()).collect();
-        assert_eq!(fronts, ["manzana\n\n![](media/manzana.mp3)", "apple", "queso", "cheese", "Buenos días", "Plural of pan?", "uva", "grape"]);
+        assert_eq!(fronts, ["manzana\n\n![](../media/manzana.mp3)", "apple", "queso", "cheese", "Buenos días", "Plural of pan?", "uva", "grape"]);
         // The review of the Recall card went to the `Meaning -> Word, Audio` card.
         assert_eq!(out.histories.len(), 1);
         assert_eq!(out.histories[0].id, parsed.cards[1].id);
@@ -1268,13 +1269,13 @@ pub(crate) mod tests {
         // card keeps its history and is tagged.
         assert_eq!(
             out.decks[0].1,
-            "C: The [capital] of \\[x\\] is Paris![](media/paris.mp3)\n#geo\n\nextra![](media/gone.mp3)\n\n\
-             C: The capital of \\[x\\] is [Paris]![](media/paris.mp3)\n#geo #suspended\n\nextra![](media/gone.mp3)\n\n\
+            "C: The [capital] of \\[x\\] is Paris![](../media/paris.mp3)\n#geo\n\nextra![](../media/gone.mp3)\n\n\
+             C: The capital of \\[x\\] is [Paris]![](../media/paris.mp3)\n#geo #suspended\n\nextra![](../media/gone.mp3)\n\n\
              Q: Capital of Spain?\nA: Madrid\n#geo #suspended\n"
         );
         assert_eq!(
             out.decks[1].1,
-            "+++\nname = \"Kazakh/Verbs\"\n+++\n\nQ: сәлем\nA: hello![](../media/hi.png)\n\nQ: hello![](../media/hi.png)\nA: сәлем\n"
+            "+++\nname = \"Kazakh/Verbs\"\n+++\n\nQ: сәлем\nA: hello![](../../media/hi.png)\n\nQ: hello![](../../media/hi.png)\nA: сәлем\n"
         );
         assert_eq!(out.media.images.iter().collect::<Vec<_>>(), ["hi.png"]);
         assert_eq!(out.media.sounds.iter().collect::<Vec<_>>(), ["gone.mp3", "paris.mp3"]);

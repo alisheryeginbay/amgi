@@ -8,7 +8,7 @@ amgi check                   # problems in the deck files as path:line: message;
 amgi search deck:french is:due   # the search syntax; --view Leeches runs a saved view
 amgi decks                   # every deck with due, new and total counts
 amgi tags                    # every tag with its card count
-amgi info geography.md:12    # a card's schedule and history, by id, path:line or a search
+amgi info cards/geography.md:12   # a card's schedule and history, by id, path:line or a search
 amgi stats                   # streak, retention, recent reviews and the next two weeks
 ```
 

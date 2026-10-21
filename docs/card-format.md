@@ -12,9 +12,10 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
 - `Q:` / `A:`: basic card. Either field can continue onto later lines.
 - `C:`: cloze. Each `[answer]` becomes its own card; `[answer|hint]` shows the hint.
   Write `\[` and `\]` for literal brackets. Brackets inside `` `code` `` are always literal.
-- Images: `![](images/photo.jpg)`, with the path relative to the deck file. Use
-  `![](<my photo (1).jpg>)` for paths with spaces or parentheses. An image can also be a
-  cloze answer: `[![](flag.png)|flag]`.
+- Images: `![](../media/photo.jpg)`, with the path relative to the deck file: from a deck
+  in `cards`, `../media` is the collection's `media` folder. Use `![](<my photo (1).jpg>)`
+  for paths with spaces or parentheses. An image can also be a cloze answer:
+  `[![](flag.png)|flag]`.
 - Sounds use the same syntax: `![](audio/word.mp3)`. Links to audio files (`mp3`, `m4a`,
   `wav`, `flac` and other formats macOS can play) show as play buttons. A card's sounds
   play when it appears, and the answer's when it is shown; press <kbd>R</kbd> to replay.
@@ -93,7 +94,7 @@ A note starts with a line naming its note type after `@`, then its fields:
 @Vocabulary
 Word: manzana
 Meaning: apple
-Audio: ![](media/manzana.mp3)
+Audio: ![](../media/manzana.mp3)
 Sentence: Me como una manzana.
 #food
 ```

@@ -1,7 +1,8 @@
 # Importing from Anki
 
 **File ▸ Import Anki Deck…** (<kbd>⇧⌘I</kbd>) converts an `.apkg` or `.colpkg` into Markdown
-files in the open folder, one per deck (`Languages::Korean` becomes `Languages/Korean.md`).
+files in the open folder's `cards` folder, one per deck (`Languages::Korean` becomes
+`cards/Languages/Korean.md`).
 Existing files are never overwritten. Images and sounds are copied to a `media` folder at
 the root, and note tags become `#tag` lines.
 
