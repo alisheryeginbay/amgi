@@ -1,5 +1,6 @@
 //! One function per subcommand. Each prints its result and returns the exit code.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -7,6 +8,7 @@ use amgi_core::search::Query;
 use amgi_core::{BrowseCard, CardCollection, CardInfo, CardKind, Rating, StudyScope, format_interval};
 use serde_json::json;
 
+use crate::diff::{self, Source};
 use crate::text::{self, bar, count, date_time, one_line, pad, sparkline, truncate, width};
 
 type Result<T = ExitCode> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -411,5 +413,77 @@ pub fn prune(c: &CardCollection, out: Output, trash: bool) -> Result {
             println!("{files}, {}. Run `amgi prune --trash` to move {them} to the Trash.", text::size(bytes));
         }
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool) -> Result {
+    let head = || Source::Rev("HEAD".into());
+    let current = if staged { Source::Staged } else { Source::Disk };
+    let (from, to) = match revs {
+        [] => (head(), current),
+        [rev] => (Source::Rev(rev.clone()), current),
+        [a, b] if !staged => (Source::Rev(a.clone()), Source::Rev(b.clone())),
+        _ => return Err("--staged compares against one revision, not two".into()),
+    };
+    let root = c.root();
+    let changes = diff::compare(diff::cards(&diff::files(&root, &from)?), diff::cards(&diff::files(&root, &to)?));
+    if out.json {
+        return print_json(&json!({
+            "from": from.label(),
+            "to": to.label(),
+            "added": changes.added,
+            "removed": changes.removed,
+            "changed": changes.changed,
+        }));
+    }
+    if changes.is_empty() {
+        println!("No cards changed.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    // By file, then added, changed and removed, each in file order.
+    let mut files: BTreeMap<&str, Vec<(char, &diff::Card, String)>> = BTreeMap::new();
+    for card in &changes.added {
+        files.entry(&card.path).or_default().push(('+', card, String::new()));
+    }
+    for changed in &changes.changed {
+        let note = changed
+            .changes
+            .iter()
+            .map(|&what| match what {
+                "deck" => format!("moved from {}", changed.before.path),
+                what => what.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        files.entry(&changed.card.path).or_default().push(('~', &changed.card, note));
+    }
+    for card in &changes.removed {
+        files.entry(&card.path).or_default().push(('-', card, String::new()));
+    }
+    let columns = text::terminal_width();
+    for (i, (path, rows)) in files.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        println!("{path}");
+        for (mark, card, note) in rows {
+            let front = one_line(&card.front);
+            let front = match columns {
+                // Two spaces, the mark and a space before; two spaces before the note.
+                Some(cols) => truncate(&front, cols.saturating_sub(4 + if note.is_empty() { 0 } else { width(note) + 2 }).max(10)),
+                None => front,
+            };
+            match note.is_empty() {
+                true => println!("  {mark} {front}"),
+                false => println!("  {mark} {front}  ({note})"),
+            }
+        }
+    }
+    let summary: Vec<_> = [(changes.added.len(), "added"), (changes.changed.len(), "changed"), (changes.removed.len(), "removed")]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, label)| format!("{n} {label}"))
+        .collect();
+    println!("\n{}", summary.join(" · "));
     Ok(ExitCode::SUCCESS)
 }

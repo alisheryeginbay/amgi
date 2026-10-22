@@ -1,6 +1,7 @@
 //! `amgi`: the collection from the terminal.
 
 mod commands;
+mod diff;
 mod locate;
 mod text;
 
@@ -62,6 +63,16 @@ enum Command {
         #[arg(long)]
         trash: bool,
     },
+    /// Cards added, removed and changed since a git revision, `HEAD` by default, as
+    /// the files on disk have them.
+    Diff {
+        /// Compare against this revision, or between two revisions.
+        #[arg(num_args = 0..=2, value_name = "REV")]
+        revs: Vec<String>,
+        /// Compare the files staged for the next commit instead of those on disk.
+        #[arg(long, visible_alias = "cached")]
+        staged: bool,
+    },
     /// Streak, retention, card counts, recent reviews and the coming days' workload.
     Stats {
         /// Days of review history to show.
@@ -88,6 +99,7 @@ fn main() -> ExitCode {
         Command::Tags => commands::tags(&collection, out),
         Command::Info { card } => commands::info(&collection, out, &card.join(" ")),
         Command::Prune { trash } => commands::prune(&collection, out, trash),
+        Command::Diff { revs, staged } => commands::diff(&collection, out, &revs, staged),
         Command::Stats { days } => commands::stats(&collection, out, days),
     };
     match result {

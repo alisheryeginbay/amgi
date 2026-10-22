@@ -14,6 +14,7 @@ amgi tags                    # every tag with its card count
 amgi info cards/geography.md:12   # a card's schedule and history, by id, path:line or a search
 amgi stats                   # streak, retention, recent reviews and the next two weeks
 amgi prune                   # files in media that no card links to; --trash moves them to the Trash
+amgi diff                    # cards added, changed and removed since the last commit
 ```
 
 `search` takes the same syntax as the app; see [Searching](/studying#searching).
@@ -26,3 +27,45 @@ Every command takes `--json`. `search` exits 1 when nothing matches, and `--ids`
 only card ids. `--dir` (or `AMGI_DIR`) picks the collection; without it, `amgi` uses the
 folder holding `.amgi.sqlite` at or above the current one, or else the folder last opened
 in the app.
+
+## Changes since a commit
+
+In a collection kept in git, `amgi diff` lists the cards added, changed and removed since
+a commit, deck file by deck file. It compares the cards themselves, not the lines that
+hold them: reordering cards in a file changes nothing, while fixing an answer, changing
+tags or moving a card to another deck shows as a change. Editing a question shows the
+old card removed and a new one added, since that starts the card over. Files git ignores
+are left out.
+
+```sh
+amgi diff                    # since the last commit, as the files on disk are now
+amgi diff --staged           # what the next commit holds
+amgi diff main~5             # since another commit
+amgi diff v1 v2              # between two commits
+```
+
+`--json` lists `added`, `removed` and `changed` cards; each changed one has the card
+`before` and `changes`, any of `question`, `answer`, `tags` and `deck`.
+
+This git hook (save it as `.git/hooks/prepare-commit-msg` in the collection's repository
+and make it executable) starts each commit message with what the commit does to the
+cards, such as `feat(french): add 12 cards`. It needs [jq](https://jqlang.org), and runs
+`amgi` at the top of the repository, so pass `--dir` if the collection is in a folder
+inside it.
+
+```sh
+#!/bin/sh
+case "$2" in message|merge|squash|commit) exit 0 ;; esac  # keep -m, merges and amends
+subject=$(amgi diff --staged --json | jq -r '
+  [(.added | length), (.changed | length), (.removed | length)] as [$a, $c, $r]
+  | select($a + $c + $r > 0)
+  | (.added + [.changed[].card] + .removed | map(.deck) | unique) as $decks
+  | (if $a > 0 then "feat" elif $c > 0 then "fix" else "chore" end)
+    + (if ($decks | length) == 1 then "(\($decks[0]))" else "" end) + ": "
+    + ([if $a > 0 then "add \($a)" else empty end,
+        if $c > 0 then "update \($c)" else empty end,
+        if $r > 0 then "remove \($r)" else empty end] | join(", "))
+    + (if $a + $c + $r == 1 then " card" else " cards" end)')
+[ -n "$subject" ] || exit 0
+{ echo "$subject"; cat "$1"; } > "$1.tmp" && mv "$1.tmp" "$1"
+```
