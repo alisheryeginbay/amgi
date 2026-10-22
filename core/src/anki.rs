@@ -8,7 +8,7 @@
 //! This module only uses the collection's public API: it converts a package to
 //! Markdown and plain review history, and hands both to [`CardCollection::import`].
 
-mod text;
+pub(crate) mod text;
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;

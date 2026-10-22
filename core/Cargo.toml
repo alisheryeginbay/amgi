@@ -9,6 +9,7 @@ name = "amgi_core"
 crate-type = ["lib", "staticlib", "cdylib"]
 
 [dependencies]
+base64 = "0.23.1"
 fsrs = "6.6.2"
 rusqlite = { version = "0.40.2", features = ["array", "bundled", "collation"] }
 serde = { version = "1.0.229", features = ["derive"] }

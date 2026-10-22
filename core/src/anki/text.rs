@@ -195,6 +195,10 @@ pub fn html_to_markdown(html: &str, media: &mut Media) -> String {
             "script" | "style" if !closing => {
                 skip_until = Some(if name == "script" { "script" } else { "style" })
             }
+            // Cards have no ruby, so a reading follows its text in brackets; `<rp>`
+            // holds fallback brackets of its own.
+            "rp" if !closing => skip_until = Some("rp"),
+            "rt" => out.push(if closing { '）' } else { '（' }),
             "br" | "hr" => out.push('\n'),
             "div" | "p" | "tr" | "ul" | "ol" | "table" | "blockquote" | "h1" | "h2" | "h3"
             | "h4" | "h5" | "h6" => out.push('\n'),
@@ -611,6 +615,9 @@ mod tests {
         assert_eq!(html_to_markdown(html, &mut media), r#"![](<../media/my "word" & x.mp3>) \[sound:"#);
         assert_eq!(media.sounds.iter().collect::<Vec<_>>(), ["a.mp3", r#"my "word" & x.mp3"#]);
         assert_eq!(md("<img src=https://x.org/a.png>"), "![](https://x.org/a.png)");
+        // Ruby readings follow their text.
+        assert_eq!(md("<ruby>日本<rt>にほん</rt></ruby>語"), "日本（にほん）語");
+        assert_eq!(md("<ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp></ruby>"), "漢（かん）");
     }
 
     #[test]

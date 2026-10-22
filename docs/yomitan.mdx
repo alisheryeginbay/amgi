@@ -1,0 +1,69 @@
+---
+title: "Adding cards from Yomitan"
+description: "Add cards from Yomitan and other tools made for Anki through AnkiConnect."
+---
+
+Amgi can answer [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) requests the way
+Anki does with the AnkiConnect add-on, so [Yomitan](https://yomitan.wiki) and other tools
+made for Anki can add cards to the open folder. Turn on **Add cards from Yomitan** in
+**Settings ▸ General** (<kbd>⌘,</kbd>). Amgi answers while it's open, including from the
+menu bar with its window closed.
+
+## Setting up Yomitan
+
+1. Make a [note type](/card-format#notes-with-fields) for the cards, such as:
+
+   ```toml
+   # note-types/Japanese.toml
+   fields = ["Word", "Reading", "Meaning", "Audio", "Sentence"]
+   cards = ["Word -> Reading, Meaning, Audio, Sentence"]
+   ```
+
+2. Make the deck's file, such as `cards/Japanese/Vocabulary.md`. It can be empty;
+   Yomitan lists it as `Japanese::Vocabulary`.
+3. In Yomitan's settings, under **Anki**, turn on **Enable Anki integration**. The
+   server is `http://127.0.0.1:8765`, as for Anki.
+4. Under **Configure Anki flashcards**, choose the deck and the note type, then fill in
+   its fields, such as `{expression}` for Word, `{furigana}` for Reading, `{glossary}` for
+   Meaning, `{audio}` for Audio and `{sentence}` for Sentence.
+
+The add button in Yomitan's popup now adds a note to the end of the deck's file, with
+its audio and images copied to the `media` folder. **View added note** opens that file.
+
+## How Anki's ideas map onto Amgi
+
+- **Decks** are files: `Japanese::Vocabulary` is `cards/Japanese/Vocabulary.md`, which
+  is made if it doesn't exist. Decks with no cards yet are listed too.
+- **Note types** are the files in `note-types`. `Basic`, with Front and Back fields, makes
+  `Q:`/`A:` cards, and `Cloze`, with Text, makes `C:` cards from `{{c1::…}}` deletions.
+  Its Back Extra field has to be left empty.
+- **Fields** arrive as HTML and are written as Markdown, as when
+  [importing from Anki](/anki-import): bold, italics, lists and line breaks are kept, and
+  other formatting is dropped. Furigana from `<ruby>` follows its word in brackets, as in
+  日本（にほん）, since cards don't show ruby yet.
+- **Duplicates** are found as in Anki, by a note's first field, in the deck or the whole
+  collection as Yomitan asks. Whatever Yomitan allows, Amgi doesn't add a card whose
+  front is already in the collection.
+- **Note ids** come from the cards' text, like Amgi's own card ids, so a note found
+  before its front field was edited isn't found by its old id.
+
+## What isn't supported
+
+- Changing notes that are already added, as Yomitan's overwrite option does. Edit the
+  deck file instead.
+- Media given as a web address rather than its contents. Yomitan sends the contents.
+- Searches by date or review history, such as `added:1` or `rated:7`. They answer with
+  an error rather than nothing.
+
+## Other tools
+
+Other tools that use AnkiConnect, such as asbplayer or mpvacious, can add cards the same
+way. Amgi answers `addNote`, `addNotes`, `canAddNotes`, `canAddNotesWithErrorDetail`,
+`findNotes`, `findCards`, `notesInfo`, `cardsInfo`, `deckNames`, `modelNames`,
+`modelFieldNames`, `storeMediaFile`, `retrieveMediaFile`, `suspend`, `unsuspend`,
+`areSuspended`, `guiBrowse`, `guiEditNote`, `getTags`, `multi`, `version`,
+`requestPermission` and `apiReflect`.
+
+Only this Mac can reach the server, and in a browser only extensions and pages on
+`localhost` can use it; requests from other websites are refused. If Anki is open with
+AnkiConnect, it holds the port: quit it, then turn the setting off and on again.

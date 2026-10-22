@@ -4,6 +4,7 @@
 //! state lives in `.amgi.sqlite` at the collection root.
 
 pub mod anki;
+pub mod anki_connect;
 pub mod media;
 pub mod parser;
 pub mod scheduler;
@@ -53,6 +54,9 @@ pub enum AmgiError {
     Scheduler { message: String },
     #[error("import failed: {message}")]
     Import { message: String },
+    /// The AnkiConnect server couldn't start, with a sentence saying why.
+    #[error("{message}")]
+    AnkiConnect { message: String },
     /// A card that can't be added, with a sentence saying why.
     #[error("{message}")]
     InvalidCard { message: String },
@@ -603,28 +607,10 @@ impl CardCollection {
     /// the Markdown that shows it there. A file with the same name and contents is
     /// shared; one that differs keeps its name, and the copy gets another.
     pub fn add_media(&self, deck: String, path: String) -> Result<String> {
-        let root = self.root();
         let source = PathBuf::from(&path);
         let bytes = fs::read(&source)?;
         let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "media".into());
-        let (stem, ext) = match name.rsplit_once('.') {
-            Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
-            _ => (name.clone(), String::new()),
-        };
-        let dir = root.join(MEDIA_DIR);
-        fs::create_dir_all(&dir)?;
-        let mut file = name.clone();
-        for n in 2.. {
-            match fs::read(dir.join(&file)) {
-                Ok(existing) if existing == bytes => break,
-                Ok(_) => file = format!("{stem} {n}{ext}"),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    fs::write(dir.join(&file), &bytes)?;
-                    break;
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
+        let file = self.save_media(&name, &bytes)?;
         // Up from the deck's file in `cards` to the collection root.
         let link = format!("{}{MEDIA_DIR}/{file}", "../".repeat(deck.matches('/').count() + 1));
         Ok(if link.contains([' ', '(', ')', '<', '>']) { format!("![](<{link}>)") } else { format!("![]({link})") })
@@ -656,6 +642,41 @@ impl CardCollection {
     /// The folder holding the collection's decks.
     pub fn root(&self) -> PathBuf {
         self.lock().root.clone()
+    }
+
+    /// Write `bytes` to the `media` folder as `name`, and return the name it was saved
+    /// under. A file with that name and contents is shared; one that differs keeps its
+    /// name, and the new file gets another.
+    pub(crate) fn save_media(&self, name: &str, bytes: &[u8]) -> Result<String> {
+        let (stem, ext) = match name.rsplit_once('.') {
+            Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
+            _ => (name.to_string(), String::new()),
+        };
+        let dir = self.root().join(MEDIA_DIR);
+        fs::create_dir_all(&dir)?;
+        let mut file = name.to_string();
+        for n in 2.. {
+            match fs::read(dir.join(&file)) {
+                Ok(existing) if existing == bytes => break,
+                Ok(_) => file = format!("{stem} {n}{ext}"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    fs::write(dir.join(&file), bytes)?;
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(file)
+    }
+
+    /// Why `card` can't be added, checked as `add_card` would without adding it.
+    pub(crate) fn check_card(&self, card: &NewCard) -> Result<()> {
+        self.lock().card_block(card).map(|_| ())
+    }
+
+    /// Why `note` can't be added, checked as `add_note` would without adding it.
+    pub(crate) fn check_note(&self, note: &NewNote) -> Result<()> {
+        self.lock().note_block(note).map(|_| ())
     }
 
     /// Write decks from another app and replay their review history. Existing files are
@@ -1140,6 +1161,13 @@ impl Inner {
     }
 
     fn add_card(&mut self, card: &NewCard) -> Result<Vec<String>> {
+        let (deck, block, ids) = self.card_block(card)?;
+        self.append(&deck, &block, &ids)?;
+        Ok(ids)
+    }
+
+    /// The deck, text and card ids `card` would be added as, or why it can't be.
+    fn card_block(&self, card: &NewCard) -> Result<(String, String, Vec<String>)> {
         let invalid = |message: &str| AmgiError::InvalidCard { message: message.into() };
         let block = parser::write_card(card.kind, &card.front, &card.back, &card.tags)
             .map_err(|message| AmgiError::InvalidCard { message })?;
@@ -1152,12 +1180,17 @@ impl Inner {
             let path = &self.cards[*existing].path;
             return Err(AmgiError::InvalidCard { message: format!("This card is already in {path}.") });
         }
-
-        self.append(deck, &block, &ids)?;
-        Ok(ids)
+        Ok((deck.to_string(), block, ids))
     }
 
     fn add_note(&mut self, note: &NewNote) -> Result<Vec<String>> {
+        let (deck, block, ids) = self.note_block(note)?;
+        self.append(&deck, &block, &ids)?;
+        Ok(ids)
+    }
+
+    /// The deck, text and card ids `note` would be added as, or why it can't be.
+    fn note_block(&self, note: &NewNote) -> Result<(String, String, Vec<String>)> {
         let deck = note.deck.trim().trim_matches('/');
         if deck.is_empty() || deck.split('/').any(|part| part.trim().is_empty() || part.starts_with('.')) {
             return Err(AmgiError::InvalidCard { message: "Choose a deck for the note.".into() });
@@ -1170,8 +1203,7 @@ impl Inner {
                 message: format!("A card with the same front is already in {}:{}.", card.path, card.parsed.line),
             });
         }
-        self.append(deck, &block, &ids)?;
-        Ok(ids)
+        Ok((deck.to_string(), block, ids))
     }
 
     /// Append `block` to the end of `deck`'s file, which is created if needed, and

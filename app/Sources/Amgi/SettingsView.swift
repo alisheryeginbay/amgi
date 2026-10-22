@@ -104,6 +104,16 @@ private struct GeneralSettings: View {
                 Text("Add cards from any app with ⌥⌘N")
                 Text("Opens Add Card over the app you're using. Add Card is also in the File menu (⌘N).")
             }
+            Section {
+                Toggle(isOn: $model.ankiConnect) {
+                    Text("Add cards from Yomitan")
+                    Text("Answers AnkiConnect, as Anki does, so Yomitan and other tools made for Anki can add cards while \(appName) is open. Only this Mac can reach it.")
+                }
+                if model.ankiConnect, let error = model.ankiConnectError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
         .frame(width: 440)

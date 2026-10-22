@@ -47,6 +47,9 @@ final class AppModel {
     /// and older collections still start from.
     private static let retentionKey = "desiredRetention"
     private static let quickAddShortcutKey = "quickAddShortcut"
+    private static let ankiConnectKey = "ankiConnect"
+    /// The port AnkiConnect listens on, which Yomitan and other tools try by default.
+    static let ankiConnectPort: UInt16 = 8765
     /// The range the core accepts.
     static let retentionRange = 0.7...0.99
 
@@ -131,6 +134,17 @@ final class AppModel {
         }
     }
 
+    /// Whether tools made for Anki, such as Yomitan, can add cards through AnkiConnect.
+    var ankiConnect: Bool = UserDefaults.standard.bool(forKey: AppModel.ankiConnectKey) {
+        didSet {
+            guard oldValue != ankiConnect else { return }
+            UserDefaults.standard.set(ankiConnect, forKey: Self.ankiConnectKey)
+            restartAnkiConnect()
+        }
+    }
+    /// Why AnkiConnect isn't answering although it's on, such as its port being taken.
+    private(set) var ankiConnectError: String?
+
     var selection: SidebarItem = .review {
         didSet {
             guard oldValue != selection else { return }
@@ -180,6 +194,7 @@ final class AppModel {
     @ObservationIgnored private var countsTimer: Timer?
     @ObservationIgnored private let quickAdd = QuickAddPanel()
     @ObservationIgnored private var quickAddHotKey: GlobalHotKey?
+    @ObservationIgnored private var ankiConnectServer: AnkiConnectServer?
 
     init() {
         web.onMessage = { [weak self] in self?.handle($0) }
@@ -233,6 +248,7 @@ final class AppModel {
             self.selection = .review
             UserDefaults.standard.set(url.path, forKey: Self.folderKey)
         }
+        restartAnkiConnect()
         refresh()
     }
 
@@ -240,6 +256,7 @@ final class AppModel {
     func closeFolder() {
         guard folder != nil, !importing else { return }
         collection = nil
+        restartAnkiConnect()
         folder = nil
         web.collectionRoot = nil
         UserDefaults.standard.removeObject(forKey: Self.folderKey)
@@ -724,6 +741,24 @@ final class AppModel {
         return Result { try collection.addMedia(deck: deck, path: file.path) }
     }
 
+    // MARK: AnkiConnect
+
+    /// Answer AnkiConnect requests for the open folder while the setting is on.
+    private func restartAnkiConnect() {
+        ankiConnectServer?.stop()
+        ankiConnectServer = nil
+        ankiConnectError = nil
+        guard ankiConnect, let collection else { return }
+        do {
+            ankiConnectServer = try AnkiConnectServer.start(
+                collection: collection, port: Self.ankiConnectPort, delegate: AnkiConnectEvents(model: self))
+        } catch AmgiError.AnkiConnect(let message) {
+            ankiConnectError = message
+        } catch {
+            ankiConnectError = error.localizedDescription
+        }
+    }
+
     private func registerQuickAddShortcut() {
         quickAddHotKey?.unregister()
         quickAddHotKey = nil
@@ -819,5 +854,23 @@ enum StudyInput: String {
 
     var animation: Animation? {
         self == .pointer ? .smooth(duration: 0.25) : nil
+    }
+}
+
+/// Passes on what the AnkiConnect server did, from its threads to the app.
+private final class AnkiConnectEvents: AnkiConnectDelegate, @unchecked Sendable {
+    // Only set in `init`, and only read on the main actor.
+    private weak var model: AppModel?
+
+    init(model: AppModel) {
+        self.model = model
+    }
+
+    func cardsChanged() {
+        Task { @MainActor in self.model?.refresh() }
+    }
+
+    func show(path: String) {
+        Task { @MainActor in self.model?.revealInEditor(path: path) }
     }
 }

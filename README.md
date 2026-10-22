@@ -58,6 +58,7 @@ The full docs are at [docs.amgi.study](https://docs.amgi.study).
 - [Card format](https://docs.amgi.study/card-format): cards, clozes, media, math, code, tags and suspending
 - [Studying](https://docs.amgi.study/studying): shortcuts, browsing, adding cards, saved views and search
 - [Importing from Anki](https://docs.amgi.study/anki-import)
+- [Adding cards from Yomitan](https://docs.amgi.study/yomitan): AnkiConnect for Yomitan and other tools made for Anki
 - [Command line](https://docs.amgi.study/cli)
 - [Contributing](CONTRIBUTING.md): project layout, building and tests
 
