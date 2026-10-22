@@ -9,13 +9,13 @@ const DAY = 86_400;
 function card(id: string, fields: Partial<BrowseCard>): BrowseCard {
   return {
     id, deck: "geography", tags: [], path: "geography.md", line: 1, kind: "basic",
-    front: "", back: "", due: null, reps: 0, lapses: 0, suspended: false, noteType: null, fields: [], ...fields,
+    front: "", back: "", due: null, interval: null, reps: 0, lapses: 0, suspended: false, noteType: null, fields: [], ...fields,
   };
 }
 
 const CARDS = [
-  card("paris", { front: "Capital of France?", back: "Paris", tags: ["europe", "capitals"], due: NOW - DAY, reps: 4 }),
-  card("cafe", { front: "What does café mean?", back: "coffee", deck: "lang/french/words", tags: ["food"], due: NOW + 3 * DAY, reps: 2 }),
+  card("paris", { front: "Capital of France?", back: "Paris", tags: ["europe", "capitals"], due: NOW - DAY, interval: 21 * DAY - 1, reps: 4 }),
+  card("cafe", { front: "What does café mean?", back: "coffee", deck: "lang/french/words", tags: ["food"], due: NOW + 3 * DAY, interval: 30 * DAY, reps: 2 }),
   card("water", { front: "Formula for water", back: "H2O", deck: "science", kind: "cloze", tags: ["chem::basics"] }),
   card("leech", { front: "Boiling point at 12:30 altitude", back: "less than 100", deck: "science/physics", lapses: 9, reps: 12, due: NOW - 60, suspended: true, tags: ["suspended"] }),
 ];
@@ -86,6 +86,7 @@ test("is: filters by state and kind", () => {
   assert.deepEqual(search("is:due"), ["paris"]);
   assert.deepEqual(search("is:suspended"), ["leech"]);
   assert.deepEqual(search("is:leech"), ["leech"]);
+  assert.deepEqual(search("is:mature"), ["cafe"]);
   assert.deepEqual(search("is:cloze"), ["water"]);
   assert.deepEqual(search("is:basic"), ["paris", "cafe", "leech"]);
 });
@@ -96,6 +97,9 @@ test("numbers compare with <, <=, >, >=, = or :", () => {
   assert.deepEqual(search("reviews:4"), ["paris"]);
   assert.deepEqual(search("reviews=2"), ["cafe"]);
   assert.deepEqual(search("reviews<=2"), ["cafe", "water"]);
+  assert.deepEqual(search("interval>=21"), ["cafe"]);
+  assert.deepEqual(search("interval=20"), ["paris"]);
+  assert.deepEqual(search("interval<100"), ["paris", "cafe"]);
 });
 
 test("due compares study days from today, and never matches new cards", () => {

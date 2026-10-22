@@ -77,7 +77,9 @@ ignoring case and accents. Words can also be filters:
 | `q:paris`, `a:"to go"` | with that text in the question or answer only |
 | `meaning:apple`, `wordmeaning:go` | from a note whose field of that name has the text; leave out spaces in the name |
 | `is:new` `is:due` `is:suspended` `is:leech` `is:cloze` `is:basic` | in that state or of that kind |
+| `is:mature` | next due 21 or more days after its last review, as in Anki |
 | `lapses>3`, `reviews<=5` | compared by count (`<`, `<=`, `>`, `>=`, `=`) |
 | `due<1`, `due<7`, `due<0` | due today; within 7 days; overdue (before today). New cards have no due date |
+| `interval>=7` | next due at least 7 days after its last review. New cards have no interval |
 
 Anything else, such as `12:30`, is searched as text.

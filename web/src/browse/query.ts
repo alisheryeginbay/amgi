@@ -4,6 +4,8 @@ import type { BrowseCard, NoteTypeInfo } from "../lib/types";
 
 /** Forgotten this many times or more, as in Anki. */
 const LEECH_LAPSES = 8;
+/** An interval of this many days or more makes a card mature, as in Anki. */
+const MATURE_DAYS = 21;
 const DAY_SECS = 86_400;
 
 /** Case- and accent-insensitive, like Finder's search. */
@@ -19,6 +21,7 @@ const STATES: Record<string, (today: number) => Test> = {
   due: (today) => (c) => !c.suspended && c.due !== null && c.due < today + DAY_SECS,
   suspended: () => (c) => c.suspended,
   leech: () => (c) => c.lapses >= LEECH_LAPSES,
+  mature: () => (c) => c.interval !== null && c.interval >= MATURE_DAYS * DAY_SECS,
   cloze: () => (c) => c.kind === "cloze",
   basic: () => (c) => c.kind === "basic",
 };
@@ -34,11 +37,13 @@ const COMPARES: Record<string, Compare> = {
 };
 
 /** Numbers a card can be compared on. `due` is in study days from today, negative when
- *  overdue; new cards have none. */
+ *  overdue, and `interval` in whole days from the last review to the due date; new cards
+ *  have neither. */
 const NUMBERS: Record<string, (card: BrowseCard, today: number) => number | null> = {
   reviews: (c) => c.reps,
   lapses: (c) => c.lapses,
   due: (c, today) => (c.due === null ? null : Math.floor((c.due - today) / DAY_SECS)),
+  interval: (c) => (c.interval === null ? null : Math.floor(c.interval / DAY_SECS)),
 };
 
 interface Token {

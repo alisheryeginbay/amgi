@@ -150,6 +150,8 @@ pub struct BrowseCard {
     pub back: String,
     /// Unix seconds; `None` for a new card.
     pub due: Option<i64>,
+    /// Seconds from the last review to the due date; `None` for a new card.
+    pub interval: Option<i64>,
     pub reps: u32,
     pub lapses: u32,
     /// Tagged `#suspended`, so never studied.
@@ -972,6 +974,7 @@ impl Inner {
                     front: card.parsed.front.clone(),
                     back: card.parsed.back.clone(),
                     due: state.map(|s| s.due),
+                    interval: state.map(|s| s.interval_secs),
                     reps: state.map_or(0, |s| s.reps),
                     lapses: state.map_or(0, |s| s.lapses),
                     suspended: card.suspended(),

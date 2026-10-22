@@ -66,6 +66,8 @@ export interface BrowseCard {
   back: string;
   /** Unix seconds; null for a new card. */
   due: number | null;
+  /** Seconds from the last review to the due date; null for a new card. */
+  interval: number | null;
   reps: number;
   lapses: number;
   /** Tagged `#suspended`, so never studied. */

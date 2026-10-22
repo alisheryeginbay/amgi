@@ -12,6 +12,8 @@ use crate::{BrowseCard, CardKind};
 
 /// Forgotten this many times or more, as in Anki.
 pub const LEECH_LAPSES: u32 = 8;
+/// An interval of this many days or more makes a card mature, as in Anki.
+pub const MATURE_DAYS: i64 = 21;
 const DAY_SECS: i64 = 86_400;
 
 /// Case- and accent-insensitive, like Finder's search.
@@ -74,6 +76,7 @@ enum State {
     Due,
     Suspended,
     Leech,
+    Mature,
     Cloze,
     Basic,
 }
@@ -84,6 +87,8 @@ enum Number {
     Lapses,
     /// Study days from today, negative when overdue; new cards have none.
     Due,
+    /// Whole days from the last review to the due date; new cards have none.
+    Interval,
 }
 
 #[derive(Clone, Copy)]
@@ -129,6 +134,7 @@ impl Test {
                 State::Due => !c.suspended && c.due.is_some_and(|d| d < today + DAY_SECS),
                 State::Suspended => c.suspended,
                 State::Leech => c.lapses >= LEECH_LAPSES,
+                State::Mature => c.interval.is_some_and(|i| i >= MATURE_DAYS * DAY_SECS),
                 State::Cloze => c.kind == CardKind::Cloze,
                 State::Basic => c.kind == CardKind::Basic,
             },
@@ -138,6 +144,10 @@ impl Test {
                     Number::Lapses => f64::from(c.lapses),
                     Number::Due => match c.due {
                         Some(d) => (d - today).div_euclid(DAY_SECS) as f64,
+                        None => return false,
+                    },
+                    Number::Interval => match c.interval {
+                        Some(i) => i.div_euclid(DAY_SECS) as f64,
                         None => return false,
                     },
                 };
@@ -258,6 +268,7 @@ fn compile(token: &Token, today: i64, note_types: &[NoteTypeInfo]) -> Option<Tes
         "reviews" => Some(Number::Reviews),
         "lapses" => Some(Number::Lapses),
         "due" => Some(Number::Due),
+        "interval" => Some(Number::Interval),
         _ => None,
     };
     if let Some(field) = number {
@@ -291,6 +302,7 @@ fn compile(token: &Token, today: i64, note_types: &[NoteTypeInfo]) -> Option<Tes
                     "due" => Some(State::Due),
                     "suspended" => Some(State::Suspended),
                     "leech" => Some(State::Leech),
+                    "mature" => Some(State::Mature),
                     "cloze" => Some(State::Cloze),
                     "basic" => Some(State::Basic),
                     _ => None,
@@ -333,6 +345,7 @@ mod tests {
             front: String::new(),
             back: String::new(),
             due: None,
+            interval: None,
             note_type: None,
             fields: vec![],
             reps: 0,
@@ -352,6 +365,7 @@ mod tests {
                 back: "Paris".into(),
                 tags: tags(&["europe", "capitals"]),
                 due: Some(NOW - DAY),
+                interval: Some(21 * DAY - 1),
                 reps: 4,
                 ..card("paris")
             },
@@ -361,6 +375,7 @@ mod tests {
                 deck: "lang/french/words".into(),
                 tags: tags(&["food"]),
                 due: Some(NOW + 3 * DAY),
+                interval: Some(30 * DAY),
                 reps: 2,
                 ..card("cafe")
             },
@@ -467,6 +482,7 @@ mod tests {
         check("is:due", &["paris"]);
         check("is:suspended", &["leech"]);
         check("is:leech", &["leech"]);
+        check("is:mature", &["cafe"]);
         check("is:cloze", &["water"]);
         check("is:basic", &["paris", "cafe", "leech"]);
     }
@@ -478,6 +494,9 @@ mod tests {
         check("reviews:4", &["paris"]);
         check("reviews=2", &["cafe"]);
         check("reviews<=2", &["cafe", "water"]);
+        check("interval>=21", &["cafe"]);
+        check("interval=20", &["paris"]);
+        check("interval<100", &["paris", "cafe"]);
     }
 
     #[test]
