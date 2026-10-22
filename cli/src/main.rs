@@ -2,6 +2,7 @@
 
 mod commands;
 mod diff;
+mod style;
 mod locate;
 mod text;
 
@@ -21,6 +22,10 @@ struct Cli {
     /// Print JSON instead of text.
     #[arg(long, global = true)]
     json: bool,
+
+    /// When to use colors.
+    #[arg(long, global = true, value_enum, default_value_t, value_name = "WHEN")]
+    color: style::ColorChoice,
 
     #[command(subcommand)]
     command: Command,
@@ -83,10 +88,11 @@ enum Command {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    style::init(cli.color);
     let collection = match locate::open(cli.dir.as_deref()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("amgi: {e}");
+            eprintln!("{} {e}", style::red("amgi:"));
             return ExitCode::from(2);
         }
     };
@@ -105,7 +111,7 @@ fn main() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("amgi: {e}");
+            eprintln!("{} {e}", style::red("amgi:"));
             ExitCode::from(2)
         }
     }

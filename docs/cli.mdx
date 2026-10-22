@@ -28,6 +28,9 @@ only card ids. `--dir` (or `AMGI_DIR`) picks the collection; without it, `amgi` 
 folder holding `.amgi.sqlite` at or above the current one, or else the folder last opened
 in the app.
 
+Output is in color on a terminal and plain when piped. `--color always` or `never`
+overrides that, as do the `NO_COLOR` and `CLICOLOR_FORCE` environment variables.
+
 ## Changes since a commit
 
 In a collection kept in git, `amgi diff` lists the cards added, changed and removed since

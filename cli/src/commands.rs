@@ -9,6 +9,7 @@ use amgi_core::{BrowseCard, CardCollection, CardInfo, CardKind, Rating, StudySco
 use serde_json::json;
 
 use crate::diff::{self, Source};
+use crate::style::{self, blue, bold, dim, figure, green, red, yellow};
 use crate::text::{self, bar, count, date_time, one_line, pad, sparkline, truncate, width};
 
 type Result<T = ExitCode> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -27,12 +28,12 @@ const DAY: i64 = 86_400;
 
 /// `12 due · 5 new`, leaving out zeros.
 fn due_and_new(due: u32, new: u32) -> String {
-    [(due, "due"), (new, "new")]
+    [(due, "due", yellow as fn(String) -> String), (new, "new", blue)]
         .iter()
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, label)| format!("{n} {label}"))
+        .filter(|(n, _, _)| *n > 0)
+        .map(|(n, label, paint)| paint(format!("{n} {label}")))
         .collect::<Vec<_>>()
-        .join(" · ")
+        .join(&dim(" · "))
 }
 
 pub fn status(c: &CardCollection, out: Output, short: bool) -> Result {
@@ -58,8 +59,8 @@ pub fn status(c: &CardCollection, out: Output, short: bool) -> Result {
         }
         return Ok(ExitCode::SUCCESS);
     }
-    let left = if left.is_empty() { "All caught up".to_string() } else { left };
-    println!("{left} · {} today", count(today.reviewed, "review", "reviews"));
+    let left = if left.is_empty() { green("All caught up") } else { bold(left) };
+    println!("{left}{}", dim(format!(" · {} today", count(today.reviewed, "review", "reviews"))));
     let rows: Vec<_> = decks.iter().filter(|d| d.due + d.new > 0).collect();
     let name_width = rows.iter().map(|d| width(&d.title)).max().unwrap_or(0);
     for d in rows {
@@ -76,16 +77,28 @@ pub fn check(c: &CardCollection, out: Output) -> Result {
         return Ok(code);
     }
     for w in &warnings {
-        match w.line {
-            0 => println!("{}: {}", w.path, w.message),
-            line => println!("{}:{line}: {}", w.path, w.message),
-        }
+        let place = match w.line {
+            0 => w.path.clone(),
+            line => format!("{}:{line}", w.path),
+        };
+        println!("{}{} {}", style::path(place), dim(":"), w.message);
     }
     if warnings.is_empty() {
         let cards = c.cards(StudyScope::All).len() as u32;
-        println!("No problems in {}.", count(cards, "card", "cards"));
+        println!("{}", green(format!("No problems in {}.", count(cards, "card", "cards"))));
     }
     Ok(code)
+}
+
+/// A schedule label drawn in its color: blue when new, yellow when due, red when
+/// overdue, dim when it can wait. `padded` is the label padded to its column.
+fn paint_label(label: &str, padded: String) -> String {
+    match label {
+        "new" => blue(padded),
+        "due now" | "due today" => yellow(padded),
+        l if l.starts_with("overdue") => red(padded),
+        _ => dim(padded),
+    }
 }
 
 /// `new`, `suspended`, `due now`, `due today`, `overdue 3d` or `in 2d`.
@@ -127,7 +140,7 @@ pub fn search(c: &CardCollection, out: Output, query: &str, view: Option<&str>, 
         return Ok(code);
     }
     if cards.is_empty() {
-        eprintln!("No cards match.");
+        eprintln!("{}", dim("No cards match."));
         return Ok(code);
     }
     let tomorrow = c.day_start() + DAY;
@@ -140,7 +153,7 @@ pub fn search(c: &CardCollection, out: Output, query: &str, view: Option<&str>, 
     let room = text::terminal_width().map(|w| w.saturating_sub(place_width + label_width + 4).max(20));
     for (place, label, front) in &rows {
         let front = room.map_or_else(|| front.clone(), |room| truncate(front, room));
-        println!("{}  {}  {front}", pad(place, place_width), pad(label, label_width));
+        println!("{}  {}  {front}", style::path(pad(place, place_width)), paint_label(label, pad(label, label_width)));
     }
     Ok(code)
 }
@@ -151,19 +164,23 @@ pub fn decks(c: &CardCollection, out: Output) -> Result {
         return print_json(&decks);
     }
     // Each deck indented under its parent, with its front-matter name if it has one.
-    let names: Vec<String> = decks
+    // Top-level decks in bold; a front-matter name dimmed after the file's.
+    let names: Vec<(String, String)> = decks
         .iter()
         .map(|d| {
             let depth = d.name.matches('/').count();
             let last = d.name.rsplit('/').next().unwrap_or_default();
             let title = if d.title == last { String::new() } else { format!(" ({})", d.title) };
-            format!("{}{last}{title}", "  ".repeat(depth))
+            let plain = format!("{}{last}{title}", "  ".repeat(depth));
+            let name = if depth == 0 { bold(last) } else { last.to_string() };
+            (plain, format!("{}{name}{}", "  ".repeat(depth), dim(title)))
         })
         .collect();
-    let name_width = names.iter().map(|n| width(n)).max().unwrap_or(0).max(4);
-    println!("{}  {:>5}  {:>5}  {:>6}", pad("Deck", name_width), "Due", "New", "Total");
-    for (d, name) in decks.iter().zip(&names) {
-        println!("{}  {:>5}  {:>5}  {:>6}", pad(name, name_width), d.due, d.new, d.total);
+    let name_width = names.iter().map(|(plain, _)| width(plain)).max().unwrap_or(0).max(4);
+    println!("{}", dim(format!("{}  {:>5}  {:>5}  {:>6}", pad("Deck", name_width), "Due", "New", "Total")));
+    for (d, (plain, name)) in decks.iter().zip(&names) {
+        let gap = " ".repeat(name_width - width(plain));
+        println!("{name}{gap}  {}  {}  {}", figure(d.due, 5, yellow), figure(d.new, 5, blue), figure(d.total, 6, |s| s));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -179,7 +196,8 @@ pub fn tags(c: &CardCollection, out: Output) -> Result {
     let tag_width = rows.iter().map(|(_, t)| width(&t.name) + 1).max().unwrap_or(0);
     for (icon, t) in &rows {
         let icon = icon.as_deref().map_or_else(|| "  ".to_string(), |i| pad(i, 2));
-        println!("{icon} {}  {:>5}", pad(&format!("#{}", t.name), tag_width), t.cards);
+        let gap = " ".repeat(tag_width - width(&t.name) - 1);
+        println!("{icon} {}{}{gap}  {}", dim("#"), t.name, dim(format!("{:>5}", t.cards)));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -213,10 +231,10 @@ fn resolve<'a>(c: &CardCollection, cards: &'a [BrowseCard], arg: &str) -> Result
             let place_width = places.iter().map(|p| width(p)).max().unwrap_or(0);
             for (card, place) in found.iter().zip(&places) {
                 let front = truncate(&one_line(&card.front), 60);
-                message.push_str(&format!("\n  {}  {front}", pad(place, place_width)));
+                message.push_str(&format!("\n  {}  {front}", style::path(pad(place, place_width))));
             }
             if found.len() > 10 {
-                message.push_str(&format!("\n  … and {} more", found.len() - 10));
+                message.push_str(&dim(format!("\n  … and {} more", found.len() - 10)));
             }
             Err(message.into())
         }
@@ -255,12 +273,13 @@ pub fn info(c: &CardCollection, out: Output, arg: &str) -> Result {
     Ok(ExitCode::SUCCESS)
 }
 
-fn rating_name(r: Rating) -> &'static str {
+/// The rating's name padded to `Again`'s width, in the color of its button in the app.
+fn rating_name(r: Rating) -> String {
     match r {
-        Rating::Again => "Again",
-        Rating::Hard => "Hard",
-        Rating::Good => "Good",
-        Rating::Easy => "Easy",
+        Rating::Again => red("Again"),
+        Rating::Hard => yellow("Hard "),
+        Rating::Good => green("Good "),
+        Rating::Easy => blue("Easy "),
     }
 }
 
@@ -275,24 +294,24 @@ fn print_info(info: &CardInfo) {
         CardKind::Basic => "basic",
         CardKind::Cloze => "cloze",
     };
-    let mut heading = vec![format!("{}:{}", info.path, info.line), kind.to_string()];
+    let mut heading = vec![style::path(format!("{}:{}", info.path, info.line)), dim(kind)];
     if !info.tags.is_empty() {
-        heading.push(info.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" "));
+        heading.push(dim(info.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" ")));
     }
-    println!("{}", heading.join(" · "));
-    println!("id {}", info.id);
+    println!("{}", heading.join(&dim(" · ")));
+    println!("{}", dim(format!("id {}", info.id)));
     println!();
     // A cloze's sides are its text with this card's gap hidden, then filled in.
-    println!("Q  {}", indented(&info.front, 3));
-    println!("A  {}", indented(&info.back, 3));
+    println!("{}  {}", dim("Q"), bold(indented(&info.front, 3)));
+    println!("{}  {}", dim("A"), indented(&info.back, 3));
     println!();
 
-    let field = |name: &str, value: String| println!("{}{value}", pad(name, 13));
+    let field = |name: &str, value: String| println!("{}{value}", dim(pad(name, 13)));
     let schedule = match info.due {
-        _ if info.suspended => "suspended".to_string(),
-        None => "new, never studied".to_string(),
-        Some(due) if due > now => format!("in {} ({})", format_interval(due - now), date_time(due)),
-        Some(due) => format!("now, since {}", date_time(due)),
+        _ if info.suspended => dim("suspended"),
+        None => blue("new, never studied"),
+        Some(due) if due > now => format!("in {} {}", format_interval(due - now), dim(format!("({})", date_time(due)))),
+        Some(due) => format!("{} {}", yellow("now"), dim(format!("since {}", date_time(due)))),
     };
     field("Due", schedule);
     if info.due.is_none() {
@@ -315,7 +334,7 @@ fn print_info(info: &CardInfo) {
         return;
     }
     println!();
-    println!("History");
+    println!("{}", bold("History"));
     for r in &info.reviews {
         let gap = match r.elapsed_days {
             _ if r.was_new => "first".to_string(),
@@ -323,10 +342,10 @@ fn print_info(info: &CardInfo) {
             d => format!("after {d:.0}d"),
         };
         println!(
-            "  {}  {:<5}  {:<11}  next in {}",
-            date_time(r.reviewed_at),
+            "  {}  {}  {}  next in {}",
+            dim(date_time(r.reviewed_at)),
             rating_name(r.rating),
-            gap,
+            dim(format!("{gap:<11}")),
             format_interval(r.interval_secs)
         );
     }
@@ -339,39 +358,41 @@ pub fn stats(c: &CardCollection, out: Output, days: u32) -> Result {
     if out.json {
         return print_json(&json!({ "today": today, "dashboard": dashboard }));
     }
-    let field = |name: &str, value: String| println!("{}{value}", pad(name, 11));
-    field("Today", format!("{}, {} new", count(today.reviewed, "review", "reviews"), today.new_studied));
-    field("Streak", count(dashboard.streak, "day", "days"));
+    let field = |name: &str, value: String| println!("{}{value}", dim(pad(name, 11)));
+    field("Today", format!("{}{}", bold(count(today.reviewed, "review", "reviews")), dim(format!(", {} new", today.new_studied))));
+    field("Streak", bold(count(dashboard.streak, "day", "days")));
     field(
         "Retention",
-        dashboard.retention.map_or("not enough reviews yet".to_string(), |r| format!("{:.0}% over the last 30 days", r * 100.0)),
+        dashboard.retention.map_or(dim("not enough reviews yet"), |r| {
+            format!("{}{}", bold(format!("{:.0}%", r * 100.0)), dim(" over the last 30 days"))
+        }),
     );
-    field(
-        "Cards",
-        format!(
-            "{} new · {} young · {} mature · {} suspended",
-            dashboard.new_cards, dashboard.young_cards, dashboard.mature_cards, dashboard.suspended_cards
-        ),
-    );
+    let cards = [
+        blue(format!("{} new", dashboard.new_cards)),
+        format!("{} young", dashboard.young_cards),
+        green(format!("{} mature", dashboard.mature_cards)),
+        dim(format!("{} suspended", dashboard.suspended_cards)),
+    ];
+    field("Cards", cards.join(&dim(" · ")));
 
     let total: u32 = dashboard.activity.iter().sum();
     let studied = dashboard.activity.iter().filter(|&&n| n > 0).count();
     println!();
     println!(
-        "Reviews in the last {}: {total}, on {}",
-        count(days, "day", "days"),
-        count(studied as u32, "day", "days")
+        "{}{}",
+        bold(format!("Reviews in the last {}", count(days, "day", "days"))),
+        dim(format!(": {total}, on {}", count(studied as u32, "day", "days")))
     );
-    println!("  {}", sparkline(&dashboard.activity));
+    println!("  {}", blue(sparkline(&dashboard.activity)));
     // The first day under the line's start, and today under its end when there's room.
     let start = text::date(dashboard.activity_start);
     match (days as usize).checked_sub(start.len() + "today".len()) {
-        Some(gap) => println!("  {start}{}today", " ".repeat(gap)),
-        None => println!("  {start}"),
+        Some(gap) => println!("  {}", dim(format!("{start}{}today", " ".repeat(gap)))),
+        None => println!("  {}", dim(start)),
     }
 
     println!();
-    println!("Due in the next {} days", dashboard.forecast.len());
+    println!("{}", bold(format!("Due in the next {} days", dashboard.forecast.len())));
     let max = dashboard.forecast.iter().copied().max().unwrap_or(0);
     let now = text::now();
     for (i, n) in dashboard.forecast.iter().enumerate() {
@@ -380,7 +401,8 @@ pub fn stats(c: &CardCollection, out: Output, days: u32) -> Result {
             1 => "Tomorrow".to_string(),
             i => format!("{} {}", text::weekday(now + i as i64 * DAY), &text::date(now + i as i64 * DAY)[5..]),
         };
-        println!("  {}  {n:>4}  {}", pad(&label, 9), bar(*n, max, 30));
+        let label = if i == 0 { bold(pad(&label, 9)) } else { dim(pad(&label, 9)) };
+        println!("  {label}  {}  {}", figure(*n, 4, |s| s), blue(bar(*n, max, 30)));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -406,11 +428,15 @@ pub fn prune(c: &CardCollection, out: Output, trash: bool) -> Result {
     }
     let files = count(unused.len() as u32, "unused file", "unused files");
     match (unused.is_empty(), trash) {
-        (true, _) => println!("No unused media."),
+        (true, _) => println!("{}", green("No unused media.")),
         (false, true) => println!("Moved {files} ({}) to the Trash.", text::size(bytes)),
         (false, false) => {
             let them = if unused.len() == 1 { "it" } else { "them" };
-            println!("{files}, {}. Run `amgi prune --trash` to move {them} to the Trash.", text::size(bytes));
+            println!(
+                "{}{}",
+                bold(format!("{files}, {}.", text::size(bytes))),
+                dim(format!(" Run `amgi prune --trash` to move {them} to the Trash."))
+            );
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -437,7 +463,7 @@ pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool) -> R
         }));
     }
     if changes.is_empty() {
-        println!("No cards changed.");
+        println!("{}", dim("No cards changed."));
         return Ok(ExitCode::SUCCESS);
     }
     // By file, then added, changed and removed, each in file order.
@@ -465,7 +491,7 @@ pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool) -> R
         if i > 0 {
             println!();
         }
-        println!("{path}");
+        println!("{}", bold(style::path(path)));
         for (mark, card, note) in rows {
             let front = one_line(&card.front);
             let front = match columns {
@@ -473,17 +499,26 @@ pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool) -> R
                 Some(cols) => truncate(&front, cols.saturating_sub(4 + if note.is_empty() { 0 } else { width(note) + 2 }).max(10)),
                 None => front,
             };
+            let (mark, front) = match mark {
+                '+' => (green('+'), front),
+                '-' => (red('-'), dim(front)),
+                _ => (yellow('~'), front),
+            };
             match note.is_empty() {
                 true => println!("  {mark} {front}"),
-                false => println!("  {mark} {front}  ({note})"),
+                false => println!("  {mark} {front}  {}", dim(format!("({note})"))),
             }
         }
     }
-    let summary: Vec<_> = [(changes.added.len(), "added"), (changes.changed.len(), "changed"), (changes.removed.len(), "removed")]
-        .iter()
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, label)| format!("{n} {label}"))
-        .collect();
-    println!("\n{}", summary.join(" · "));
+    let summary: Vec<_> = [
+        (changes.added.len(), "added", green as fn(String) -> String),
+        (changes.changed.len(), "changed", yellow),
+        (changes.removed.len(), "removed", red),
+    ]
+    .iter()
+    .filter(|(n, _, _)| *n > 0)
+    .map(|(n, label, paint)| paint(format!("{n} {label}")))
+    .collect();
+    println!("\n{}", summary.join(&dim(" · ")));
     Ok(ExitCode::SUCCESS)
 }
