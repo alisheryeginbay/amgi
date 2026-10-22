@@ -630,13 +630,15 @@ impl CardCollection {
         Ok(if link.contains([' ', '(', ')', '<', '>']) { format!("![](<{link}>)") } else { format!("![]({link})") })
     }
 
-    pub fn today(&self) -> Result<TodayStats> {
-        self.lock().today(unix_now())
+    /// Today's reviews and new cards, in a deck or the whole collection.
+    pub fn today(&self, scope: StudyScope) -> Result<TodayStats> {
+        self.lock().today(&scope, unix_now())
     }
 
-    /// Collection-wide statistics, with `activity_days` days of review history.
-    pub fn dashboard(&self, activity_days: u32) -> Result<Dashboard> {
-        self.lock().dashboard(activity_days, unix_now())
+    /// Statistics for a deck or the whole collection, with `activity_days` days of
+    /// review history.
+    pub fn dashboard(&self, scope: StudyScope, activity_days: u32) -> Result<Dashboard> {
+        self.lock().dashboard(&scope, activity_days, unix_now())
     }
 
     pub fn warnings(&self) -> Vec<CollectionWarning> {
@@ -874,7 +876,7 @@ impl Inner {
     }
 
     fn new_remaining(&self, now: i64) -> Result<u32> {
-        let studied = self.store.new_cards_since(self.day_start(now))?;
+        let studied = self.store.new_cards_since(self.day_start(now), None)?;
         Ok(self.new_per_day.saturating_sub(studied))
     }
 
@@ -1236,14 +1238,24 @@ impl Inner {
         Ok(changed)
     }
 
-    fn dashboard(&self, activity_days: u32, now: i64) -> Result<Dashboard> {
+    /// The ids of the cards in `scope`, for the review log; `None` for all of them.
+    fn scope_ids(&self, scope: &StudyScope) -> Option<Vec<String>> {
+        match scope {
+            StudyScope::All => None,
+            StudyScope::Deck { .. } => Some(self.in_scope(scope).map(|c| c.parsed.id.clone()).collect()),
+        }
+    }
+
+    fn dashboard(&self, scope: &StudyScope, activity_days: u32, now: i64) -> Result<Dashboard> {
+        let ids = self.scope_ids(scope);
+        let ids = ids.as_deref();
         // Day `n` starts at `n * DAY_SECS - shift`, matching `day_start`.
         let shift = self.utc_offset_secs - self.rollover_secs;
         let today = (now + shift).div_euclid(DAY_SECS);
         let first = today - i64::from(activity_days.max(1)) + 1;
 
         // Every day studied, for the streak; the recent ones fill the activity heatmap.
-        let per_day = self.store.reviews_per_day(0, shift)?;
+        let per_day = self.store.reviews_per_day(0, shift, ids)?;
         let mut activity = vec![0; activity_days.max(1) as usize];
         for &(day, count) in &per_day {
             if let Some(slot) = usize::try_from(day - first).ok().and_then(|i| activity.get_mut(i)) {
@@ -1257,7 +1269,7 @@ impl Inner {
 
         let mut forecast = vec![0; FORECAST_DAYS];
         let (mut new_cards, mut young_cards, mut mature_cards, mut suspended_cards) = (0, 0, 0, 0);
-        for card in &self.cards {
+        for card in self.in_scope(scope) {
             if card.suspended() {
                 suspended_cards += 1;
                 continue;
@@ -1277,7 +1289,7 @@ impl Inner {
             }
         }
 
-        let (recalled_of, recalled) = self.store.recall_since(self.day_start(now) - 29 * DAY_SECS)?;
+        let (recalled_of, recalled) = self.store.recall_since(self.day_start(now) - 29 * DAY_SECS, ids)?;
         Ok(Dashboard {
             activity,
             activity_start: first * DAY_SECS - shift,
@@ -1431,16 +1443,17 @@ impl Inner {
         Ok(state.map(|s| (entries, s)))
     }
 
-    fn today(&self, now: i64) -> Result<TodayStats> {
+    fn today(&self, scope: &StudyScope, now: i64) -> Result<TodayStats> {
         let since = self.day_start(now);
+        let ids = self.scope_ids(scope);
+        let ids = ids.as_deref();
         let unseen = self
-            .cards
-            .iter()
+            .in_scope(scope)
             .filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id))
             .count() as u32;
         Ok(TodayStats {
-            reviewed: self.store.reviews_since(since)?,
-            new_studied: self.store.new_cards_since(since)?,
+            reviewed: self.store.reviews_since(since, ids)?,
+            new_studied: self.store.new_cards_since(since, ids)?,
             new_available: unseen.min(self.new_remaining(now)?),
         })
     }
@@ -1587,7 +1600,7 @@ mod tests {
         // Two days later the first card is due.
         let decks = inner.decks(T0 + 2 * DAY_SECS).unwrap();
         assert_eq!((decks[0].due, decks[0].new), (2, 0));
-        let today = inner.today(T0).unwrap();
+        let today = inner.today(&StudyScope::All, T0).unwrap();
         assert_eq!((today.new_studied, today.new_available), (2, 2));
         assert!(matches!(
             inner.answer("nope", Rating::Good, T0),
@@ -1600,7 +1613,7 @@ mod tests {
         let undone = inner.undo_answer(T0).unwrap().unwrap();
         assert_eq!(undone, card);
         assert!(inner.states.is_empty());
-        assert_eq!(inner.today(T0).unwrap().new_studied, 0);
+        assert_eq!(inner.today(&StudyScope::All, T0).unwrap().new_studied, 0);
         assert!(inner.undo_answer(T0).unwrap().is_none());
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
@@ -1874,7 +1887,7 @@ mod tests {
         inner.answer(&ids[1], Rating::Easy, T0 - DAY_SECS).unwrap();
         inner.answer(&ids[0], Rating::Again, T0 - DAY_SECS + 60).unwrap();
 
-        let d = inner.dashboard(5, T0).unwrap();
+        let d = inner.dashboard(&StudyScope::All, 5, T0).unwrap();
         assert_eq!(d.activity, [0, 0, 1, 2, 0]);
         assert_eq!(inner.day_start(T0) - d.activity_start, 4 * DAY_SECS);
         assert_eq!(d.streak, 2);
@@ -1887,8 +1900,37 @@ mod tests {
         assert_eq!(d.retention, Some(0.0));
 
         inner.answer(&ids[2], Rating::Good, T0).unwrap();
-        let d = inner.dashboard(5, T0).unwrap();
+        let d = inner.dashboard(&StudyScope::All, 5, T0).unwrap();
         assert_eq!((d.activity[4], d.streak), (1, 3));
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn dashboard_and_today_for_one_deck() {
+        let (dir, c) = collection(&[
+            ("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n"),
+            ("a/sub.md", "Q: 3\nA: 3\n"),
+            ("b.md", "Q: 4\nA: 4\n"),
+        ]);
+        let mut inner = c.lock();
+        let id = |deck: &str| inner.cards.iter().find(|c| c.deck == deck).unwrap().parsed.id.clone();
+        let (sub, b) = (id("a/sub"), id("b"));
+        inner.answer(&sub, Rating::Good, T0 - DAY_SECS).unwrap();
+        inner.answer(&b, Rating::Good, T0).unwrap();
+        inner.answer(&b, Rating::Good, T0 + 60).unwrap();
+
+        // A deck takes in its subdecks, and only their reviews.
+        let a = StudyScope::Deck { name: "a".into() };
+        let d = inner.dashboard(&a, 2, T0).unwrap();
+        assert_eq!(d.activity, [1, 0]);
+        assert_eq!((d.new_cards, d.young_cards, d.streak), (2, 1, 1));
+        let today = inner.today(&a, T0).unwrap();
+        assert_eq!((today.reviewed, today.new_studied, today.new_available), (0, 0, 2));
+
+        let d = inner.dashboard(&StudyScope::Deck { name: "b".into() }, 2, T0).unwrap();
+        assert_eq!((d.activity, d.new_cards, d.young_cards), (vec![0, 2], 0, 1));
+        assert_eq!(inner.today(&StudyScope::All, T0).unwrap().reviewed, 2);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1934,14 +1976,14 @@ mod tests {
         let ids: Vec<String> = c.cards(StudyScope::All).into_iter().map(|card| card.id).collect();
         let mut inner = c.lock();
         assert_eq!(inner.decks(T0).unwrap().iter().map(|d| d.new).sum::<u32>(), 1);
-        assert_eq!(inner.today(T0).unwrap().new_available, 1);
+        assert_eq!(inner.today(&StudyScope::All, T0).unwrap().new_available, 1);
         let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
         assert_eq!(card.front, "kept");
         inner.answer(&card.id, Rating::Good, T0).unwrap();
         assert!(inner.next_card(&StudyScope::All, T0).unwrap().is_none());
         let browsed = inner.browse(&StudyScope::All);
         assert_eq!(browsed.iter().map(|c| c.suspended).collect::<Vec<_>>(), [false, true, true]);
-        assert_eq!(inner.dashboard(1, T0).unwrap().suspended_cards, 2);
+        assert_eq!(inner.dashboard(&StudyScope::All, 1, T0).unwrap().suspended_cards, 2);
 
         // Unsuspending edits the file; a front matter tag stays.
         assert_eq!(inner.set_suspended(&ids[1..], false).unwrap(), 1);

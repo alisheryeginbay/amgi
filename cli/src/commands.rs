@@ -37,7 +37,7 @@ fn due_and_new(due: u32, new: u32) -> String {
 }
 
 pub fn status(c: &CardCollection, out: Output, short: bool) -> Result {
-    let today = c.today()?;
+    let today = c.today(StudyScope::All)?;
     // Top-level decks, as the menu bar lists them; their counts include subdecks.
     let decks: Vec<_> = c.decks()?.into_iter().filter(|d| !d.name.contains('/')).collect();
     let due: u32 = decks.iter().map(|d| d.due).sum();
@@ -351,14 +351,32 @@ fn print_info(info: &CardInfo) {
     }
 }
 
-pub fn stats(c: &CardCollection, out: Output, days: u32) -> Result {
+pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>) -> Result {
     let days = days.max(1);
-    let dashboard = c.dashboard(days)?;
-    let today = c.today()?;
+    let scope = match deck.map(|d| d.trim_matches('/')) {
+        None => StudyScope::All,
+        Some(name) => {
+            // The deck or a folder of decks, as `deck:` in a search has them.
+            let below = format!("{name}/");
+            if !c.decks()?.iter().any(|d| d.name == name || d.name.starts_with(&below)) {
+                return Err(format!("no deck named `{name}`; `amgi decks` lists them").into());
+            }
+            StudyScope::Deck { name: name.to_string() }
+        }
+    };
+    let dashboard = c.dashboard(scope.clone(), days)?;
+    let today = c.today(scope.clone())?;
+    let deck = match &scope {
+        StudyScope::All => None,
+        StudyScope::Deck { name } => Some(name.as_str()),
+    };
     if out.json {
-        return print_json(&json!({ "today": today, "dashboard": dashboard }));
+        return print_json(&json!({ "deck": deck, "today": today, "dashboard": dashboard }));
     }
     let field = |name: &str, value: String| println!("{}{value}", dim(pad(name, 11)));
+    if let Some(deck) = deck {
+        field("Deck", bold(deck));
+    }
     field("Today", format!("{}{}", bold(count(today.reviewed, "review", "reviews")), dim(format!(", {} new", today.new_studied))));
     field("Streak", bold(count(dashboard.streak, "day", "days")));
     field(

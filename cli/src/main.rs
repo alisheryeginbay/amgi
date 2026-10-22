@@ -83,6 +83,9 @@ enum Command {
         /// Days of review history to show.
         #[arg(long, default_value_t = 30)]
         days: u32,
+        /// Only this deck and its subdecks, such as `lang/french`.
+        #[arg(long, short)]
+        deck: Option<String>,
     },
 }
 
@@ -106,7 +109,7 @@ fn main() -> ExitCode {
         Command::Info { card } => commands::info(&collection, out, &card.join(" ")),
         Command::Prune { trash } => commands::prune(&collection, out, trash),
         Command::Diff { revs, staged } => commands::diff(&collection, out, &revs, staged),
-        Command::Stats { days } => commands::stats(&collection, out, days),
+        Command::Stats { days, deck } => commands::stats(&collection, out, days, deck.as_deref()),
     };
     match result {
         Ok(code) => code,

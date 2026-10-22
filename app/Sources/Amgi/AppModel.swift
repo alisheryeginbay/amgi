@@ -307,7 +307,7 @@ final class AppModel {
             update(\.tags, collection.tags())
             update(\.tagIcons, try collection.tagIcons())
             update(\.savedViews, try collection.savedViews())
-            update(\.today, try collection.today())
+            update(\.today, try collection.today(scope: .all))
             update(\.dayStart, collection.dayStart())
             update(\.warnings, collection.warnings())
         }
@@ -333,7 +333,7 @@ final class AppModel {
         perform {
             let decks = try collection.decks()
             update(\.decks, decks)
-            update(\.today, try collection.today())
+            update(\.today, try collection.today(scope: .all))
             update(\.dayStart, collection.dayStart())
         }
     }
@@ -360,7 +360,7 @@ final class AppModel {
     /// Statistics are only gathered while the dashboard is showing.
     func loadDashboard() {
         guard let collection else { return }
-        perform { update(\.dashboard, try collection.dashboard(activityDays: Self.activityDays())) }
+        perform { update(\.dashboard, try collection.dashboard(scope: .all, activityDays: Self.activityDays())) }
     }
 
     /// Weeks of activity on the dashboard, one column each.

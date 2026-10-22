@@ -12,12 +12,16 @@ amgi search deck:french is:due   # the search syntax; --view Leeches runs a save
 amgi decks                   # every deck with due, new and total counts
 amgi tags                    # every tag with its card count
 amgi info cards/geography.md:12   # a card's schedule and history, by id, path:line or a search
-amgi stats                   # streak, retention, recent reviews and the next two weeks
+amgi stats                   # streak, retention, recent reviews and the next two weeks; --deck for one deck
 amgi prune                   # files in media that no card links to; --trash moves them to the Trash
 amgi diff                    # cards added, changed and removed since the last commit
 ```
 
 `search` takes the same syntax as the app; see [Searching](/studying#searching).
+
+`stats --deck lang/french` counts only that deck and its subdecks: its cards, its
+reviews, and its streak, which is the days you reviewed any card in it. Today's new cards
+are capped by the collection's daily limit, which every deck shares.
 
 `prune` reads the links in every Markdown file in the collection, including cards
 commented out and decks outside `cards`, so a file any of them shows is kept. It only

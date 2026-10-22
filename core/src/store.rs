@@ -4,8 +4,10 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::types::Value;
+use rusqlite::{Connection, OptionalExtension, Transaction, named_params, params};
 
 use crate::SavedView;
 use crate::scheduler::{Memory, Outcome, Rating, ReviewState};
@@ -125,6 +127,16 @@ fn file_id(path: &Path) -> Option<FileId> {
     fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
 }
 
+/// Keeps the reviews of the cards in `:cards`, or every review when `:all` is set. The
+/// array is bound as a pointer, which SQL reads as `NULL`, hence the separate flag.
+const IN_CARDS: &str = "(:all OR card_id IN rarray(:cards))";
+
+/// `:all` and `:cards` for `IN_CARDS`; `None` keeps every card.
+fn card_list(cards: Option<&[String]>) -> (bool, Rc<Vec<Value>>) {
+    let ids = cards.unwrap_or_default().iter().cloned().map(Value::from).collect();
+    (cards.is_none(), Rc::new(ids))
+}
+
 impl Store {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let mut store = Self::init(Connection::open(path)?)?;
@@ -145,6 +157,8 @@ impl Store {
     }
 
     fn init(conn: Connection) -> rusqlite::Result<Self> {
+        // `rarray(?)`, for queries limited to some cards.
+        rusqlite::vtab::array::load_module(&conn)?;
         // Rollback journal instead of WAL: the database stays a single file, which is
         // safer in synced folders, and one small write per review needs no concurrency.
         // Also converts databases created in WAL mode by earlier versions.
@@ -318,39 +332,45 @@ impl Store {
     }
 
     /// Number of new cards first reviewed at or after `since`.
-    pub fn new_cards_since(&self, since: i64) -> rusqlite::Result<u32> {
+    pub fn new_cards_since(&self, since: i64, cards: Option<&[String]>) -> rusqlite::Result<u32> {
+        let (all, ids) = card_list(cards);
         self.conn.query_row(
-            "SELECT COUNT(*) FROM review_log WHERE was_new AND reviewed_at >= ?1",
-            [since],
+            &format!("SELECT COUNT(*) FROM review_log WHERE was_new AND reviewed_at >= :since AND {IN_CARDS}"),
+            named_params! { ":since": since, ":all": all, ":cards": ids },
             |r| r.get(0),
         )
     }
 
     /// Review counts per day at or after `since`, where day `n` starts at
     /// `n * 86400 - shift` seconds. Days without reviews are absent.
-    pub fn reviews_per_day(&self, since: i64, shift: i64) -> rusqlite::Result<Vec<(i64, u32)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT (reviewed_at + ?2) / 86400 AS day, COUNT(*) FROM review_log
-             WHERE rating > 0 AND reviewed_at >= ?1 GROUP BY day ORDER BY day",
-        )?;
-        stmt.query_map([since, shift], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
+    pub fn reviews_per_day(&self, since: i64, shift: i64, cards: Option<&[String]>) -> rusqlite::Result<Vec<(i64, u32)>> {
+        let (all, ids) = card_list(cards);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT (reviewed_at + :shift) / 86400 AS day, COUNT(*) FROM review_log
+             WHERE rating > 0 AND reviewed_at >= :since AND {IN_CARDS} GROUP BY day ORDER BY day"
+        ))?;
+        stmt.query_map(named_params! { ":since": since, ":shift": shift, ":all": all, ":cards": ids }, |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
     }
 
     /// Reviews of already-seen cards at least a day after the previous review, at or
     /// after `since`, and how many of them were not rated Again.
-    pub fn recall_since(&self, since: i64) -> rusqlite::Result<(u32, u32)> {
+    pub fn recall_since(&self, since: i64, cards: Option<&[String]>) -> rusqlite::Result<(u32, u32)> {
+        let (all, ids) = card_list(cards);
         self.conn.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(rating > 1), 0) FROM review_log
-             WHERE rating > 0 AND NOT was_new AND elapsed_days >= 1 AND reviewed_at >= ?1",
-            [since],
+            &format!(
+                "SELECT COUNT(*), COALESCE(SUM(rating > 1), 0) FROM review_log
+                 WHERE rating > 0 AND NOT was_new AND elapsed_days >= 1 AND reviewed_at >= :since AND {IN_CARDS}"
+            ),
+            named_params! { ":since": since, ":all": all, ":cards": ids },
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
     }
 
-    pub fn reviews_since(&self, since: i64) -> rusqlite::Result<u32> {
+    pub fn reviews_since(&self, since: i64, cards: Option<&[String]>) -> rusqlite::Result<u32> {
+        let (all, ids) = card_list(cards);
         self.conn.query_row(
-            "SELECT COUNT(*) FROM review_log WHERE rating > 0 AND reviewed_at >= ?1",
-            [since],
+            &format!("SELECT COUNT(*) FROM review_log WHERE rating > 0 AND reviewed_at >= :since AND {IN_CARDS}"),
+            named_params! { ":since": since, ":all": all, ":cards": ids },
             |r| r.get(0),
         )
     }
@@ -517,9 +537,9 @@ mod tests {
         assert_eq!((s2.reps, s2.lapses), (2, 1));
         assert_eq!(store.state("abc").unwrap(), Some(s2));
         assert_eq!(store.states().unwrap().len(), 1);
-        assert_eq!(store.new_cards_since(0).unwrap(), 1);
-        assert_eq!(store.reviews_since(0).unwrap(), 2);
-        assert_eq!(store.reviews_since(5000).unwrap(), 1);
+        assert_eq!(store.new_cards_since(0, None).unwrap(), 1);
+        assert_eq!(store.reviews_since(0, None).unwrap(), 2);
+        assert_eq!(store.reviews_since(5000, None).unwrap(), 1);
         let log = store.reviews("abc").unwrap();
         assert_eq!(log.iter().map(|r| r.rating).collect::<Vec<_>>(), [Rating::Good, Rating::Again]);
         assert!(log[0].was_new && !log[1].was_new);
@@ -542,7 +562,7 @@ mod tests {
 
         store.undo_review("abc", r2, Some(s1)).unwrap();
         assert_eq!(store.state("abc").unwrap(), Some(s1));
-        assert_eq!(store.reviews_since(0).unwrap(), 1);
+        assert_eq!(store.reviews_since(0, None).unwrap(), 1);
         assert_eq!(store.last_review_state("abc").unwrap(), Some(ReviewState::New));
 
         store.undo_review("abc", r1, None).unwrap();
@@ -570,9 +590,9 @@ mod tests {
         let rows: i64 = store.conn.query_row("SELECT COUNT(*) FROM review_log", [], |r| r.get(0)).unwrap();
         assert_eq!(rows, 3);
         assert_eq!(store.reviews("abc").unwrap(), [review, relearned]);
-        assert_eq!(store.reviews_since(0).unwrap(), 2);
-        assert_eq!(store.new_cards_since(0).unwrap(), 2);
-        assert_eq!(store.reviews_per_day(0, 0).unwrap(), [(0, 2)]);
+        assert_eq!(store.reviews_since(0, None).unwrap(), 2);
+        assert_eq!(store.new_cards_since(0, None).unwrap(), 2);
+        assert_eq!(store.reviews_per_day(0, 0, None).unwrap(), [(0, 2)]);
         assert_eq!(store.last_review_state("abc").unwrap(), Some(ReviewState::New));
     }
 
