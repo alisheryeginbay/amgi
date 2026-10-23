@@ -5,7 +5,7 @@
   import { clozeGap, oneLine, renderInline } from "../lib/markdown";
   import type { StudyCard } from "../lib/types";
 
-  /** A card to study, a sheet lifted off the window. Once `revealed`, a basic card's answer
+  /** A card to study, drawn on the sheet `Study` lays under it. Once `revealed`, a basic card's answer
    *  fades in below its question, which stays where it is, and a cloze's gap opens to its
    *  answer in the sentence. An `instant` reveal, from a key, shows the answer at once. */
   let {
@@ -143,10 +143,6 @@
     display: flex;
     flex-direction: column;
     min-height: 340px;
-    /* Rounded to sit with the glass answer buttons below it. */
-    border-radius: 14px;
-    background: var(--card-background);
-    box-shadow: var(--card-shadow);
   }
 
   .layers {

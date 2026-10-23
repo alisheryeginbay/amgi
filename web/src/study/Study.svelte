@@ -125,11 +125,14 @@
           <div class="bar" style:transform="scaleX({progress})"></div>
         </div>
       {/if}
-      {#key deal}
-        <div class="stage" in:dealIn>
-          <Flashcard {card} {revealed} {instant} onreveal={() => post({ type: "reveal", via: "pointer" })} />
-        </div>
-      {/key}
+      <!-- The sheet stays put while what's on it is dealt anew, so it never blinks. -->
+      <div class="sheet">
+        {#key deal}
+          <div class="stage" in:dealIn>
+            <Flashcard {card} {revealed} {instant} onreveal={() => post({ type: "reveal", via: "pointer" })} />
+          </div>
+        {/key}
+      </div>
     </div>
   {/if}
 </main>
@@ -153,8 +156,13 @@
     margin: 0 auto;
   }
 
-  .stage {
+  /* The card's sheet, lifted off the window; rounded to sit with the glass answer
+     buttons below it. */
+  .sheet {
     min-width: 0;
+    border-radius: 14px;
+    background: var(--card-background);
+    box-shadow: var(--card-shadow);
   }
 
   /* Today's progress, a thin track above the card. */
