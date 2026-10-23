@@ -65,3 +65,14 @@ test("lists a side's images, leaving out sounds and paths outside the collection
   const source = "A tree\n![oak](oak.png)\n![](birdsong.mp3)\n![](../../outside.png)";
   assert.deepEqual(imageSources(source, "plants/trees.md"), ["amgi://collection/plants/oak.png"]);
 });
+
+test("keeps a formula with a mistake on one line in table cells", () => {
+  const cell = renderInline(oneLine("Area\n$$$\nx^2 + y\n$$$\nof a square"), true);
+  assert.ok(!cell.includes("pre-line"));
+  assert.ok(!cell.includes("\n"));
+  assert.ok(cell.includes(`<span class="temml-error" style="color:#b22222">$$$ x^2 + y $$</span>`));
+  // On the card itself, the error keeps Temml's message.
+  assert.ok(renderInline("$\\frac{$").includes("ParseError"));
+  // Temml throws on some mistakes even when asked not to.
+  assert.equal(renderInline("$x^$"), `<span class="temml-error" style="color:#b22222">$x^$</span>`);
+});

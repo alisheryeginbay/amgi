@@ -100,13 +100,23 @@ function renderer(compact: boolean): Marked {
         },
         renderer(token) {
           const display = (token.display as boolean) && !compact;
-          const html = temml.renderToString(token.tex as string, {
+          const options = {
             displayMode: display,
             // Groups that end after a relation or operator, where TeX would break a line.
-            wrap: display || compact ? "none" : "tex",
+            wrap: display || compact ? ("none" as const) : ("tex" as const),
             // Mistakes show in red with the TeX as written, rather than failing the card.
-            throwOnError: false,
-          });
+            // In a cell they throw, to be caught below.
+            throwOnError: compact,
+          };
+          let html: string;
+          try {
+            html = temml.renderToString(token.tex as string, options);
+          } catch {
+            // Temml's own error spans several lines, which would spill out of a table row,
+            // so a cell shows just the TeX as written. Some mistakes, like `x^`, throw
+            // whatever the option.
+            return `<span class="temml-error" style="color:#b22222">${escapeHTML(token.raw as string)}</span>`;
+          }
           return display || compact ? html : breakable(html);
         },
       },
