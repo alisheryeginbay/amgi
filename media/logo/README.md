@@ -15,6 +15,7 @@ with a yellow centre.
 | `amgi-horizontal-dark.svg` | The same with a white wordmark, for dark backgrounds. |
 | `amgi-horizontal-mono.svg` | The lockup in navy alone. |
 | `amgi-app-icon.svg` | Flat macOS app icon: Apple's 824 px rounded square on a 1024 canvas, white. The app itself uses `app/Amgi.icon`, the layered Liquid Glass version. |
+| `amgi-social-preview.svg` | 1280×640 card for GitHub and social links: the lockup and tagline on cream, inside GitHub's 80 px safe border. |
 | `png/` | PNG exports of the above. |
 
 ## Colour
