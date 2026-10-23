@@ -4,18 +4,62 @@
   import Flashcard from "./Flashcard.svelte";
   import { app, commands, post } from "../lib/app.svelte";
   import { player } from "../lib/audio.svelte";
-  import { soundSources } from "../lib/markdown";
-  import type { StudyCard } from "../lib/types";
+  import { imageSources, soundSources } from "../lib/markdown";
+  import type { StudyCard, StudyState } from "../lib/types";
 
-  const card = $derived(app.study?.card ?? null);
-  const revealed = $derived(app.study?.revealed ?? false);
-  const instant = $derived(app.study?.instant ?? false);
+  // A new card waits for its images, so it shows whole instead of growing as they
+  // arrive. The last card stays up meanwhile, but no longer than this.
+  const IMAGE_WAIT = 100;
+
+  let shown = $state.raw<StudyState | null>(untrack(() => app.study));
+  /** Whether a new card is waiting for its images; keys wait with it. */
+  let pending = false;
+  let ticket = 0;
+  /** The images being loaded, held so they stay cached until the card shows. */
+  let preloaded: HTMLImageElement[] = [];
+
+  function preload(src: string) {
+    const image = new Image();
+    image.src = src;
+    preloaded.push(image);
+    return image.decode().catch(() => {});
+  }
+
+  $effect(() => {
+    const next = app.study;
+    const mine = ++ticket;
+    untrack(() => {
+      const card = next?.card;
+      // The card on screen changing, such as revealed, has its images already.
+      const sources =
+        card && card.id !== shown?.card?.id
+          ? [...new Set([...imageSources(card.front, card.path), ...imageSources(card.back, card.path)])]
+          : [];
+      if (sources.length === 0) {
+        pending = false;
+        shown = next;
+        return;
+      }
+      pending = true;
+      preloaded = [];
+      const wait = new Promise((resolve) => setTimeout(resolve, IMAGE_WAIT));
+      Promise.race([Promise.all(sources.map(preload)), wait]).then(() => {
+        if (mine !== ticket) return;
+        pending = false;
+        shown = next;
+      });
+    });
+  });
+
+  const card = $derived(shown?.card ?? null);
+  const revealed = $derived(shown?.revealed ?? false);
+  const instant = $derived(shown?.instant ?? false);
 
   /** Today's share studied: answers given, out of those and the cards still to study. */
-  const reviewed = $derived(app.study?.reviewed ?? 0);
-  const total = $derived(reviewed + (app.study?.remaining ?? 0));
+  const reviewed = $derived(shown?.reviewed ?? 0);
+  const total = $derived(reviewed + (shown?.remaining ?? 0));
   const progress = $derived(total > 0 ? reviewed / total : 0);
-  const showProgress = $derived(app.study?.progress ?? true);
+  const showProgress = $derived(shown?.progress ?? true);
 
   // Each card is dealt anew, even the same card again, rather than fading back to its
   // question in place. New intervals for the card on screen keep it where it is.
@@ -69,7 +113,7 @@
     const key = card ? `${card.id} ${revealed}` : "";
     if (key === played) return;
     played = key;
-    untrack(() => (app.study?.autoplay && key ? playSounds() : player.stop()));
+    untrack(() => (shown?.autoplay && key ? playSounds() : player.stop()));
   });
 
   const replay = () => playSounds(true);
@@ -85,7 +129,7 @@
   /** Space shows the answer, 1–4 rate the card, R replays its sounds. The app forwards
    *  these keys while focus is elsewhere, so they work without the page taking focus. */
   function handleKey(key: string): boolean {
-    if (!card) return false;
+    if (!card || pending) return false;
     key = key.toLowerCase();
     if (key === " " && !revealed) {
       post({ type: "reveal", via: "key" });

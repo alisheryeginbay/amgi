@@ -367,13 +367,20 @@ private final class SchemeHandler: NSObject, WKURLSchemeHandler {
         else { return .failure(status(404, for: url)) }
         defer { try? handle.close() }
 
+        // Files can change on disk while the app runs, so each use is checked against the
+        // file's size and modification time, and an unchanged one isn't read again.
+        let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        let tag = "\"\(size)-\(Int64((modified?.timeIntervalSince1970 ?? 0) * 1000))\""
         var headers = [
             "Content-Type": mimeType(file.pathExtension),
             "Accept-Ranges": "bytes",
             "Access-Control-Allow-Origin": "*",
-            // Files can change on disk while the app runs.
             "Cache-Control": "no-cache",
+            "ETag": tag,
         ]
+        if request.value(forHTTPHeaderField: "If-None-Match") == tag {
+            return .success(HTTPURLResponse(url: url, statusCode: 304, httpVersion: "HTTP/1.1", headerFields: headers)!, Data())
+        }
         if request.httpMethod == "HEAD" {
             headers["Content-Length"] = "\(size)"
             return .success(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!, Data())

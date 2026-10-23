@@ -334,6 +334,11 @@ export function soundSources(source: string, cardPath: string): string[] {
   );
 }
 
+/** Every image shown from `source`, in order. */
+export function imageSources(source: string, cardPath: string): string[] {
+  return parseBlocks(source, cardPath).flatMap((block) => (block.type === "image" && block.src ? [block.src] : []));
+}
+
 /** URL of a media link written in a card. Relative paths are relative to the deck
  *  file and must stay inside the collection, served from `amgi://collection/`. */
 export function resolveMedia(path: string, angled: boolean, cardPath: string): string | null {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { clozeGap, GAP, highlight, loadLanguage, oneLine, renderInline, splitFences } from "./markdown.ts";
+import { clozeGap, GAP, highlight, imageSources, loadLanguage, oneLine, renderInline, splitFences } from "./markdown.ts";
 
 test("finds the gap a cloze's answer fills", () => {
   const gap = clozeGap("The capital of **[…]** is Paris.", "The capital of **France** is Paris.");
@@ -59,4 +59,9 @@ test("marks a cloze's gap in code", async () => {
   assert.doesNotMatch(html, /[\uE001\uE002]/);
   assert.equal(highlight("a \uE001<b>\uE002 c", ""), 'a <span class="gap">&lt;b&gt;</span> c');
   assert.equal(renderInline("`f(\uE001x\uE002)`"), "<code>f(<strong>x</strong>)</code>");
+});
+
+test("lists a side's images, leaving out sounds and paths outside the collection", () => {
+  const source = "A tree\n![oak](oak.png)\n![](birdsong.mp3)\n![](../../outside.png)";
+  assert.deepEqual(imageSources(source, "plants/trees.md"), ["amgi://collection/plants/oak.png"]);
 });
