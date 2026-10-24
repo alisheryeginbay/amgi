@@ -102,7 +102,7 @@ pub struct ParseResult {
     pub cards: Vec<ParsedCard>,
     pub warnings: Vec<ParseWarning>,
     /// Default tags from the front matter.
-    deck_tags: Vec<String>,
+    pub(crate) deck_tags: Vec<String>,
     /// The deck file's folder from the collection root, for media links in ids.
     dir: Option<PathBuf>,
 }

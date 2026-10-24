@@ -47,6 +47,7 @@ the collection root, and lists what breaks them as `path:line:column: message`. 
 [lint]
 media-links = "absolute"
 missing-media = true
+tags = true
 ```
 
 - `media-links`: `"absolute"`, the default, wants media linked from the collection root,
@@ -56,10 +57,25 @@ missing-media = true
   out of the collection, since those don't show. When another file has the name, such as
   `photo.jpeg` for `photo.jpg` or the same file in another folder, it's suggested. These
   aren't fixed for you; `false` turns the rule off.
+- `tags`: on by default, lists a tag given twice on a card, and a tag written with
+  different capitals across the collection, such as `#Korean` and `#korean`. `--fix`
+  drops the repeat and writes the most used spelling; a deck's front matter tags are
+  listed but left to you. `false` turns the rule off.
 
 Without `amgi.toml`, every rule has its default. Links in code blocks and code spans are
 text, so they're left alone. `--fix` never changes a card's id: a file whose cards would
 get new ids, and so lose their history, is left as it is and listed.
+
+## Format
+
+`amgi fmt` rewrites the deck files in one layout: no trailing spaces or Windows line
+endings, each card a blank line after the one before, a card's tags a space apart, and
+one newline at the end of the file. Code blocks keep their blank lines. `amgi fmt
+--check` lists the files that would change instead, and exits 1 if there are any, for a
+git hook.
+
+The cards stay exactly the same, ids included, so no history is lost: a file whose
+cards would change isn't written, and is listed.
 
 ## Changes since a commit
 

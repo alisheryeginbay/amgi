@@ -5,6 +5,7 @@
 //! [lint]
 //! media-links = "absolute"  # media links start at the collection root, `@/media/…`
 //! missing-media = true      # links to files that don't exist
+//! tags = true               # a tag twice on a card, or spelled two ways
 //! ```
 //!
 //! Without the file, or a rule in it, each rule has its default. Links inside code
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{media, parser, CARDS_DIR};
+use crate::{format, media, parser, CARDS_DIR};
 
 /// The collection's settings file, at its root.
 pub const CONFIG_FILE: &str = "amgi.toml";
@@ -35,11 +36,14 @@ pub struct Rules {
     pub media_links: MediaLinks,
     /// Report links to files that don't exist.
     pub missing_media: bool,
+    /// Report a tag given twice on a card, and a tag spelled with different capitals
+    /// across the collection.
+    pub tags: bool,
 }
 
 impl Default for Rules {
     fn default() -> Self {
-        Rules { media_links: MediaLinks::default(), missing_media: true }
+        Rules { media_links: MediaLinks::default(), missing_media: true, tags: true }
     }
 }
 
@@ -80,6 +84,13 @@ pub struct Problem {
     pub message: String,
     /// Whether `run` with `fix` fixes it.
     pub fixable: bool,
+}
+
+/// What a check needs to know about the whole collection.
+struct Collection {
+    files: Files,
+    /// The most used spelling of each tag written more than one way, by its lowercase.
+    spellings: HashMap<String, String>,
 }
 
 /// The files in the collection, to tell whether a link's file exists and suggest
@@ -134,15 +145,15 @@ pub(crate) fn run(root: &Path, types: &parser::NoteTypes, config: &Config, fix: 
         crate::collect_markdown(&cards, &mut decks)?;
     }
     decks.sort();
-    let files = Files::read(root);
+    let texts = decks.iter().map(fs::read_to_string).collect::<std::io::Result<Vec<_>>>()?;
+    let collection = Collection { files: Files::read(root), spellings: spellings(&texts) };
     let mut problems = Vec::new();
-    for file in decks {
-        let path = crate::relative(root, &file);
-        let text = fs::read_to_string(&file)?;
-        let (fixed, mut found) = check(&text, &path, &config.lint, &files);
+    for (file, text) in decks.iter().zip(texts) {
+        let path = crate::relative(root, file);
+        let (fixed, mut found) = check(&text, &path, &config.lint, &collection);
         if fix && fixed != text {
             if same_ids(&text, &fixed, types, &path) {
-                fs::write(&file, fixed)?;
+                fs::write(file, fixed)?;
             } else {
                 found.iter_mut().for_each(|p| p.fixable = false);
                 found.insert(0, Problem {
@@ -167,13 +178,67 @@ fn same_ids(before: &str, after: &str, types: &parser::NoteTypes, path: &str) ->
     ids(before) == ids(after)
 }
 
+/// The tags of each tag line that ends a card in `lines`, by line index.
+fn card_tag_lines(lines: &[&str]) -> HashMap<usize, Vec<String>> {
+    let mut fences = parser::Fences::default();
+    let mut out = HashMap::new();
+    for (i, line) in lines.iter().enumerate() {
+        let in_code = fences.inside();
+        fences.step(line);
+        if !in_code && !fences.inside() && let Some(tags) = format::ends_card_tags(lines, i) {
+            out.insert(i, tags);
+        }
+    }
+    out
+}
+
+/// The line index of `tags = …` in the front matter of the deck file `lines`.
+fn front_matter_tags(lines: &[&str]) -> Option<usize> {
+    if lines.first()?.trim() != "+++" {
+        return None;
+    }
+    let end = lines[1..].iter().position(|l| l.trim() == "+++")? + 1;
+    (1..end).find(|&i| lines[i].trim_start().starts_with("tags"))
+}
+
+/// The most used spelling of each tag the deck files `texts` write in more than one
+/// way, on cards or in front matter, by its lowercase. A tie goes to the lowercase one,
+/// then to the first in sort order.
+fn spellings(texts: &[String]) -> HashMap<String, String> {
+    let mut counts: HashMap<String, HashMap<String, u32>> = HashMap::new();
+    for text in texts {
+        let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+        let deck_tags = parser::parse(text).deck_tags;
+        for tag in card_tag_lines(&lines).into_values().flatten().chain(deck_tags) {
+            *counts.entry(tag.to_lowercase()).or_default().entry(tag).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, spellings)| spellings.len() > 1)
+        .map(|(lower, spellings)| {
+            let best = spellings
+                .into_iter()
+                .max_by(|(a, x), (b, y)| x.cmp(y).then((a == &lower).cmp(&(b == &lower))).then(b.cmp(a)))
+                .map(|(spelling, _)| spelling)
+                .unwrap_or_default();
+            (lower, best)
+        })
+        .collect()
+}
+
 /// The problems in the deck file `text` at `path`, and the text with the fixable ones
 /// fixed.
-fn check(text: &str, path: &str, rules: &Rules, files: &Files) -> (String, Vec<Problem>) {
+fn check(text: &str, path: &str, rules: &Rules, collection: &Collection) -> (String, Vec<Problem>) {
     let dir = Path::new(path).parent().unwrap_or(Path::new(""));
+    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    let tag_lines = if rules.tags { card_tag_lines(&lines) } else { HashMap::new() };
+    let deck_tags_line = front_matter_tags(&lines).filter(|_| rules.tags);
     let mut problems = Vec::new();
     let mut out = String::with_capacity(text.len());
     let mut fences = parser::Fences::default();
+    // A card's tags so far, lowercased, across its tag lines.
+    let mut seen: Vec<String> = Vec::new();
     for (i, line) in text.split_inclusive('\n').enumerate() {
         let in_code = fences.inside();
         fences.step(line.trim_end());
@@ -191,6 +256,51 @@ fn check(text: &str, path: &str, rules: &Rules, files: &Files) -> (String, Vec<P
                 fixable,
             });
         };
+        if let Some(tags) = tag_lines.get(&i) {
+            if i == 0 || !tag_lines.contains_key(&(i - 1)) {
+                seen.clear();
+            }
+            let mut kept = Vec::new();
+            let mut changed = false;
+            let mut from = 0;
+            for tag in tags {
+                let column = line[from..].find(&format!("#{tag}")).map_or(0, |at| from + at);
+                from = column + tag.len() + 1;
+                let lower = tag.to_lowercase();
+                if seen.contains(&lower) {
+                    report(column, "tags", format!("`#{tag}` is already on this card"), true);
+                    changed = true;
+                    continue;
+                }
+                seen.push(lower.clone());
+                match collection.spellings.get(&lower).filter(|best| *best != tag) {
+                    Some(best) => {
+                        report(column, "tags", format!("`#{tag}` is written `#{best}` elsewhere"), true);
+                        kept.push(best.clone());
+                        changed = true;
+                    }
+                    None => kept.push(tag.clone()),
+                }
+            }
+            match (changed, kept.is_empty()) {
+                (false, _) => out.push_str(line),
+                (true, true) => {}
+                (true, false) => {
+                    let ending = &line[line.trim_end().len()..];
+                    out.push_str(&kept.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" "));
+                    out.push_str(if ending.is_empty() { "" } else { "\n" });
+                }
+            }
+            continue;
+        }
+        if deck_tags_line == Some(i) {
+            for tag in parser::parse(text).deck_tags {
+                if let Some(best) = collection.spellings.get(&tag.to_lowercase()).filter(|best| **best != tag) {
+                    let column = line.find(&tag).unwrap_or(0);
+                    report(column, "tags", format!("deck tag `{tag}` is written `{best}` elsewhere"), false);
+                }
+            }
+        }
         let fixed = each_link(line, |column, dest, angled| {
             let target = media::target(dest, angled);
             if dest.is_empty() || media::is_url(&target) {
@@ -203,8 +313,8 @@ fn check(text: &str, path: &str, rules: &Rules, files: &Files) -> (String, Vec<P
                 }
                 return None;
             };
-            if rules.missing_media && !files.exists(&rooted) {
-                let message = match files.like(&rooted) {
+            if rules.missing_media && !collection.files.exists(&rooted) {
+                let message = match collection.files.like(&rooted) {
                     [] => format!("`{dest}` doesn't exist"),
                     [one] => format!("`{dest}` doesn't exist; did you mean `@/{one}`?"),
                     more => format!("`{dest}` doesn't exist; {} files have its name, such as `@/{}`", more.len(), more[0]),
@@ -273,9 +383,9 @@ mod tests {
     use super::*;
 
     /// A collection holding `files`, removed when dropped.
-    struct Collection(PathBuf);
+    struct TempCollection(PathBuf);
 
-    impl Collection {
+    impl TempCollection {
         fn new(files: &[(&str, &str)]) -> Self {
             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -286,11 +396,11 @@ mod tests {
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
                 fs::write(path, text).unwrap();
             }
-            Collection(dir)
+            TempCollection(dir)
         }
     }
 
-    impl Drop for Collection {
+    impl Drop for TempCollection {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
@@ -309,8 +419,9 @@ mod tests {
     type Found = Vec<(u32, u32, &'static str, String, bool)>;
 
     fn lint_with(text: &str, path: &str, rules: &Rules) -> (String, Found) {
-        let collection = Collection::new(MEDIA);
-        let (fixed, problems) = check(text, path, rules, &Files::read(&collection.0));
+        let collection = TempCollection::new(MEDIA);
+        let context = Collection { files: Files::read(&collection.0), spellings: spellings(&[text.to_string()]) };
+        let (fixed, problems) = check(text, path, rules, &context);
         (fixed, problems.into_iter().map(|p| (p.line, p.column, p.rule, p.message, p.fixable)).collect())
     }
 
@@ -375,19 +486,62 @@ mod tests {
 
     #[test]
     fn rules_come_from_amgi_toml() {
-        let config = |text: &str| toml::from_str::<Config>(text).map(|c| (c.lint.media_links, c.lint.missing_media)).map_err(|e| e.to_string());
-        assert_eq!(config(""), Ok((MediaLinks::Absolute, true)));
-        assert_eq!(config("[lint]\nmedia-links = \"any\"\nmissing-media = false"), Ok((MediaLinks::Any, false)));
+        let config = |text: &str| {
+            let rules = toml::from_str::<Config>(text).map_err(|e| e.to_string())?.lint;
+            Ok::<_, String>((rules.media_links, rules.missing_media, rules.tags))
+        };
+        assert_eq!(config(""), Ok((MediaLinks::Absolute, true, true)));
+        assert_eq!(config("[lint]\nmedia-links = \"any\"\nmissing-media = false\ntags = false"), Ok((MediaLinks::Any, false, false)));
         assert!(config("[lint]\nmedia-link = \"any\"").unwrap_err().contains("unknown field"));
         assert!(config("[lint]\nmedia-links = \"relative\"").is_err());
-        let off = Rules { media_links: MediaLinks::Any, missing_media: false };
+        let off = Rules { media_links: MediaLinks::Any, missing_media: false, tags: false };
         let text = "Q: ![](../media/gone.png)\nA: b\n";
         assert_eq!(lint_with(text, "cards/a.md", &off), (text.to_string(), vec![]));
     }
 
     #[test]
+    fn tags_are_given_once_and_spelled_one_way() {
+        let text = "+++\ntags = [\"Korean\"]\n+++\n\n\
+                    Q: a\nA: b\n#korean #verbs #Verbs\n#verbs\n\n\
+                    Q: c\nA: d\n#korean\n\n\
+                    Q: e\nA: f\n#Korean   #korean\nC: [g]\n#korean\n";
+        let (fixed, problems) = lint(text, "cards/a.md");
+        assert_eq!(
+            fixed,
+            "+++\ntags = [\"Korean\"]\n+++\n\n\
+             Q: a\nA: b\n#korean #verbs\n\n\
+             Q: c\nA: d\n#korean\n\n\
+             Q: e\nA: f\n#korean\nC: [g]\n#korean\n"
+        );
+        let tags = "tags";
+        assert_eq!(
+            problems,
+            [
+                (2, 10, tags, "deck tag `Korean` is written `korean` elsewhere".into(), false),
+                (7, 16, tags, "`#Verbs` is already on this card".into(), true),
+                (8, 1, tags, "`#verbs` is already on this card".into(), true),
+                (16, 1, tags, "`#Korean` is written `#korean` elsewhere".into(), true),
+                (16, 11, tags, "`#korean` is already on this card".into(), true),
+            ]
+        );
+        // Spelled one way, tags are left alone; a `#` line followed by text isn't tags.
+        let text = "Q: a\nA: b\n#Korean\n\nQ: c\nA: #korean #KOREAN\nmore\n";
+        assert_eq!(lint(text, "cards/a.md"), (text.to_string(), vec![]));
+    }
+
+    #[test]
+    fn the_most_used_spelling_wins() {
+        let texts = ["Q: a\nA: b\n#Go #go\n\nQ: c\nA: d\n#Go #Rust\n".to_string(), "+++\ntags = [\"rust\", \"RUST\"]\n+++\n".to_string()];
+        let spellings = spellings(&texts);
+        assert_eq!(spellings.get("go").map(String::as_str), Some("Go"));
+        // One each: the lowercase one.
+        assert_eq!(spellings.get("rust").map(String::as_str), Some("rust"));
+        assert_eq!(spellings.len(), 2);
+    }
+
+    #[test]
     fn fix_writes_the_files() {
-        let collection = Collection::new(&[("media/c.png", ""), ("cards/a.md", "Q: ![](../media/c.png)\nA: x\n")]);
+        let collection = TempCollection::new(&[("media/c.png", ""), ("cards/a.md", "Q: ![](../media/c.png)\nA: x\n")]);
         let problems = run(&collection.0, &parser::NoteTypes::default(), &Config::default(), true).unwrap();
         assert_eq!((problems.len(), problems[0].fixable), (1, true));
         assert_eq!(fs::read_to_string(collection.0.join("cards/a.md")).unwrap(), "Q: ![](@/media/c.png)\nA: x\n");
