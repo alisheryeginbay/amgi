@@ -69,10 +69,28 @@ amgi diff                    # since the last commit, as the files on disk are n
 amgi diff --staged           # what the next commit holds
 amgi diff main~5             # since another commit
 amgi diff v1 v2              # between two commits
+amgi diff --check            # exits 1 if cards with review history are removed
+amgi diff --reviewed         # only the removed cards with review history
 ```
 
-`--json` lists `added`, `removed` and `changed` cards; each changed one has the card
-`before` and `changes`, any of `question`, `answer`, `tags` and `deck`.
+A removed card that you've reviewed shows how many reviews it has. Its history stays in
+the database, but no card uses it any more, as when a question is edited. `--check` exits
+1 when that happens, to catch it before a commit; moving cards, fixing answers and
+changing tags keep their history, so they pass. `--reviewed` lists only those cards,
+for when a long diff hides them.
+
+`--json` lists `added`, `removed` and `changed` cards; each removed one has its number of
+`reviews`, and each changed one has the card `before` and `changes`, any of `question`,
+`answer`, `tags` and `deck`.
+
+This git hook (save it as `.git/hooks/pre-commit` in the collection's repository and make
+it executable) stops a commit that would leave review history unused, and shows which
+cards. Commit with `--no-verify` when that's what you meant.
+
+```sh
+#!/bin/sh
+amgi diff --staged --check
+```
 
 This git hook (save it as `.git/hooks/prepare-commit-msg` in the collection's repository
 and make it executable) starts each commit message with what the commit does to the

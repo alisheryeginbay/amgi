@@ -331,6 +331,15 @@ impl Store {
         tx.commit()
     }
 
+    /// How many reviews each of `ids` has, resets left out; ids without any are left out.
+    pub fn review_counts(&self, ids: &[String]) -> rusqlite::Result<HashMap<String, u32>> {
+        let ids = Rc::new(ids.iter().cloned().map(Value::from).collect::<Vec<_>>());
+        self.conn
+            .prepare("SELECT card_id, COUNT(*) FROM review_log WHERE rating > 0 AND card_id IN rarray(?1) GROUP BY card_id")?
+            .query_map([ids], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect()
+    }
+
     /// Move each card's history from its first id to its second, for cards whose id
     /// changed. A card with history under both keeps all its reviews and the state of
     /// the latest. Returns how many cards had history to move.

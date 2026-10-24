@@ -489,7 +489,7 @@ pub fn prune(c: &CardCollection, out: Output, trash: bool) -> Result {
     Ok(ExitCode::SUCCESS)
 }
 
-pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool) -> Result {
+pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool, check: bool, only_reviewed: bool) -> Result {
     let head = || Source::Rev("HEAD".into());
     let current = if staged { Source::Staged } else { Source::Disk };
     let (from, to) = match revs {
@@ -499,18 +499,42 @@ pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool) -> R
         _ => return Err("--staged compares against one revision, not two".into()),
     };
     let root = c.root();
-    let changes = diff::compare(diff::cards(&diff::files(&root, &from)?), diff::cards(&diff::files(&root, &to)?));
+    let mut changes = diff::compare(diff::cards(&diff::files(&root, &from)?), diff::cards(&diff::files(&root, &to)?));
+    // History under a removed card's id, or its id from before media links were resolved.
+    let ids: Vec<String> = changes.removed.iter().flat_map(|card| [Some(card.id.clone()), card.old_id.clone()]).flatten().collect();
+    let counts = c.review_counts(&ids)?;
+    let reviews = |card: &diff::Card| {
+        [Some(&card.id), card.old_id.as_ref()].into_iter().flatten().filter_map(|id| counts.get(id)).sum::<u32>()
+    };
+    if only_reviewed {
+        changes.added.clear();
+        changes.changed.clear();
+        changes.removed.retain(|card| reviews(card) > 0);
+    }
+    let reviewed = changes.removed.iter().filter(|card| reviews(card) > 0).count() as u32;
+    let code = if check && reviewed > 0 { ExitCode::FAILURE } else { ExitCode::SUCCESS };
     if out.json {
-        return print_json(&json!({
+        let removed = changes
+            .removed
+            .iter()
+            .map(|card| {
+                let mut value = serde_json::to_value(card)?;
+                value["reviews"] = json!(reviews(card));
+                Ok(value)
+            })
+            .collect::<std::result::Result<Vec<_>, serde_json::Error>>()?;
+        print_json(&json!({
             "from": from.label(),
             "to": to.label(),
             "added": changes.added,
-            "removed": changes.removed,
+            "removed": removed,
             "changed": changes.changed,
-        }));
+        }))?;
+        return Ok(code);
     }
     if changes.is_empty() {
-        println!("{}", dim("No cards changed."));
+        let none = if only_reviewed { "No removed cards have review history." } else { "No cards changed." };
+        println!("{}", dim(none));
         return Ok(ExitCode::SUCCESS);
     }
     // By file, then added, changed and removed, each in file order.
@@ -531,7 +555,11 @@ pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool) -> R
         files.entry(&changed.card.path).or_default().push(('~', &changed.card, note));
     }
     for card in &changes.removed {
-        files.entry(&card.path).or_default().push(('-', card, String::new()));
+        let note = match reviews(card) {
+            0 => String::new(),
+            n => count(n, "review", "reviews"),
+        };
+        files.entry(&card.path).or_default().push(('-', card, note));
     }
     let columns = text::terminal_width();
     for (i, (path, rows)) in files.iter().enumerate() {
@@ -566,6 +594,14 @@ pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool) -> R
     .filter(|(n, _, _)| *n > 0)
     .map(|(n, label, paint)| paint(format!("{n} {label}")))
     .collect();
-    println!("\n{}", summary.join(&dim(" · ")));
-    Ok(ExitCode::SUCCESS)
+    if !only_reviewed {
+        println!("\n{}", summary.join(&dim(" · ")));
+    } else {
+        println!();
+    }
+    if reviewed > 0 {
+        let cards = count(reviewed, "removed card has", "removed cards have");
+        println!("{}", red(format!("{cards} review history, which no card will use.")));
+    }
+    Ok(code)
 }

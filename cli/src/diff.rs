@@ -46,6 +46,9 @@ pub struct Card {
     pub back: String,
     /// Without `#`, the deck's front matter tags included.
     pub tags: Vec<String>,
+    /// The id from before media links were resolved for ids, where history may still be.
+    #[serde(skip)]
+    pub old_id: Option<String>,
 }
 
 #[derive(Debug, PartialEq, serde::Serialize)]
@@ -137,6 +140,7 @@ fn card(parsed: ParsedCard, deck: &str, path: &str) -> Card {
         front: parsed.front,
         back: parsed.back,
         tags: parsed.tags,
+        old_id: parsed.old_id,
     }
 }
 

@@ -85,6 +85,13 @@ enum Command {
         /// Compare the files staged for the next commit instead of those on disk.
         #[arg(long, visible_alias = "cached")]
         staged: bool,
+        /// Exit 1 if cards with review history are removed, as when a question is edited:
+        /// the history stays in the database, but no card uses it.
+        #[arg(long)]
+        check: bool,
+        /// Show only removed cards with review history.
+        #[arg(long)]
+        reviewed: bool,
     },
     /// Streak, retention, card counts, recent reviews and the coming days' workload.
     Stats {
@@ -111,14 +118,14 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Status { short } => commands::status(&collection, out, short),
         Command::Check => commands::check(&collection, out),
+        Command::Lint { fix } => commands::lint(&collection, out, fix),
         Command::Search { query, view, ids } => commands::search(&collection, out, &query.join(" "), view.as_deref(), ids),
         Command::Decks => commands::decks(&collection, out),
         Command::Tags => commands::tags(&collection, out),
         Command::Info { card } => commands::info(&collection, out, &card.join(" ")),
         Command::Prune { trash } => commands::prune(&collection, out, trash),
-        Command::Diff { revs, staged } => commands::diff(&collection, out, &revs, staged),
+        Command::Diff { revs, staged, check, reviewed } => commands::diff(&collection, out, &revs, staged, check, reviewed),
         Command::Stats { days, deck } => commands::stats(&collection, out, days, deck.as_deref()),
-        Command::Lint { fix } => commands::lint(&collection, out, fix),
     };
     match result {
         Ok(code) => code,

@@ -649,6 +649,12 @@ impl CardCollection {
         self.lock().root.clone()
     }
 
+    /// How many reviews the database holds for each of `ids`, whether or not a card has
+    /// that id now. Ids without reviews are left out.
+    pub fn review_counts(&self, ids: &[String]) -> Result<HashMap<String, u32>> {
+        Ok(self.lock().store.review_counts(ids)?)
+    }
+
     /// Write `bytes` to the `media` folder as `name`, and return the name it was saved
     /// under. A file with that name and contents is shared; one that differs keeps its
     /// name, and the new file gets another.
@@ -2100,6 +2106,7 @@ mod tests {
         inner.reload().unwrap();
         assert_eq!(inner.cards[0].parsed.id, id);
         moved(&inner);
+        assert_eq!(inner.store.review_counts(&[id.clone(), old.clone()]).unwrap(), HashMap::from([(id.clone(), 2)]));
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
