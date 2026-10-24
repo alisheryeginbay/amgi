@@ -331,6 +331,41 @@ impl Store {
         tx.commit()
     }
 
+    /// Move each card's history from its first id to its second, for cards whose id
+    /// changed. A card with history under both keeps all its reviews and the state of
+    /// the latest. Returns how many cards had history to move.
+    pub fn move_history(&mut self, moves: &[(String, String)]) -> rusqlite::Result<usize> {
+        let from = Rc::new(moves.iter().map(|(old, _)| Value::from(old.clone())).collect::<Vec<_>>());
+        let with_history: std::collections::HashSet<String> = self
+            .conn
+            .prepare(
+                "SELECT card_id FROM card_state WHERE card_id IN rarray(?1)
+                 UNION SELECT card_id FROM review_log WHERE card_id IN rarray(?1)",
+            )?
+            .query_map([from], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        if with_history.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let last_review = |id: &str| -> rusqlite::Result<Option<i64>> {
+            tx.query_row("SELECT last_review FROM card_state WHERE card_id = ?1", [id], |r| r.get(0)).optional()
+        };
+        for (old, new) in moves.iter().filter(|(old, _)| with_history.contains(old)) {
+            tx.execute("UPDATE review_log SET card_id = ?2 WHERE card_id = ?1", params![old, new])?;
+            if let Some(old_last) = last_review(old)? {
+                if last_review(new)?.is_some_and(|new_last| new_last >= old_last) {
+                    tx.execute("DELETE FROM card_state WHERE card_id = ?1", [old])?;
+                } else {
+                    tx.execute("DELETE FROM card_state WHERE card_id = ?1", [new])?;
+                    tx.execute("UPDATE card_state SET card_id = ?2 WHERE card_id = ?1", params![old, new])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(with_history.len())
+    }
+
     /// Number of new cards first reviewed at or after `since`.
     pub fn new_cards_since(&self, since: i64, cards: Option<&[String]>) -> rusqlite::Result<u32> {
         let (all, ids) = card_list(cards);

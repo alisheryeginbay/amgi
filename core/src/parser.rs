@@ -31,6 +31,7 @@
 use std::fmt::Write;
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -57,6 +58,9 @@ pub struct ParsedCard {
     pub note: Option<Arc<Note>>,
     /// The answer to type, for a card of a `=>` rule.
     pub typed: Option<Typed>,
+    /// The id from before media links were resolved for it, when that differs: history
+    /// saved under it belongs to this card.
+    pub old_id: Option<String>,
 }
 
 /// The answer a card asks to have typed in.
@@ -99,6 +103,22 @@ pub struct ParseResult {
     pub warnings: Vec<ParseWarning>,
     /// Default tags from the front matter.
     deck_tags: Vec<String>,
+    /// The deck file's folder from the collection root, for media links in ids.
+    dir: Option<PathBuf>,
+}
+
+impl ParseResult {
+    /// A card's id from its `kind`, its `text` and `rest`, and its id from before media
+    /// links were resolved, when that differs. Whitespace is collapsed, so reflowing a
+    /// card doesn't reset its history, and media links are resolved from the deck's
+    /// folder, so moving a deck and fixing its links doesn't either.
+    fn ids(&self, kind: &str, text: &str, rest: &[&str]) -> (String, Option<String>) {
+        let id = |text: &str| card_id(&[&[kind, text], rest].concat());
+        let old = normalize(text);
+        let Some(dir) = &self.dir else { return (id(&old), None) };
+        let new = normalize(&crate::media::rooted_links(text, dir));
+        (id(&new), (new != old).then(|| id(&old)))
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -209,14 +229,21 @@ struct Pending {
     values: Vec<(usize, Vec<String>)>,
 }
 
-/// Cards in a deck file, without notes: they need their note types.
+/// Cards in text that isn't in a deck file, without notes: they need their note types.
+/// Media links in their ids stay as written.
 pub fn parse(source: &str) -> ParseResult {
-    parse_deck(source, &NoteTypes::default())
+    parse_in(source, &NoteTypes::default(), None)
 }
 
-/// Cards in a deck file, with notes of `types`.
-pub fn parse_deck(source: &str, types: &NoteTypes) -> ParseResult {
-    let mut out = ParseResult::default();
+/// Cards in the deck file at `path` from the collection root, such as
+/// `cards/Spanish.md`, with notes of `types`.
+pub fn parse_deck(source: &str, types: &NoteTypes, path: &str) -> ParseResult {
+    parse_in(source, types, Some(Path::new(path).parent().unwrap_or(Path::new("")).to_path_buf()))
+}
+
+/// Cards in a deck file in the folder `dir`, if it's in one.
+fn parse_in(source: &str, types: &NoteTypes, dir: Option<PathBuf>) -> ParseResult {
+    let mut out = ParseResult { dir, ..ParseResult::default() };
     let body_start = front_matter(source, &mut out);
     parse_body(source, body_start, types, out)
 }
@@ -523,11 +550,12 @@ fn take_tags(lines: &mut Vec<String>) -> Vec<String> {
 }
 
 /// A new note of type `note_type` as Markdown ending in a newline, starting with its
-/// `@` line, with the ids of the cards it makes; or why it can't be written. `values`
+/// `@` line, with the ids of the cards it makes in the deck file at `path`; or why it
+/// can't be written. `values`
 /// follow the note type's fields; empty ones are left out. Blank lines outside code
 /// blocks are dropped, and lines that would start a field, a card, a note or a tag
 /// line are escaped.
-pub fn write_note(note_type: &str, types: &NoteTypes, values: &[String], tags: &[String]) -> Result<(String, Vec<String>), String> {
+pub fn write_note(note_type: &str, types: &NoteTypes, values: &[String], tags: &[String], path: &str) -> Result<(String, Vec<String>), String> {
     let Some(Some(t)) = types.types.get(note_type) else {
         return Err(format!("There's no note type “{note_type}”."));
     };
@@ -565,7 +593,7 @@ pub fn write_note(note_type: &str, types: &NoteTypes, values: &[String], tags: &
         let line: Vec<String> = own.iter().map(|t| format!("#{t}")).collect();
         writeln!(out, "{}", line.join(" ")).unwrap();
     }
-    let parsed = parse_deck(&out, types);
+    let parsed = parse_deck(&out, types, path);
     if let Some(warning) = parsed.warnings.iter().find(|w| !w.message.starts_with("note makes no cards")) {
         return Err(sentence(&warning.message));
     }
@@ -806,8 +834,9 @@ fn finish(pending: Option<Pending>, types: &NoteTypes, out: &mut ParseResult) {
                 });
                 return;
             }
+            let (id, old_id) = out.ids("basic", &front, &[]);
             out.cards.push(ParsedCard {
-                id: card_id(&["basic", &normalize(&front)]),
+                id,
                 kind: CardKind::Basic,
                 front,
                 back,
@@ -815,6 +844,7 @@ fn finish(pending: Option<Pending>, types: &NoteTypes, out: &mut ParseResult) {
                 tags,
                 note: None,
                 typed: None,
+                old_id,
             });
         }
         Field::Cloze => parse_cloze(&join(&p.cloze), p.line, tags, out),
@@ -841,8 +871,9 @@ fn note_cards(p: &Pending, types: &NoteTypes, tags: Vec<String>, out: &mut Parse
         if front.is_empty() || back.is_empty() {
             continue;
         }
+        let (id, old_id) = out.ids("basic", &front, &[]);
         cards.push(ParsedCard {
-            id: card_id(&["basic", &normalize(&front)]),
+            id,
             kind: CardKind::Basic,
             front,
             back,
@@ -853,6 +884,7 @@ fn note_cards(p: &Pending, types: &NoteTypes, tags: Vec<String>, out: &mut Parse
                 .typed
                 .then(|| rule.back.iter().find_map(|&f| Some(Typed { field: note_type.fields[f].clone(), answer: value(f)? })))
                 .flatten(),
+            old_id,
         });
     }
     if cards.is_empty() {
@@ -1053,7 +1085,6 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
         return;
     }
 
-    let normalized = normalize(text);
     for target in 0..deletions {
         let (mut front, mut back) = (String::new(), String::new());
         let mut n = 0;
@@ -1079,8 +1110,9 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
                 }
             }
         }
+        let (id, old_id) = out.ids("cloze", text, &[&target.to_string()]);
         out.cards.push(ParsedCard {
-            id: card_id(&["cloze", &normalized, &target.to_string()]),
+            id,
             kind: CardKind::Cloze,
             front,
             back,
@@ -1088,11 +1120,12 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
             tags: tags.clone(),
             note: None,
             typed: None,
+            old_id,
         });
     }
 }
 
-/// Collapse whitespace so reflowing a card does not reset its history.
+/// `s` with its whitespace collapsed.
 fn normalize(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -1361,7 +1394,7 @@ mod tests {
     }
 
     fn food(source: &str) -> ParseResult {
-        parse_deck(source, &types())
+        parse_deck(source, &types(), "cards/Food.md")
     }
 
     #[test]
@@ -1388,7 +1421,7 @@ mod tests {
         let mut types = NoteTypes::default();
         let spell = "fields = [\"Word\", \"Audio\", \"Meaning\"]\ncards = [\"Meaning => Audio, Word\", \"Word -> Meaning\"]";
         assert!(types.insert("Spell", spell).is_empty());
-        let r = parse_deck("@Spell\nWord: hola\nMeaning: hello\n", &types);
+        let r = parse_deck("@Spell\nWord: hola\nMeaning: hello\n", &types, "cards/a.md");
         // The audio is missing, so the word is what's typed.
         let typed = r.cards[0].typed.as_ref().unwrap();
         assert_eq!((r.cards[0].front.as_str(), typed.field.as_str(), typed.answer.as_str()), ("hello", "Word", "hola"));
@@ -1397,7 +1430,27 @@ mod tests {
         let plain = "fields = [\"Word\", \"Audio\", \"Meaning\"]\ncards = [\"Meaning -> Audio, Word\"]";
         let mut other = NoteTypes::default();
         other.insert("Spell", plain);
-        assert_eq!(parse_deck("@Spell\nWord: hola\nMeaning: hello\n", &other).cards[0].id, r.cards[0].id);
+        assert_eq!(parse_deck("@Spell\nWord: hola\nMeaning: hello\n", &other, "cards/a.md").cards[0].id, r.cards[0].id);
+    }
+
+    #[test]
+    fn media_links_count_by_the_file_they_point_to() {
+        let id = |source: &str, path: &str| parse_deck(source, &NoteTypes::default(), path).cards[0].clone();
+        let top = id("Q: Which city? ![](../media/eiffel.jpg)\nA: Paris", "cards/Places.md");
+        // The same file from a deck one folder down, written another way.
+        let nested = id("Q: Which city?\n![](<../../media/eiffel.jpg>)\nA: Paris", "cards/Europe/Places.md");
+        assert_eq!(top.id, nested.id);
+        // History from before links were resolved belongs to the card.
+        assert_eq!(top.old_id.as_deref(), Some(parse("Q: Which city? ![](../media/eiffel.jpg)\nA: Paris").cards[0].id.as_str()));
+        // Another file is another card, and a link that leaves the collection stays as
+        // written, as does a card without media.
+        assert_ne!(id("Q: Which city? ![](../media/other.jpg)\nA: Paris", "cards/Places.md").id, top.id);
+        for (source, path) in [("Q: ![](../../x.jpg)\nA: x", "cards/a.md"), ("Q: plain\nA: x", "cards/a/b.md")] {
+            let card = id(source, path);
+            assert_eq!((card.id, card.old_id), (parse(source).cards[0].id.clone(), None));
+        }
+        let cloze = |path: &str| parse_deck("C: ![](../media/flag.png) is [France]", &NoteTypes::default(), path).cards[0].id.clone();
+        assert_eq!(cloze("cards/a.md"), parse("C: ![](<media/flag.png>) is [France]").cards[0].id);
     }
 
     #[test]
@@ -1498,6 +1551,7 @@ mod tests {
             &types(),
             &values(&["manzana", " apple \n\nMeaning: not a field\n@Food\nA: no\n#red", "", "Q: a fruit\n```\n\nMeaning: code\n```"]),
             &["#food".into(), "fruit food".into()],
+            "cards/Food.md",
         )
         .unwrap();
         assert_eq!(
@@ -1510,7 +1564,7 @@ mod tests {
         assert_eq!(r.cards[0].back, "apple\nMeaning\\: not a field\n\\@Food\nA\\: no\n\\#red\n\nQ: a fruit\n```\n\nMeaning: code\n```");
         assert_eq!(r.cards[0].tags, ["food", "fruit"]);
 
-        let err = |note_type: &str, v: &[&str]| write_note(note_type, &types(), &values(v), &[]).unwrap_err();
+        let err = |note_type: &str, v: &[&str]| write_note(note_type, &types(), &values(v), &[], "cards/Food.md").unwrap_err();
         assert_eq!(err("Food", &["", "", "", "only a sentence"]), "Fill in a field for the front of a card and one for its back.");
         assert_eq!(err("Nope", &["a", "b"]), "There's no note type “Nope”.");
     }

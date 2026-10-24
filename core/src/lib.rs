@@ -595,7 +595,7 @@ impl CardCollection {
 
     /// How many cards a note of `note_type` would make: 0 if it can't be added as it is.
     pub fn note_card_count(&self, note_type: String, values: Vec<String>) -> u32 {
-        parser::write_note(&note_type, &self.lock().note_types, &values, &[]).map_or(0, |(_, ids)| ids.len() as u32)
+        parser::write_note(&note_type, &self.lock().note_types, &values, &[], "").map_or(0, |(_, ids)| ids.len() as u32)
     }
 
     /// The note types without errors, by name.
@@ -782,7 +782,7 @@ impl Inner {
             let deck = in_cards.strip_suffix(".md").unwrap_or(&in_cards).to_string();
             let text = fs::read_to_string(&file)?;
             self.scripts.scan(&text);
-            let result = parser::parse_deck(&text, &self.note_types);
+            let result = parser::parse_deck(&text, &self.note_types, &rel);
             let mut counts: HashMap<&str, usize> = HashMap::new();
             for note in result.cards.iter().filter_map(|c| c.note.as_ref()) {
                 *counts.entry(&note.note_type).or_default() += 1;
@@ -818,6 +818,22 @@ impl Inner {
                 });
             }
         }
+        self.carry_over_history()
+    }
+
+    /// Move history saved under a card's id from before media links were resolved for
+    /// ids to the card's id now. Runs at every load, so decks written since are caught.
+    fn carry_over_history(&mut self) -> Result<()> {
+        let moves: Vec<(String, String)> = self
+            .cards
+            .iter()
+            .filter_map(|c| Some((c.parsed.old_id.clone()?, c.parsed.id.clone())))
+            // An old id that is another card's id now is that card's history.
+            .filter(|(old, _)| !self.index.contains_key(old))
+            .collect();
+        if !moves.is_empty() && self.store.move_history(&moves)? > 0 {
+            self.states = self.store.states()?;
+        }
         Ok(())
     }
 
@@ -840,7 +856,7 @@ impl Inner {
         }
         files.sort();
         let has_cards = |file: &PathBuf| {
-            fs::read_to_string(file).is_ok_and(|text| !parser::parse_deck(&text, &self.note_types).cards.is_empty())
+            fs::read_to_string(file).is_ok_and(|text| !parser::parse_deck(&text, &self.note_types, &relative(&self.root, file)).cards.is_empty())
         };
         let stray: Vec<&PathBuf> = files.iter().filter(|f| has_cards(f)).collect();
         if let Some(first) = stray.first() {
@@ -1175,7 +1191,7 @@ impl Inner {
         if deck.is_empty() || deck.split('/').any(|part| part.trim().is_empty() || part.starts_with('.')) {
             return Err(invalid("Choose a deck for the card."));
         }
-        let ids: Vec<String> = parser::parse(&block).cards.into_iter().map(|c| c.id).collect();
+        let ids: Vec<String> = parser::parse_deck(&block, &self.note_types, &deck_file(deck)).cards.into_iter().map(|c| c.id).collect();
         if let Some(existing) = ids.iter().find_map(|id| self.index.get(id)) {
             let path = &self.cards[*existing].path;
             return Err(AmgiError::InvalidCard { message: format!("This card is already in {path}.") });
@@ -1195,7 +1211,7 @@ impl Inner {
         if deck.is_empty() || deck.split('/').any(|part| part.trim().is_empty() || part.starts_with('.')) {
             return Err(AmgiError::InvalidCard { message: "Choose a deck for the note.".into() });
         }
-        let (block, ids) = parser::write_note(&note.note_type, &self.note_types, &note.values, &note.tags)
+        let (block, ids) = parser::write_note(&note.note_type, &self.note_types, &note.values, &note.tags, &deck_file(deck))
             .map_err(|message| AmgiError::InvalidCard { message })?;
         if let Some(existing) = ids.iter().find_map(|id| self.index.get(id)) {
             let card = &self.cards[*existing];
@@ -1401,7 +1417,7 @@ impl Inner {
         let written: HashSet<String> = import
             .decks
             .iter()
-            .flat_map(|(_, markdown)| parser::parse_deck(markdown, &self.note_types).cards)
+            .flat_map(|(deck, markdown)| parser::parse_deck(markdown, &self.note_types, &deck_file(deck)).cards)
             .map(|card| card.id)
             .collect();
         let studied = written.iter().filter(|id| self.states.contains_key(*id)).count() as u32;
@@ -1547,6 +1563,11 @@ fn unused_path(root: &Path, deck: &str) -> PathBuf {
         })
         .find(|p| !p.exists())
         .expect("unbounded range")
+}
+
+/// The file of `deck`, from the collection root.
+fn deck_file(deck: &str) -> String {
+    format!("{CARDS_DIR}/{deck}.md")
 }
 
 fn relative(root: &Path, path: &Path) -> String {
@@ -2038,6 +2059,42 @@ mod tests {
         let start = inner.day_start(1_759_960_800);
         assert_eq!((start + 5 * 3600 - 4 * 3600).rem_euclid(DAY_SECS), 0);
         assert!(start <= 1_759_960_800 && 1_759_960_800 - start < DAY_SECS);
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn history_follows_cards_to_their_resolved_media_ids() {
+        let card = "Q: Which city? ![](../media/eiffel.jpg)\nA: Paris\n";
+        let (dir, c) = collection(&[("Places.md", card)]);
+        let mut inner = c.lock();
+        let id = inner.cards[0].parsed.id.clone();
+        let old = parser::parse(card).cards[0].id.clone();
+        assert_ne!(id, old);
+        // Reviewed by a version that hashed links as written.
+        inner.answer(&id, Rating::Good, T0).unwrap();
+        inner.store.move_history(&[(id.clone(), old.clone())]).unwrap();
+        // And since then under the new id, before the old history moved over.
+        inner.answer(&id, Rating::Good, T0 + DAY_SECS).unwrap();
+        inner.states = inner.store.states().unwrap();
+
+        // Loading merges both, keeping the latest state.
+        inner.reload().unwrap();
+        let moved = |inner: &Inner| {
+            assert!(!inner.states.contains_key(&old));
+            assert!(inner.store.reviews(&old).unwrap().is_empty());
+            assert_eq!(inner.states[&id].last_review, T0 + DAY_SECS);
+            assert_eq!(inner.store.reviews(&id).unwrap().len(), 2);
+        };
+        moved(&inner);
+
+        // Moving the deck down a folder and fixing its link keeps it the same card.
+        fs::remove_file(dir.join("cards/Places.md")).unwrap();
+        fs::create_dir_all(dir.join("cards/Europe")).unwrap();
+        fs::write(dir.join("cards/Europe/Places.md"), card.replace("../media", "../../media")).unwrap();
+        inner.reload().unwrap();
+        assert_eq!(inner.cards[0].parsed.id, id);
+        moved(&inner);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }

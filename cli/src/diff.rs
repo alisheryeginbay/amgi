@@ -118,7 +118,7 @@ pub fn cards(files: &[(String, String)]) -> Vec<Card> {
     let mut seen = std::collections::HashSet::new();
     let mut cards = Vec::new();
     for (deck, path, text) in decks {
-        for parsed in parser::parse_deck(text, &note_types).cards {
+        for parsed in parser::parse_deck(text, &note_types, path).cards {
             if seen.insert(parsed.id.clone()) {
                 cards.push(card(parsed, deck, path));
             }

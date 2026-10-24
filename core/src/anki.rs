@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::{parser, AmgiError, CardCollection, HistoryEntry, Import, Rating, ReviewState, DAY_SECS, MEDIA_DIR};
+use crate::{parser, AmgiError, CardCollection, HistoryEntry, Import, Rating, ReviewState, CARDS_DIR, DAY_SECS, MEDIA_DIR};
 pub use text::Media;
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -669,7 +669,7 @@ impl Package {
                         continue;
                     }
                     let numbers: BTreeSet<u32> = group.iter().map(|c| c.ord + 1).collect();
-                    let Some((block, ids)) = cloze_block(notetype, &fields, &numbers, &mut out.media) else { continue };
+                    let Some((block, ids)) = cloze_block(notetype, &fields, &numbers, &mut out.media, &self.deck_file(first.deck)) else { continue };
                     let block = with_tags(&block, &note_tags(&note.tags, is_suspended));
                     self.add_histories(group, |ord| ids_for_cloze(&ids, ord), &mut out);
                     out.cards += ids.len() as u32;
@@ -691,7 +691,7 @@ impl Package {
                     fields.insert("Card", name);
                     fields.insert("Deck", &deck);
                     out.media.prefix = self.media_prefix(card.deck);
-                    let Some((block, id)) = basic_block(qfmt, afmt, &fields, &mut out.media) else { continue };
+                    let Some((block, id)) = basic_block(qfmt, afmt, &fields, &mut out.media, &self.deck_file(card.deck)) else { continue };
                     let block = with_tags(&block, &note_tags(&note.tags, card.suspended));
                     self.add_histories(&[card], |_| vec![id.clone()], &mut out);
                     out.cards += 1;
@@ -755,7 +755,7 @@ impl Package {
             })
             .collect();
         let anki: BTreeSet<u32> = cards.iter().map(|c| c.ord).collect();
-        let parsed = parser::parse_deck(&block, types);
+        let parsed = parser::parse_deck(&block, types, &self.deck_file(deck));
         if !parsed.warnings.is_empty() || parsed.cards.len() != made.len() || made.iter().copied().collect::<BTreeSet<_>>() != anki {
             return None;
         }
@@ -778,6 +778,11 @@ impl Package {
                 }
             }
         }
+    }
+
+    /// A deck's file, from the collection root.
+    fn deck_file(&self, deck: i64) -> String {
+        format!("{CARDS_DIR}/{}.md", self.deck_path(deck))
     }
 
     /// Path from a deck's file to the `media` folder at the collection root.
@@ -1028,7 +1033,7 @@ fn push_block(md: &mut String, block: &str) {
 }
 
 /// A `Q:`/`A:` card from a normal note type's template, and its amgi id.
-fn basic_block(qfmt: &str, afmt: &str, fields: &HashMap<&str, &str>, media: &mut Media) -> Option<(String, String)> {
+fn basic_block(qfmt: &str, afmt: &str, fields: &HashMap<&str, &str>, media: &mut Media, file: &str) -> Option<(String, String)> {
     let front = text::html_to_markdown(&text::render_template(qfmt, fields), media);
     // The answer side usually repeats the question, through `{{FrontSide}}` or the
     // same fields above `<hr id=answer>`; amgi already shows the question above it.
@@ -1044,7 +1049,7 @@ fn basic_block(qfmt: &str, afmt: &str, fields: &HashMap<&str, &str>, media: &mut
         return None;
     }
     let block = format!("Q: {front}\nA: {back}");
-    let card = single(parser::parse(&block).cards)?;
+    let card = single(parser::parse_deck(&block, &parser::NoteTypes::default(), file).cards)?;
     Some((block, card.id))
 }
 
@@ -1070,6 +1075,7 @@ fn cloze_block(
     fields: &HashMap<&str, &str>,
     active: &BTreeSet<u32>,
     media: &mut Media,
+    file: &str,
 ) -> Option<(String, Vec<(String, u32)>)> {
     let (_, qfmt, afmt) = notetype.templates.first()?;
     // Image occlusion masks are clozes over an image; there is nothing to show without it.
@@ -1089,7 +1095,7 @@ fn cloze_block(
         return None;
     }
     let mut block = format!("C: {cloze}");
-    let cards = parser::parse(&block).cards;
+    let cards = parser::parse_deck(&block, &parser::NoteTypes::default(), file).cards;
     if cards.len() != numbers.len() {
         return None;
     }
@@ -1264,7 +1270,7 @@ pub(crate) mod tests {
         for (name, toml) in &out.note_types {
             types.insert(name, toml);
         }
-        let parsed = parser::parse_deck(&out.decks[0].1, &types);
+        let parsed = parser::parse_deck(&out.decks[0].1, &types, "cards/Default.md");
         assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
         let fronts: Vec<_> = parsed.cards.iter().map(|c| c.front.as_str()).collect();
         assert_eq!(fronts, ["manzana\n\n![](../media/manzana.mp3)", "apple", "queso", "cheese", "Buenos días", "Plural of pan?", "uva", "grape"]);
@@ -1296,7 +1302,7 @@ pub(crate) mod tests {
         assert_eq!(out.media.sounds.iter().collect::<Vec<_>>(), ["gone.mp3", "paris.mp3"]);
         assert_eq!((out.notes, out.cards, out.skipped_notes, out.suspended_cards), (4, 5, 1, 2));
 
-        let all = parser::parse(&out.decks[1].1).cards;
+        let all = parser::parse_deck(&out.decks[1].1, &parser::NoteTypes::default(), "cards/Lang/Kazakh-Verbs.md").cards;
         assert_eq!(out.histories.len(), 3);
         assert_eq!(out.histories[0].id, all[0].id);
         assert_eq!(out.histories[0].log.len(), 2);
@@ -1305,7 +1311,7 @@ pub(crate) mod tests {
         // own due date in `odue`.
         assert_eq!(out.histories[0].due, Some(Due::Day(1_699_920_000 + 5 * 86_400)));
         // The cloze history belongs to the `c1` deletion only.
-        let cloze = parser::parse(&out.decks[0].1).cards;
+        let cloze = parser::parse_deck(&out.decks[0].1, &parser::NoteTypes::default(), "cards/Default.md").cards;
         assert_eq!(out.histories[1].id, cloze[0].id);
     }
 
@@ -1372,7 +1378,7 @@ pub(crate) mod tests {
     #[test]
     fn answer_side_drops_repeated_question() {
         let fields = HashMap::from([("Front", "q"), ("Back", "a")]);
-        let block = |afmt| basic_block("{{Front}}", afmt, &fields, &mut Media::default()).unwrap().0;
+        let block = |afmt| basic_block("{{Front}}", afmt, &fields, &mut Media::default(), "cards/Default.md").unwrap().0;
         assert_eq!(block("{{Front}}<HR id=\"answer\">{{Back}}"), "Q: q\nA: a");
         assert_eq!(block("{{Front}}<br>{{Back}}"), "Q: q\nA: a");
         assert_eq!(block("{{Front}}"), "Q: q\nA: q");

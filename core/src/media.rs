@@ -78,6 +78,41 @@ fn links(text: &str) -> impl Iterator<Item = String> + '_ {
     })
 }
 
+/// `text` with each image or sound written as `![alt](<path>)`, with its path from the
+/// collection root, as linked from a deck in the folder `dir`. So the same file gives the
+/// same text from any deck. URLs and paths that leave the collection stay as written.
+pub(crate) fn rooted_links(text: &str, dir: &Path) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("![") {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        let Some((len, path, angled)) = parser::image(rest) else {
+            out.push_str("![");
+            rest = &rest[2..];
+            continue;
+        };
+        let link = match angled {
+            true => path.to_string(),
+            false => percent_decode(path).unwrap_or_else(|| path.to_string()),
+        };
+        match resolve(dir, &link) {
+            Some(rooted) => {
+                // Up to and including the `(`.
+                let open = path.as_ptr() as usize - rest.as_ptr() as usize - usize::from(angled);
+                out.push_str(&rest[..open]);
+                out.push('<');
+                out.push_str(&slashed(&rooted));
+                out.push_str(">)");
+            }
+            None => out.push_str(&rest[..len]),
+        }
+        rest = &rest[len..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `link`, relative to the folder `dir`, as a path from the collection root; `None` for
 /// URLs and paths that leave the collection.
 fn resolve(dir: &Path, link: &str) -> Option<PathBuf> {
@@ -186,6 +221,19 @@ mod tests {
             ("media/cafe\u{301}.png", "x"),
         ]);
         assert_eq!(unused_paths(&root), ["media/x.png", "media/y.png"]);
+    }
+
+    #[test]
+    fn rooted_links_name_the_file_from_the_root() {
+        let rooted = |text: &str, dir: &str| rooted_links(text, Path::new(dir));
+        assert_eq!(rooted("A ![x](../media/a.png) b", "cards"), "A ![x](<media/a.png>) b");
+        assert_eq!(rooted("![](../../media/a.png)", "cards/sub"), "![](<media/a.png>)");
+        assert_eq!(rooted("![](<../media/a b.png>)", "cards"), rooted("![](../media/a%20b.png)", "cards"));
+        assert_eq!(rooted("![](media/a.png)", "cards"), "![](<cards/media/a.png>)");
+        // Left as written: URLs, paths out of the collection and text that isn't a link.
+        for text in ["![](https://example.com/a.png)", "![](../../a.png)", "![no link", "x ![a](b"] {
+            assert_eq!(rooted(text, "cards"), text);
+        }
     }
 
     #[test]
