@@ -5,6 +5,7 @@
 
 pub mod anki;
 pub mod anki_connect;
+pub mod format;
 pub mod lint;
 pub mod media;
 pub mod parser;
@@ -647,6 +648,17 @@ impl CardCollection {
     /// The folder holding the collection's decks.
     pub fn root(&self) -> PathBuf {
         self.lock().root.clone()
+    }
+
+    /// The deck files that aren't in `amgi fmt`'s layout. With `write`, they're
+    /// rewritten, except those whose cards would change, and the collection is read again.
+    pub fn format(&self, write: bool) -> Result<format::Formatted> {
+        let mut inner = self.lock();
+        let formatted = format::run(&inner.root, &inner.note_types, write)?;
+        if write && formatted.changed.len() > formatted.refused.len() {
+            inner.reload()?;
+        }
+        Ok(formatted)
     }
 
     /// What in the decks breaks the rules in `config`, by file, line and column. With

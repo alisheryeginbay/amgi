@@ -49,6 +49,13 @@ enum Command {
         #[arg(long)]
         fix: bool,
     },
+    /// Rewrite deck files in one layout: no trailing spaces, cards a blank line apart,
+    /// tags a space apart. Cards, ids and history stay the same.
+    Fmt {
+        /// List the files that would change instead, and exit 1 if there are any.
+        #[arg(long)]
+        check: bool,
+    },
     /// Find cards with the app's search syntax, such as `deck:french is:due`.
     Search {
         /// Search words and filters; all must match. Empty lists every card.
@@ -119,6 +126,7 @@ fn main() -> ExitCode {
         Command::Status { short } => commands::status(&collection, out, short),
         Command::Check => commands::check(&collection, out),
         Command::Lint { fix } => commands::lint(&collection, out, fix),
+        Command::Fmt { check } => commands::fmt(&collection, out, check),
         Command::Search { query, view, ids } => commands::search(&collection, out, &query.join(" "), view.as_deref(), ids),
         Command::Decks => commands::decks(&collection, out),
         Command::Tags => commands::tags(&collection, out),

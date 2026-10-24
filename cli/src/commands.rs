@@ -122,6 +122,34 @@ pub fn lint(c: &CardCollection, out: Output, fix: bool) -> Result {
     Ok(code)
 }
 
+pub fn fmt(c: &CardCollection, out: Output, check: bool) -> Result {
+    let formatted = c.format(!check)?;
+    let left = if check { formatted.changed.len() } else { formatted.refused.len() };
+    let code = if left == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    if out.json {
+        print_json(&json!({ "changed": formatted.changed, "refused": formatted.refused, "written": !check }))?;
+        return Ok(code);
+    }
+    for path in &formatted.changed {
+        match formatted.refused.contains(path) {
+            true => println!("{}{} {}", style::path(path), dim(":"), red("not formatted, because its cards would change")),
+            false => println!("{}", style::path(path)),
+        }
+    }
+    let files = (formatted.changed.len() - formatted.refused.len()) as u32;
+    match (formatted.changed.is_empty(), check) {
+        (true, _) => println!("{}", green("Every deck is formatted.")),
+        (false, true) => println!(
+            "{}{}",
+            bold(count(formatted.changed.len() as u32, "file to format.", "files to format.")),
+            dim(" Run `amgi fmt` to format them.")
+        ),
+        (false, false) if files > 0 => println!("{}", green(format!("Formatted {}.", count(files, "file", "files")))),
+        (false, false) => {}
+    }
+    Ok(code)
+}
+
 /// A schedule label drawn in its color: blue when new, yellow when due, red when
 /// overdue, dim when it can wait. `padded` is the label padded to its column.
 fn paint_label(label: &str, padded: String) -> String {
