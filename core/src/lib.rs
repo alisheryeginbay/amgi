@@ -649,6 +649,18 @@ impl CardCollection {
         self.lock().root.clone()
     }
 
+    /// What in the decks breaks the rules in `config`, by file, line and column. With
+    /// `fix`, the fixable problems are fixed in the files, unless that would change a
+    /// card's id, and the collection is read again.
+    pub fn lint(&self, config: &lint::Config, fix: bool) -> Result<Vec<lint::Problem>> {
+        let mut inner = self.lock();
+        let problems = lint::run(&inner.root, &inner.note_types, config, fix)?;
+        if fix && problems.iter().any(|p| p.fixable) {
+            inner.reload()?;
+        }
+        Ok(problems)
+    }
+
     /// How many reviews the database holds for each of `ids`, whether or not a card has
     /// that id now. Ids without reviews are left out.
     pub fn review_counts(&self, ids: &[String]) -> Result<HashMap<String, u32>> {

@@ -94,7 +94,7 @@ pub fn check(c: &CardCollection, out: Output) -> Result {
 pub fn lint(c: &CardCollection, out: Output, fix: bool) -> Result {
     let root = c.root();
     let config = lint::Config::load(&root)?;
-    let problems = lint::run(&root, &config, fix)?;
+    let problems = c.lint(&config, fix)?;
     let fixed = if fix { problems.iter().filter(|p| p.fixable).count() as u32 } else { 0 };
     let left: Vec<_> = problems.iter().filter(|p| !(fix && p.fixable)).collect();
     let code = if left.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
@@ -103,7 +103,10 @@ pub fn lint(c: &CardCollection, out: Output, fix: bool) -> Result {
         return Ok(code);
     }
     for p in &left {
-        let place = format!("{}:{}:{}", p.path, p.line, p.column);
+        let place = match p.line {
+            0 => p.path.clone(),
+            line => format!("{}:{line}:{}", p.path, p.column),
+        };
         println!("{}{} {} {}", style::path(place), dim(":"), p.message, dim(format!("({})", p.rule)));
     }
     if fixed > 0 {

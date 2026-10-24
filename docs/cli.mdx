@@ -45,15 +45,20 @@ the collection root, and lists what breaks them as `path:line:column: message`. 
 ```toml amgi.toml
 [lint]
 media-links = "absolute"
+missing-media = true
 ```
 
 - `media-links`: `"absolute"`, the default, wants media linked from the collection root,
   as `![](@/media/photo.jpg)`, so links keep working when a deck moves. `--fix` rewrites
-  `../media/photo.jpg` that way, and cards keep their history. A link that leads out of
-  the collection is listed but left as it is. `"any"` turns the rule off.
+  `../media/photo.jpg` that way, and cards keep their history. `"any"` turns the rule off.
+- `missing-media`: on by default, lists links to files that don't exist, or that lead
+  out of the collection, since those don't show. When another file has the name, such as
+  `photo.jpeg` for `photo.jpg` or the same file in another folder, it's suggested. These
+  aren't fixed for you; `false` turns the rule off.
 
 Without `amgi.toml`, every rule has its default. Links in code blocks and code spans are
-text, so they're left alone.
+text, so they're left alone. `--fix` never changes a card's id: a file whose cards would
+get new ids, and so lose their history, is left as it is and listed.
 
 ## Changes since a commit
 
