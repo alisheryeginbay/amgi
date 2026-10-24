@@ -15,9 +15,11 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
 - `Q:` / `A:`: basic card. Either field can continue onto later lines.
 - `C:`: cloze. Each `[answer]` becomes its own card; `[answer|hint]` shows the hint.
   Write `\[` and `\]` for literal brackets. Brackets inside `` `code` `` are always literal.
-- Images: `![](../media/photo.jpg)`, with the path relative to the deck file: from a deck
-  in `cards`, `../media` is the collection's `media` folder. Media has to be inside the
-  collection folder: a path that leads out of it doesn't show. Use `![](<my photo (1).jpg>)`
+- Images: `![](@/media/photo.jpg)`. A path starting `@/` starts at the collection
+  folder, so it works from any deck and keeps working when the deck moves; the app links
+  the media it adds this way. Any other path is relative to the deck file: from a deck in
+  `cards`, `../media/photo.jpg` is the same file. Media has to be inside the collection
+  folder: a path that leads out of it doesn't show. Use `![](<@/media/my photo (1).jpg>)`
   for paths with spaces or parentheses. An image can also be a cloze answer:
   `[![](flag.png)|flag]`.
 - Sounds use the same syntax: `![](audio/word.mp3)`. Links to audio files (`mp3`, `m4a`,
@@ -99,7 +101,7 @@ A note starts with a line naming its note type after `@`, then its fields:
 @Vocabulary
 Word: manzana
 Meaning: apple
-Audio: ![](../media/manzana.mp3)
+Audio: ![](@/media/manzana.mp3)
 Sentence: Me como una manzana.
 #food
 ```

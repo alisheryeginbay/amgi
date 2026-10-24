@@ -30,6 +30,9 @@ uniffi::setup_scaffolding!();
 pub const DB_FILE: &str = ".amgi.sqlite";
 /// Folder at the collection root that imported images are copied to.
 pub const MEDIA_DIR: &str = "media";
+/// How the app links to a file in `media`: from the collection root, so the link works
+/// from any deck and keeps working when the deck moves.
+pub(crate) const MEDIA_LINK: &str = "@/media/";
 /// Folder at the collection root that holds the decks; `media` and `note-types` sit beside it.
 pub const CARDS_DIR: &str = "cards";
 const DAY_SECS: i64 = 86_400;
@@ -603,16 +606,17 @@ impl CardCollection {
         self.lock().note_types.list()
     }
 
-    /// Copy an image or sound into the `media` folder for a card in `deck`, and return
-    /// the Markdown that shows it there. A file with the same name and contents is
-    /// shared; one that differs keeps its name, and the copy gets another.
+    /// Copy an image or sound into the `media` folder, and return the Markdown that
+    /// shows it there. A file with the same name and contents is shared; one that
+    /// differs keeps its name, and the copy gets another. `deck` is unused: links
+    /// start at the collection root.
     pub fn add_media(&self, deck: String, path: String) -> Result<String> {
+        let _ = deck;
         let source = PathBuf::from(&path);
         let bytes = fs::read(&source)?;
         let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "media".into());
         let file = self.save_media(&name, &bytes)?;
-        // Up from the deck's file in `cards` to the collection root.
-        let link = format!("{}{MEDIA_DIR}/{file}", "../".repeat(deck.matches('/').count() + 1));
+        let link = format!("{MEDIA_LINK}{file}");
         Ok(if link.contains([' ', '(', ')', '<', '>']) { format!("![](<{link}>)") } else { format!("![]({link})") })
     }
 
@@ -2222,11 +2226,11 @@ mod tests {
         let sound = dir.join("hola (1).mp3");
         fs::write(&sound, b"sound").unwrap();
         let link = c.add_media("lang/es".into(), sound.to_string_lossy().into_owned()).unwrap();
-        assert_eq!(link, "![](<../../media/hola (1).mp3>)");
+        assert_eq!(link, "![](<@/media/hola (1).mp3>)");
         // The same file again is shared; another with its name is kept beside it.
         assert_eq!(c.add_media("lang/es".into(), sound.to_string_lossy().into_owned()).unwrap(), link);
         fs::write(&sound, b"other").unwrap();
-        assert_eq!(c.add_media("es".into(), sound.to_string_lossy().into_owned()).unwrap(), "![](<../media/hola (1) 2.mp3>)");
+        assert_eq!(c.add_media("es".into(), sound.to_string_lossy().into_owned()).unwrap(), "![](<@/media/hola (1) 2.mp3>)");
 
         let values = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(c.note_card_count("Vocab".into(), values(&["hola", "hello", ""])), 2);
@@ -2241,7 +2245,7 @@ mod tests {
         assert_eq!(c.add_note(note.clone()).unwrap().len(), 2);
         assert_eq!(
             fs::read_to_string(dir.join("cards/lang/es.md")).unwrap(),
-            "+++\nname = \"Spanish\"\n+++\n\n@Vocab\nWord: hola\nMeaning: hello\nAudio: ![](<../../media/hola (1).mp3>)\n#greeting\n"
+            "+++\nname = \"Spanish\"\n+++\n\n@Vocab\nWord: hola\nMeaning: hello\nAudio: ![](<@/media/hola (1).mp3>)\n#greeting\n"
         );
         assert!(matches!(c.add_note(note), Err(AmgiError::InvalidCard { message }) if message.contains("cards/lang/es.md:5")));
         fs::remove_dir_all(dir).unwrap();

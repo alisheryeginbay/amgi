@@ -66,6 +66,11 @@ test("lists a side's images, leaving out sounds and paths outside the collection
   assert.deepEqual(imageSources(source, "plants/trees.md"), ["amgi://collection/plants/oak.png"]);
 });
 
+test("reads paths starting `@/` from the collection root", () => {
+  const source = "![](@/media/oak.png)\n![](@/../outside.png)";
+  assert.deepEqual(imageSources(source, "cards/plants/trees.md"), ["amgi://collection/media/oak.png"]);
+});
+
 test("keeps a formula with a mistake on one line in table cells", () => {
   const cell = renderInline(oneLine("Area\n$$$\nx^2 + y\n$$$\nof a square"), true);
   assert.ok(!cell.includes("pre-line"));

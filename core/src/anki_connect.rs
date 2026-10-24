@@ -28,7 +28,7 @@ use serde_json::{Map, Value, json};
 use crate::anki::text::{self, Media};
 use crate::parser::NoteTypeInfo;
 use crate::search::fold;
-use crate::{BrowseCard, CARDS_DIR, CardCollection, CardKind, MEDIA_DIR, NewCard, NewNote, StudyScope};
+use crate::{BrowseCard, CARDS_DIR, CardCollection, CardKind, MEDIA_DIR, MEDIA_LINK, NewCard, NewNote, StudyScope};
 
 /// The AnkiConnect API version answered, the one current clients expect.
 pub const VERSION: u64 = 6;
@@ -218,10 +218,9 @@ fn plain(markdown: &str) -> String {
     fold(&out)
 }
 
-/// Field HTML as Markdown in a deck file of `deck`, which media links are relative to.
-fn markdown(html: &str, deck: &str) -> String {
-    let prefix = format!("{}{MEDIA_DIR}/", "../".repeat(deck.matches('/').count() + 1));
-    text::html_to_markdown(html, &mut Media { prefix, ..Media::default() })
+/// Field HTML as Markdown, with media linked from the collection root.
+fn markdown(html: &str) -> String {
+    text::html_to_markdown(html, &mut Media { prefix: MEDIA_LINK.into(), ..Media::default() })
 }
 
 /// A note checked and ready to add.
@@ -487,7 +486,7 @@ impl Api<'_> {
                 }
             }
         }
-        let values: Vec<String> = html.iter().map(|h| markdown(h, &deck)).collect();
+        let values: Vec<String> = html.iter().map(|h| markdown(h)).collect();
         let first = values.first().map(|v| plain(v)).unwrap_or_default();
         if first.trim().is_empty() {
             return Err("cannot create note because it is empty".into());

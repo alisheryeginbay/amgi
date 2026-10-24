@@ -128,7 +128,7 @@ pub fn strip_html(html: &str) -> String {
 /// Media referenced while converting.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Media {
-    /// Path from the deck file being written to the media folder, such as `../media/`.
+    /// How a link to a file in the media folder starts, such as `@/media/`.
     pub prefix: String,
     /// Anki media file names used by images.
     pub images: BTreeSet<String>,

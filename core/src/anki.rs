@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::{parser, AmgiError, CardCollection, HistoryEntry, Import, Rating, ReviewState, CARDS_DIR, DAY_SECS, MEDIA_DIR};
+use crate::{parser, AmgiError, CardCollection, HistoryEntry, Import, Rating, ReviewState, CARDS_DIR, DAY_SECS, MEDIA_DIR, MEDIA_LINK};
 pub use text::Media;
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -614,6 +614,7 @@ pub struct Conversion {
 impl Package {
     pub fn convert(&self) -> Conversion {
         let mut out = Conversion::default();
+        out.media.prefix = MEDIA_LINK.into();
         let mut decks: HashMap<i64, String> = HashMap::new();
         let mut cards_by_note: HashMap<i64, Vec<&AnkiCard>> = HashMap::new();
         for card in &self.cards {
@@ -659,7 +660,6 @@ impl Package {
 
             let before = out.cards;
             if notetype.cloze {
-                out.media.prefix = self.media_prefix(first.deck);
                 // Each Anki card is one cloze number, but amgi suspends a cloze block as a
                 // whole. So suspended numbers get a block of their own, tagged, beside the
                 // block of those still studied: the sentence is written twice.
@@ -690,7 +690,6 @@ impl Package {
                     let mut fields = fields.clone();
                     fields.insert("Card", name);
                     fields.insert("Deck", &deck);
-                    out.media.prefix = self.media_prefix(card.deck);
                     let Some((block, id)) = basic_block(qfmt, afmt, &fields, &mut out.media, &self.deck_file(card.deck)) else { continue };
                     let block = with_tags(&block, &note_tags(&note.tags, card.suspended));
                     self.add_histories(&[card], |_| vec![id.clone()], &mut out);
@@ -732,7 +731,7 @@ impl Package {
         if cards.iter().any(|c| c.deck != deck || c.suspended != suspended) {
             return None;
         }
-        let mut media = Media { prefix: self.media_prefix(deck), ..Media::default() };
+        let mut media = Media { prefix: MEDIA_LINK.into(), ..Media::default() };
         let values: Vec<String> = note.fields.iter().map(|html| text::html_to_markdown(html, &mut media)).collect();
         let note_type = types.get(&layout.name)?;
         let mut block = format!("@{}\n", layout.name);
@@ -783,12 +782,6 @@ impl Package {
     /// A deck's file, from the collection root.
     fn deck_file(&self, deck: i64) -> String {
         format!("{CARDS_DIR}/{}.md", self.deck_path(deck))
-    }
-
-    /// Path from a deck's file to the `media` folder at the collection root.
-    fn media_prefix(&self, deck: i64) -> String {
-        // Up from the deck's file in `cards` to the collection root.
-        "../".repeat(self.deck_path(deck).matches('/').count() + 1) + "media/"
     }
 
     fn deck_name(&self, id: i64) -> String {
@@ -1248,7 +1241,7 @@ pub(crate) mod tests {
         assert_eq!(paths, ["Spanish"]);
         assert_eq!(
             out.decks[0].1,
-            "@Vocab\nWord: manzana\nMeaning: apple\nAudio: ![](../media/manzana.mp3)\nSentence: Me como una manzana.\nMeaning\\: not a field\n#food\n\n\
+            "@Vocab\nWord: manzana\nMeaning: apple\nAudio: ![](@/media/manzana.mp3)\nSentence: Me como una manzana.\nMeaning\\: not a field\n#food\n\n\
              @Vocab\nWord: queso\nMeaning: cheese\n\n\
              @Phrase\nText: Buenos días\nTranslation: Good morning\nNotes: formal\n\n\
              Q: Plural of pan?\nA: panes\n\n\
@@ -1273,7 +1266,7 @@ pub(crate) mod tests {
         let parsed = parser::parse_deck(&out.decks[0].1, &types, "cards/Default.md");
         assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
         let fronts: Vec<_> = parsed.cards.iter().map(|c| c.front.as_str()).collect();
-        assert_eq!(fronts, ["manzana\n\n![](../media/manzana.mp3)", "apple", "queso", "cheese", "Buenos días", "Plural of pan?", "uva", "grape"]);
+        assert_eq!(fronts, ["manzana\n\n![](@/media/manzana.mp3)", "apple", "queso", "cheese", "Buenos días", "Plural of pan?", "uva", "grape"]);
         // The review of the Recall card went to the `Meaning -> Word, Audio` card.
         assert_eq!(out.histories.len(), 1);
         assert_eq!(out.histories[0].id, parsed.cards[1].id);
@@ -1290,13 +1283,13 @@ pub(crate) mod tests {
         // card keeps its history and is tagged.
         assert_eq!(
             out.decks[0].1,
-            "C: The [capital] of \\[x\\] is Paris![](../media/paris.mp3)\n#geo\n\nextra![](../media/gone.mp3)\n\n\
-             C: The capital of \\[x\\] is [Paris]![](../media/paris.mp3)\n#geo #suspended\n\nextra![](../media/gone.mp3)\n\n\
+            "C: The [capital] of \\[x\\] is Paris![](@/media/paris.mp3)\n#geo\n\nextra![](@/media/gone.mp3)\n\n\
+             C: The capital of \\[x\\] is [Paris]![](@/media/paris.mp3)\n#geo #suspended\n\nextra![](@/media/gone.mp3)\n\n\
              Q: Capital of Spain?\nA: Madrid\n#geo #suspended\n"
         );
         assert_eq!(
             out.decks[1].1,
-            "+++\nname = \"Kazakh/Verbs\"\n+++\n\nQ: сәлем\nA: hello![](../../media/hi.png)\n\nQ: hello![](../../media/hi.png)\nA: сәлем\n"
+            "+++\nname = \"Kazakh/Verbs\"\n+++\n\nQ: сәлем\nA: hello![](@/media/hi.png)\n\nQ: hello![](@/media/hi.png)\nA: сәлем\n"
         );
         assert_eq!(out.media.images.iter().collect::<Vec<_>>(), ["hi.png"]);
         assert_eq!(out.media.sounds.iter().collect::<Vec<_>>(), ["gone.mp3", "paris.mp3"]);

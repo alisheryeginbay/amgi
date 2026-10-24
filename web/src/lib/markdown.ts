@@ -349,8 +349,9 @@ export function imageSources(source: string, cardPath: string): string[] {
   return parseBlocks(source, cardPath).flatMap((block) => (block.type === "image" && block.src ? [block.src] : []));
 }
 
-/** URL of a media link written in a card. Relative paths are relative to the deck
- *  file and must stay inside the collection, served from `amgi://collection/`. */
+/** URL of a media link written in a card. Paths are relative to the deck file, or to
+ *  the collection root when they start `@/`, and must stay inside the collection,
+ *  served from `amgi://collection/`. */
 export function resolveMedia(path: string, angled: boolean, cardPath: string): string | null {
   if (/^[a-z][a-z0-9+.-]*:/i.test(path)) return path;
   // `<path>` is literal; a bare destination may be percent-encoded.
@@ -362,8 +363,9 @@ export function resolveMedia(path: string, angled: boolean, cardPath: string): s
       // Not valid percent-encoding, so it was meant literally.
     }
   }
-  const parts = cardPath.split("/").slice(0, -1);
-  for (const segment of literal.split("/")) {
+  const rooted = literal.startsWith("@/");
+  const parts = rooted ? [] : cardPath.split("/").slice(0, -1);
+  for (const segment of (rooted ? literal.slice(2) : literal).split("/")) {
     if (segment === "" || segment === ".") continue;
     if (segment === "..") {
       if (parts.length === 0) return null;

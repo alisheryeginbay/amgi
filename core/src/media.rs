@@ -113,8 +113,8 @@ pub(crate) fn rooted_links(text: &str, dir: &Path) -> String {
     out
 }
 
-/// `link`, relative to the folder `dir`, as a path from the collection root; `None` for
-/// URLs and paths that leave the collection.
+/// `link`, relative to the folder `dir` or, starting `@/`, to the collection root, as a
+/// path from the collection root; `None` for URLs and paths that leave the collection.
 fn resolve(dir: &Path, link: &str) -> Option<PathBuf> {
     let scheme = link.split_once(':').is_some_and(|(s, _)| {
         s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
@@ -123,8 +123,12 @@ fn resolve(dir: &Path, link: &str) -> Option<PathBuf> {
     if scheme {
         return None;
     }
+    let path = match link.strip_prefix("@/") {
+        Some(rooted) => PathBuf::from(rooted),
+        None => dir.join(link),
+    };
     let mut out = PathBuf::new();
-    for part in dir.join(link).components() {
+    for part in path.components() {
         match part {
             Component::Normal(p) => out.push(p),
             Component::ParentDir => {
@@ -194,7 +198,7 @@ mod tests {
     fn finds_files_no_deck_links_to() {
         let root = collection(&[
             ("cards/planets.md", "Q: ![](../media/mars.png)\nA: Mars\n\nQ: ![](<../media/red planet (1).jpg>)\nA: Mars\n"),
-            ("cards/sub/sounds.md", "Q: ![](../../media/audio/hello%20world.mp3)\nA: hi\n"),
+            ("cards/sub/sounds.md", "Q: ![](../../media/audio/hello%20world.mp3)\nA: hi\n\nQ: ![](@/media/rooted.png)\nA: x\n"),
             ("cards/old.md", "<!-- Q: ![](../media/Comet.PNG) -->\n"),
             ("stray.md", "![a [b]](media/kept.gif)\n"),
             ("media/mars.png", "x"),
@@ -202,6 +206,7 @@ mod tests {
             ("media/audio/hello world.mp3", "x"),
             ("media/comet.png", "x"),
             ("media/kept.gif", "x"),
+            ("media/rooted.png", "x"),
             ("media/unused.png", "12345"),
             ("media/audio/unused.mp3", "x"),
             ("media/.DS_Store", "x"),
@@ -230,8 +235,9 @@ mod tests {
         assert_eq!(rooted("![](../../media/a.png)", "cards/sub"), "![](<media/a.png>)");
         assert_eq!(rooted("![](<../media/a b.png>)", "cards"), rooted("![](../media/a%20b.png)", "cards"));
         assert_eq!(rooted("![](media/a.png)", "cards"), "![](<cards/media/a.png>)");
+        assert_eq!(rooted("![](@/media/a.png)", "cards/sub"), "![](<media/a.png>)");
         // Left as written: URLs, paths out of the collection and text that isn't a link.
-        for text in ["![](https://example.com/a.png)", "![](../../a.png)", "![no link", "x ![a](b"] {
+        for text in ["![](https://example.com/a.png)", "![](../../a.png)", "![](@/../a.png)", "![no link", "x ![a](b"] {
             assert_eq!(rooted(text, "cards"), text);
         }
     }

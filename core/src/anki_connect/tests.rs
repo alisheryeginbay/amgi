@@ -79,7 +79,7 @@ fn yomitan_flow() {
     assert_eq!(*r.changes.lock().unwrap(), 1);
     assert_eq!(
         fs::read_to_string(dir.join("cards/lang/ja.md")).unwrap(),
-        "+++\nname = \"Japanese\"\n+++\n\n@Vocab\nWord: 日本\nReading: 日本（にほん）\nMeaning: - Japan\n- a **country**\nAudio: ![](../../media/nihon.mp3)\n#yomitan\n"
+        "+++\nname = \"Japanese\"\n+++\n\n@Vocab\nWord: 日本\nReading: 日本（にほん）\nMeaning: - Japan\n- a **country**\nAudio: ![](@/media/nihon.mp3)\n#yomitan\n"
     );
 
     // Yomitan's duplicate search, alone and as it batches several.
@@ -143,7 +143,7 @@ fn basic_and_cloze() {
     assert!(cloze["result"].is_i64(), "{cloze}");
     assert_eq!(
         fs::read_to_string(dir.join("cards/Geography.md")).unwrap(),
-        "Q: Capital of France?\nA: Paris![](../media/map.png)\n\nC: The capital of [Italy] is [Rome|city].\n"
+        "Q: Capital of France?\nA: Paris![](@/media/map.png)\n\nC: The capital of [Italy] is [Rome|city].\n"
     );
     assert_eq!(
         add("Cloze", json!({ "Text": "x", "Back Extra": "y" })),
