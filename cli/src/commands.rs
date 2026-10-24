@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
+use amgi_core::lint;
 use amgi_core::search::Query;
 use amgi_core::{BrowseCard, CardCollection, CardInfo, CardKind, Rating, StudyScope, format_interval};
 use serde_json::json;
@@ -86,6 +87,34 @@ pub fn check(c: &CardCollection, out: Output) -> Result {
     if warnings.is_empty() {
         let cards = c.cards(StudyScope::All).len() as u32;
         println!("{}", green(format!("No problems in {}.", count(cards, "card", "cards"))));
+    }
+    Ok(code)
+}
+
+pub fn lint(c: &CardCollection, out: Output, fix: bool) -> Result {
+    let root = c.root();
+    let config = lint::Config::load(&root)?;
+    let problems = lint::run(&root, &config, fix)?;
+    let fixed = if fix { problems.iter().filter(|p| p.fixable).count() as u32 } else { 0 };
+    let left: Vec<_> = problems.iter().filter(|p| !(fix && p.fixable)).collect();
+    let code = if left.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    if out.json {
+        print_json(&json!({ "problems": left, "fixed": fixed }))?;
+        return Ok(code);
+    }
+    for p in &left {
+        let place = format!("{}:{}:{}", p.path, p.line, p.column);
+        println!("{}{} {} {}", style::path(place), dim(":"), p.message, dim(format!("({})", p.rule)));
+    }
+    if fixed > 0 {
+        println!("{}", green(format!("Fixed {}.", count(fixed, "problem", "problems"))));
+    }
+    let fixable = left.iter().filter(|p| p.fixable).count() as u32;
+    if left.is_empty() && fixed == 0 {
+        println!("{}", green("No problems."));
+    } else if fixable > 0 {
+        let them = if fixable == left.len() as u32 { "them".to_string() } else { format!("{fixable} of them") };
+        println!("{}{}", bold(count(left.len() as u32, "problem.", "problems.")), dim(format!(" Run `amgi lint --fix` to fix {them}.")));
     }
     Ok(code)
 }

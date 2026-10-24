@@ -356,18 +356,18 @@ fn note_start<'a>(pending: &Option<Pending>, line: &'a str) -> Option<&'a str> {
 /// backticks or tildes, indented at most three spaces, closed by a longer or equal run
 /// of the same character with nothing after it.
 #[derive(Default)]
-struct Fences {
+pub(crate) struct Fences {
     open: Option<(char, usize)>,
     /// 1-based line where the open block starts.
     start: u32,
 }
 
 impl Fences {
-    fn inside(&self) -> bool {
+    pub(crate) fn inside(&self) -> bool {
         self.open.is_some()
     }
 
-    fn step(&mut self, line: &str) {
+    pub(crate) fn step(&mut self, line: &str) {
         let indent = line.len() - line.trim_start_matches(' ').len();
         if indent > 3 {
             return;

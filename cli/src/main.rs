@@ -41,6 +41,14 @@ enum Command {
     },
     /// Problems in the deck files, as `path:line: message`. Exits 1 if there are any.
     Check,
+    /// Deck files that break the rules in `amgi.toml`, such as media links that don't
+    /// start at the collection root, as `path:line:column: message`. Exits 1 if any are
+    /// left.
+    Lint {
+        /// Fix what can be fixed, in the files.
+        #[arg(long)]
+        fix: bool,
+    },
     /// Find cards with the app's search syntax, such as `deck:french is:due`.
     Search {
         /// Search words and filters; all must match. Empty lists every card.
@@ -110,6 +118,7 @@ fn main() -> ExitCode {
         Command::Prune { trash } => commands::prune(&collection, out, trash),
         Command::Diff { revs, staged } => commands::diff(&collection, out, &revs, staged),
         Command::Stats { days, deck } => commands::stats(&collection, out, days, deck.as_deref()),
+        Command::Lint { fix } => commands::lint(&collection, out, fix),
     };
     match result {
         Ok(code) => code,

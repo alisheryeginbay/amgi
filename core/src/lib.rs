@@ -5,6 +5,7 @@
 
 pub mod anki;
 pub mod anki_connect;
+pub mod lint;
 pub mod media;
 pub mod parser;
 pub mod scheduler;

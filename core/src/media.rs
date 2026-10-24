@@ -71,10 +71,7 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<PathBuf>, keep: &dyn Fn(&Path)
 fn links(text: &str) -> impl Iterator<Item = String> + '_ {
     text.match_indices("![").filter_map(|(i, _)| {
         let (_, path, angled) = parser::image(&text[i..])?;
-        Some(match angled {
-            true => path.to_string(),
-            false => percent_decode(path).unwrap_or_else(|| path.to_string()),
-        })
+        Some(target(path, angled))
     })
 }
 
@@ -92,11 +89,7 @@ pub(crate) fn rooted_links(text: &str, dir: &Path) -> String {
             rest = &rest[2..];
             continue;
         };
-        let link = match angled {
-            true => path.to_string(),
-            false => percent_decode(path).unwrap_or_else(|| path.to_string()),
-        };
-        match resolve(dir, &link) {
+        match resolve(dir, &target(path, angled)) {
             Some(rooted) => {
                 // Up to and including the `(`.
                 let open = path.as_ptr() as usize - rest.as_ptr() as usize - usize::from(angled);
@@ -113,14 +106,27 @@ pub(crate) fn rooted_links(text: &str, dir: &Path) -> String {
     out
 }
 
-/// `link`, relative to the folder `dir` or, starting `@/`, to the collection root, as a
-/// path from the collection root; `None` for URLs and paths that leave the collection.
-fn resolve(dir: &Path, link: &str) -> Option<PathBuf> {
-    let scheme = link.split_once(':').is_some_and(|(s, _)| {
+/// The file a link's destination names: `<path>` literally, a bare path
+/// percent-decoded.
+pub(crate) fn target(path: &str, angled: bool) -> String {
+    match angled {
+        true => path.to_string(),
+        false => percent_decode(path).unwrap_or_else(|| path.to_string()),
+    }
+}
+
+/// Whether `link` is a URL, such as `https://…`, rather than a path.
+pub(crate) fn is_url(link: &str) -> bool {
+    link.split_once(':').is_some_and(|(s, _)| {
         s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
             && s.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
-    });
-    if scheme {
+    })
+}
+
+/// `link`, relative to the folder `dir` or, starting `@/`, to the collection root, as a
+/// path from the collection root; `None` for URLs and paths that leave the collection.
+pub(crate) fn resolve(dir: &Path, link: &str) -> Option<PathBuf> {
+    if is_url(link) {
         return None;
     }
     let path = match link.strip_prefix("@/") {
@@ -164,7 +170,7 @@ fn percent_decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-fn slashed(path: &Path) -> String {
+pub(crate) fn slashed(path: &Path) -> String {
     path.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 

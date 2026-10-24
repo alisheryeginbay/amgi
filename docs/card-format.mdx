@@ -18,9 +18,10 @@ C: \[H⁺\] is the [concentration] of hydrogen ions; `v[0]` is the [first|which?
 - Images: `![](@/media/photo.jpg)`. A path starting `@/` starts at the collection
   folder, so it works from any deck and keeps working when the deck moves; the app links
   the media it adds this way. Any other path is relative to the deck file: from a deck in
-  `cards`, `../media/photo.jpg` is the same file. Media has to be inside the collection
-  folder: a path that leads out of it doesn't show. Use `![](<@/media/my photo (1).jpg>)`
-  for paths with spaces or parentheses. An image can also be a cloze answer:
+  `cards`, `../media/photo.jpg` is the same file; [`amgi lint --fix`](/cli#lint) rewrites
+  such links from the root. Media has to be inside the collection folder: a path that
+  leads out of it doesn't show. Use `![](<@/media/my photo (1).jpg>)` for paths with
+  spaces or parentheses. An image can also be a cloze answer:
   `[![](flag.png)|flag]`.
 - Sounds use the same syntax: `![](audio/word.mp3)`. Links to audio files (`mp3`, `m4a`,
   `wav`, `flac` and other formats macOS can play) show as play buttons. A card's sounds

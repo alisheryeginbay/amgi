@@ -8,6 +8,7 @@ description: "Check, search and inspect a collection from the terminal with the 
 ```sh
 amgi status                  # cards left today, by deck; --short for one line, empty when done
 amgi check                   # problems in the deck files as path:line: message; exits 1 if any
+amgi lint                    # deck files that break the rules in amgi.toml; --fix fixes them
 amgi search deck:french is:due   # the search syntax; --view Leeches runs a saved view
 amgi decks                   # every deck with due, new and total counts
 amgi tags                    # every tag with its card count
@@ -34,6 +35,25 @@ in the app.
 
 Output is in color on a terminal and plain when piped. `--color always` or `never`
 overrides that, as do the `NO_COLOR` and `CLICOLOR_FORCE` environment variables.
+
+## Lint
+
+`amgi lint` checks how the deck files are written, against the rules in `amgi.toml` at
+the collection root, and lists what breaks them as `path:line:column: message`. It exits
+1 if anything is left. `amgi lint --fix` fixes what it can, in the files.
+
+```toml amgi.toml
+[lint]
+media-links = "absolute"
+```
+
+- `media-links`: `"absolute"`, the default, wants media linked from the collection root,
+  as `![](@/media/photo.jpg)`, so links keep working when a deck moves. `--fix` rewrites
+  `../media/photo.jpg` that way, and cards keep their history. A link that leads out of
+  the collection is listed but left as it is. `"any"` turns the rule off.
+
+Without `amgi.toml`, every rule has its default. Links in code blocks and code spans are
+text, so they're left alone.
 
 ## Changes since a commit
 
