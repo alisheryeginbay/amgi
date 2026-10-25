@@ -142,7 +142,7 @@
   .card {
     display: flex;
     flex-direction: column;
-    min-height: 340px;
+    min-height: 180px;
   }
 
   .layers {
@@ -175,7 +175,7 @@
     align-items: center;
   }
 
-  /* Basic: the question ruled off from the answer below it. */
+  /* Basic: the question, then the answer below it. */
   .question,
   .answer {
     text-align: left;
@@ -186,10 +186,6 @@
     align-items: flex-start;
   }
 
-  .question {
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--separator);
-  }
 
   /* A typed answer: a box under the question, then what was typed against the answer. */
   .typed {
@@ -244,9 +240,12 @@
     border-radius: 3px;
   }
 
+  /* The answer is ruled off by a dashed line across the whole card, edge to edge. */
   .answer {
     display: none;
-    padding-top: 18px;
+    margin: 28px -36px 0;
+    padding: 28px 36px 0;
+    border-top: 1px dashed var(--separator);
   }
 
   .shown .answer {
