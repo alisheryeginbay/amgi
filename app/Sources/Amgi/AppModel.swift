@@ -169,7 +169,8 @@ final class AppModel {
             browsedCount = nil
             switch selection {
             case .dashboard: loadDashboard()
-            case .review: loadNext()
+            // A card showing its answer stays up until it's rated.
+            case .review: if current == nil || !revealed { loadNext() }
             case .cards, .deck, .tag, .view: if cardsStale { loadBrowsed() }
             case .tags, .views: break
             }
