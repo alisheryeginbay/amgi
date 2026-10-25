@@ -67,7 +67,7 @@ final class AppModel {
     /// The saved view shown in the add or edit sheet.
     var editingView: SavedViewDraft?
     private(set) var warnings: [CollectionWarning] = []
-    private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
+    private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0)
     /// When the current study day started (Unix seconds), for the browse search's `is:due`.
     private(set) var dayStart: Int64?
     /// The card being studied, and whether its answer shows.
@@ -126,6 +126,17 @@ final class AppModel {
         didSet {
             guard let collection, rolloverHour != Int(collection.rolloverHour()) else { return }
             perform { try collection.setRolloverHour(hour: UInt8(rolloverHour)) }
+            refresh()
+        }
+    }
+
+    /// How many cards that came due a day allows reviewing, or `nil` for no limit. The
+    /// open collection's, kept in its database.
+    var reviewsPerDay: Int? {
+        didSet {
+            let limit = reviewsPerDay.map { UInt32(clamping: $0) }
+            guard let collection, limit != collection.reviewsPerDay() else { return }
+            perform { try collection.setReviewsPerDay(limit: limit) }
             refresh()
         }
     }
@@ -213,9 +224,10 @@ final class AppModel {
         }
     }
 
-    /// Top-level decks already include their subdecks.
-    var totalDue: UInt32 { decks.filter { !$0.name.contains("/") }.reduce(0) { $0 + $1.due } }
-    /// Cards answered Again, waiting minutes to come back.
+    /// Due cards, with reviews capped by the daily limit, which decks share.
+    var totalDue: UInt32 { today.dueAvailable }
+    /// Cards answered Again, waiting minutes to come back. Top-level decks already
+    /// include their subdecks.
     var totalLearning: UInt32 { decks.filter { !$0.name.contains("/") }.reduce(0) { $0 + $1.learning } }
     /// Cards still to study today: due, learning and new.
     var totalLeft: UInt32 { totalDue + totalLearning + today.newAvailable }
@@ -248,6 +260,7 @@ final class AppModel {
             self.collection = collection
             self.desiredRetention = Double(collection.desiredRetention())
             self.rolloverHour = Int(collection.rolloverHour())
+            self.reviewsPerDay = collection.reviewsPerDay().map(Int.init)
             self.canUndoAnswer = false
             self.folder = url
             web.collectionRoot = url
@@ -275,7 +288,7 @@ final class AppModel {
         savedViews = []
         editingView = nil
         warnings = []
-        today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0)
+        today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0)
         study = .none
         canUndoAnswer = false
         dashboard = nil

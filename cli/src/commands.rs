@@ -41,7 +41,8 @@ pub fn status(c: &CardCollection, out: Output, short: bool) -> Result {
     let today = c.today(StudyScope::All)?;
     // Top-level decks, as the menu bar lists them; their counts include subdecks.
     let decks: Vec<_> = c.decks()?.into_iter().filter(|d| !d.name.contains('/')).collect();
-    let due: u32 = decks.iter().map(|d| d.due).sum();
+    // Not the decks' sum: they share the daily review limit.
+    let due = today.due_available;
     let new = today.new_available;
     if out.json {
         let decks: Vec<_> = decks.iter().filter(|d| d.due + d.new > 0).collect();

@@ -428,6 +428,16 @@ impl Store {
         .collect()
     }
 
+    /// Reviews of cards that came due after a day or more, at or after `since`: the
+    /// ones the daily review limit counts. Not new cards, nor failed ones coming back.
+    pub fn due_reviews_since(&self, since: i64) -> rusqlite::Result<u32> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM review_log WHERE rating > 0 AND reviewed_at >= ?1 AND review_state = ?2",
+            params![since, ReviewState::Review as i64],
+            |r| r.get(0),
+        )
+    }
+
     pub fn reviews_since(&self, since: i64, cards: Option<&[String]>) -> rusqlite::Result<u32> {
         let (all, ids) = card_list(cards);
         self.conn.query_row(
@@ -437,7 +447,6 @@ impl Store {
         )
     }
 
-    /// Lowercased tag → icon.
     /// A setting's value, if the collection has one.
     pub fn setting(&self, key: &str) -> rusqlite::Result<Option<f64>> {
         self.conn.query_row("SELECT value FROM setting WHERE key = ?1", [key], |r| r.get(0)).optional()
@@ -452,6 +461,12 @@ impl Store {
         Ok(())
     }
 
+    pub fn remove_setting(&self, key: &str) -> rusqlite::Result<()> {
+        self.conn.execute("DELETE FROM setting WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    /// Lowercased tag → icon.
     pub fn tag_icons(&self) -> rusqlite::Result<HashMap<String, String>> {
         let mut stmt = self.conn.prepare("SELECT tag, icon FROM tag_icon")?;
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()

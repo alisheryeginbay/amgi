@@ -47,6 +47,7 @@ const LEARN_AHEAD_SECS: i64 = 20 * 60;
 /// Keys of the settings kept in the collection's database.
 const RETENTION_KEY: &str = "desired_retention";
 const ROLLOVER_HOUR_KEY: &str = "rollover_hour";
+const REVIEWS_PER_DAY_KEY: &str = "reviews_per_day";
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum AmgiError {
@@ -236,6 +237,9 @@ pub struct TodayStats {
     pub new_studied: u32,
     /// New cards still available today across the collection, capped by the daily limit.
     pub new_available: u32,
+    /// Cards due now, failed ones coming back included, with reviews capped by the
+    /// daily review limit.
+    pub due_available: u32,
 }
 
 /// A card to add to a deck's file.
@@ -424,6 +428,8 @@ struct Inner {
     /// CJK scripts in the deck files, for the fonts the app fetches.
     scripts: Scripts,
     new_per_day: u32,
+    /// Reviews of due cards a day allows; `None` for no limit.
+    reviews_per_day: Option<u32>,
     utc_offset_secs: i64,
     /// When the study day starts, in seconds after local midnight.
     rollover_secs: i64,
@@ -482,6 +488,23 @@ impl CardCollection {
         let hour = hour.min(23);
         inner.store.set_setting(ROLLOVER_HOUR_KEY, hour.into())?;
         inner.rollover_secs = i64::from(hour) * 3600;
+        Ok(())
+    }
+
+    /// How many cards that came due a study day allows reviewing; `None` for no limit.
+    /// Failed cards coming back and new cards don't count.
+    pub fn reviews_per_day(&self) -> Option<u32> {
+        self.lock().reviews_per_day
+    }
+
+    /// Set and save the daily review limit; `None` removes it.
+    pub fn set_reviews_per_day(&self, limit: Option<u32>) -> Result<()> {
+        let mut inner = self.lock();
+        match limit {
+            Some(n) => inner.store.set_setting(REVIEWS_PER_DAY_KEY, n.into())?,
+            None => inner.store.remove_setting(REVIEWS_PER_DAY_KEY)?,
+        }
+        inner.reviews_per_day = limit;
         Ok(())
     }
 
@@ -774,6 +797,7 @@ impl CardCollection {
             note_types: parser::NoteTypes::default(),
             scripts: Scripts::default(),
             new_per_day: 20,
+            reviews_per_day: None,
             utc_offset_secs: 0,
             rollover_secs: i64::from(DEFAULT_ROLLOVER_HOUR) * 3600,
             store_notice: None,
@@ -803,6 +827,7 @@ impl Inner {
         if let Some(hour) = self.store.setting(ROLLOVER_HOUR_KEY)? {
             self.rollover_secs = hour.clamp(0.0, 23.0) as i64 * 3600;
         }
+        self.reviews_per_day = self.store.setting(REVIEWS_PER_DAY_KEY)?.map(|n| n.clamp(0.0, u32::MAX.into()) as u32);
         Ok(())
     }
 
@@ -991,6 +1016,13 @@ impl Inner {
         Ok(self.new_per_day.saturating_sub(studied))
     }
 
+    /// Reviews of due cards still allowed today, collection-wide.
+    fn reviews_remaining(&self, now: i64) -> Result<u32> {
+        let Some(limit) = self.reviews_per_day else { return Ok(u32::MAX) };
+        let reviewed = self.store.due_reviews_since(self.day_start(now))?;
+        Ok(limit.saturating_sub(reviewed))
+    }
+
     fn in_scope<'a, 's>(&'a self, scope: &'s StudyScope) -> impl Iterator<Item = &'a Card> + use<'a, 's> {
         self.cards.iter().filter(move |c| scope.contains(c))
     }
@@ -1018,10 +1050,12 @@ impl Inner {
     }
 
     fn decks(&self, now: i64) -> Result<Vec<DeckInfo>> {
-        let remaining = self.new_remaining(now)?;
+        let new_remaining = self.new_remaining(now)?;
+        let reviews_remaining = self.reviews_remaining(now)?;
         // Count each deck's own cards, then add them to the deck and its parents:
-        // there are far fewer decks than cards.
-        let mut own: HashMap<&str, (u32, u32, u32, u32)> = HashMap::new();
+        // there are far fewer decks than cards. `due` holds reviews until the limit
+        // applies below; `learning` holds failed cards, which are due once their time is up.
+        let mut own: HashMap<&str, (u32, u32, u32, u32, u32)> = HashMap::new();
         for card in &self.cards {
             let counts = own.entry(&card.deck).or_default();
             counts.0 += 1;
@@ -1029,26 +1063,31 @@ impl Inner {
                 continue;
             }
             match self.states.get(&card.parsed.id) {
-                Some(s) if self.is_due(s, now) => counts.1 += 1,
+                Some(s) if s.interval_secs < DAY_SECS && s.due <= now => counts.4 += 1,
                 Some(s) if s.interval_secs < DAY_SECS => counts.2 += 1,
+                Some(s) if self.is_due(s, now) => counts.1 += 1,
                 Some(_) => {}
                 None => counts.3 += 1,
             }
         }
         // Keyed by path components, so parents sort before their children.
-        let mut decks: BTreeMap<Vec<&str>, DeckInfo> = BTreeMap::new();
-        for (name, (total, due, learning, new)) in own {
+        let mut decks: BTreeMap<Vec<&str>, (DeckInfo, u32)> = BTreeMap::new();
+        for (name, (total, due, learning, new, relearning)) in own {
             let parts: Vec<&str> = name.split('/').collect();
             for depth in 1..=parts.len() {
-                let deck = decks.entry(parts[..depth].to_vec()).or_insert_with(|| DeckInfo {
-                    name: parts[..depth].join("/"),
-                    title: String::new(),
-                    total: 0,
-                    due: 0,
-                    learning: 0,
-                    new: 0,
-                    note_type: None,
+                let (deck, failed) = decks.entry(parts[..depth].to_vec()).or_insert_with(|| {
+                    let deck = DeckInfo {
+                        name: parts[..depth].join("/"),
+                        title: String::new(),
+                        total: 0,
+                        due: 0,
+                        learning: 0,
+                        new: 0,
+                        note_type: None,
+                    };
+                    (deck, 0)
                 });
+                *failed += relearning;
                 deck.total += total;
                 deck.due += due;
                 deck.learning += learning;
@@ -1057,11 +1096,12 @@ impl Inner {
         }
         Ok(decks
             .into_values()
-            .map(|d| DeckInfo {
+            .map(|(d, failed)| DeckInfo {
                 title: self.deck_titles.get(&d.name).cloned().unwrap_or_else(|| {
                     d.name.rsplit('/').next().unwrap_or_default().to_string()
                 }),
-                new: d.new.min(remaining),
+                due: failed + d.due.min(reviews_remaining),
+                new: d.new.min(new_remaining),
                 note_type: self.deck_note_types.get(&d.name).cloned(),
                 ..d
             })
@@ -1119,17 +1159,20 @@ impl Inner {
             .map(|(_, c)| c);
         // Reviews, most overdue day first. Within a day a fixed shuffle mixes decks,
         // and keeps its order when the app restarts.
-        let review = || {
-            seen()
+        let review = || -> Result<Option<&Card>> {
+            if self.reviews_remaining(now)? == 0 {
+                return Ok(None);
+            }
+            Ok(seen()
                 .filter(|(s, _)| self.is_due(s, now))
                 .min_by_key(|(s, c)| {
                     let last_review = s.last_review.to_string();
                     (self.day_start(s.due), parser::stable_hash(&[&c.parsed.id, &last_review]))
                 })
-                .map(|(_, c)| c)
+                .map(|(_, c)| c))
         };
 
-        let card = match relearning.or_else(review) {
+        let card = match relearning.map_or_else(review, |c| Ok(Some(c)))? {
             Some(c) => Some(c),
             None if self.new_remaining(now)? > 0 => studied()
                 .find(|c| !self.states.contains_key(&c.parsed.id))
@@ -1587,10 +1630,19 @@ impl Inner {
             .in_scope(scope)
             .filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id))
             .count() as u32;
+        let (mut failed, mut due) = (0, 0);
+        for state in self.in_scope(scope).filter(|c| !c.suspended()).filter_map(|c| self.states.get(&c.parsed.id)) {
+            if state.interval_secs < DAY_SECS {
+                failed += u32::from(state.due <= now);
+            } else {
+                due += u32::from(self.is_due(state, now));
+            }
+        }
         Ok(TodayStats {
             reviewed: self.store.reviews_since(since, ids)?,
             new_studied: self.store.new_cards_since(since, ids)?,
             new_available: unseen.min(self.new_remaining(now)?),
+            due_available: failed + due.min(self.reviews_remaining(now)?),
         })
     }
 }
@@ -2138,6 +2190,54 @@ mod tests {
         assert_eq!(inner.decks(T0).unwrap()[0].new, 0);
         // Tomorrow the limit resets.
         assert!(inner.next_card(&StudyScope::All, T0 + DAY_SECS).unwrap().is_some());
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn review_limit() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n\nQ: 3\nA: 3\n\nQ: 4\nA: 4\n")]);
+        let mut inner = c.lock();
+        for _ in 0..3 {
+            let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
+            inner.answer(&card.id, Rating::Good, T0).unwrap();
+        }
+        drop(inner);
+        c.set_reviews_per_day(Some(1)).unwrap();
+        assert_eq!(c.reviews_per_day(), Some(1));
+        let mut inner = c.lock();
+        let later = T0 + 100 * DAY_SECS;
+        assert_eq!(inner.decks(later).unwrap()[0].due, 1);
+        assert_eq!(inner.today(&StudyScope::All, later).unwrap().due_available, 1);
+
+        // Forgetting the one review allowed brings it back, but no other review comes.
+        let card = inner.next_card(&StudyScope::All, later).unwrap().unwrap();
+        assert!(!card.is_new);
+        inner.answer(&card.id, Rating::Again, later).unwrap();
+        let back = later + 600;
+        assert_eq!(inner.decks(back).unwrap()[0].due, 1);
+        assert_eq!(inner.next_card(&StudyScope::All, back).unwrap().unwrap().id, card.id);
+        inner.answer(&card.id, Rating::Good, back).unwrap();
+        // New cards have their own limit.
+        let new = inner.next_card(&StudyScope::All, back).unwrap().unwrap();
+        assert!(new.is_new);
+        inner.answer(&new.id, Rating::Easy, back).unwrap();
+        drop(inner);
+        c.set_new_cards_per_day(1);
+        let inner = c.lock();
+        assert!(inner.next_card(&StudyScope::All, back).unwrap().is_none());
+        assert_eq!(inner.today(&StudyScope::All, back).unwrap().due_available, 0);
+        // Tomorrow the limit resets, and without one every due card comes.
+        assert_eq!(inner.decks(later + DAY_SECS).unwrap()[0].due, 1);
+        drop(inner);
+        c.set_reviews_per_day(None).unwrap();
+        assert_eq!(c.lock().decks(back).unwrap()[0].due, 2);
+        // The limit is kept in the database.
+        c.set_reviews_per_day(Some(5)).unwrap();
+        let mut inner = c.lock();
+        inner.reviews_per_day = None;
+        inner.load_settings().unwrap();
+        assert_eq!(inner.reviews_per_day, Some(5));
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }

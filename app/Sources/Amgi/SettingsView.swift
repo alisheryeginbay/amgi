@@ -67,6 +67,26 @@ private struct StudySettings: View {
                 Text("Next day starts at")
                 Text("Cards are due for the whole day. Studying after midnight but before this hour counts as the day before. 4 AM suits most people.")
             }
+            Toggle(isOn: Binding(
+                get: { model.reviewsPerDay != nil },
+                set: { model.reviewsPerDay = $0 ? Self.defaultReviewsPerDay : nil }
+            )) {
+                Text("Limit reviews per day")
+                Text("Due cards past the limit wait for the next day, most overdue first. New cards and forgotten cards coming back aren't counted.")
+            }
+            if let limit = model.reviewsPerDay {
+                let binding = Binding(get: { limit }, set: { model.reviewsPerDay = max(0, $0) })
+                LabeledContent("Reviews per day") {
+                    HStack(spacing: 4) {
+                        TextField("Reviews per day", value: binding, format: .number)
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 60)
+                        Stepper("Reviews per day", value: binding, in: 0...9999, step: 10)
+                            .labelsHidden()
+                    }
+                }
+            }
         }
         .disabled(model.folder == nil)
     }
@@ -81,6 +101,9 @@ private struct StudySettings: View {
             Text("Fills as you work through today's due, learning and new cards.")
         }
     }
+
+    /// Anki's default.
+    private static let defaultReviewsPerDay = 200
 
     /// The hour as the Mac shows times, such as `4 AM` or `04:00`.
     private static func hourLabel(_ hour: Int) -> String {
