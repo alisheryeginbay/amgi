@@ -23,6 +23,8 @@ struct AmgiApp: App {
         .commands {
             UpdateCommands(updater: updater)
             HelpCommands()
+            // View ▸ Show/Hide Sidebar, with ⌃⌘S as in Finder and Mail.
+            SidebarCommands()
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") { model.chooseFolder() }
                     .keyboardShortcut("o")

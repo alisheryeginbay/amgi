@@ -28,6 +28,7 @@ struct ShortcutGroup: Identifiable {
             Shortcut("Dashboard", "⌘", "1"),
             Shortcut("Review", "⌘", "2"),
             Shortcut("Decks", "⌘", "3"),
+            Shortcut("Show or Hide Sidebar", "⌃", "⌘", "S"),
             Shortcut("Settings", "⌘", ","),
             Shortcut("Keyboard Shortcuts", "⌘", "/"),
         ]),
