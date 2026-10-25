@@ -15,7 +15,7 @@ class AppState {
   noteTypes = $state.raw<NoteTypeInfo[]>([]);
   /** Lowercased tag → icon, such as an emoji. */
   icons = $state.raw<Record<string, string>>({});
-  environment = $state.raw<Environment>({ locale: navigator.language, firstWeekday: 1 });
+  environment = $state.raw<Environment>({ locale: navigator.language, firstWeekday: 1, answerKeys: ["1", "2", "3", "4"] });
   /** Stylesheets of the CJK font packs downloaded so far. */
   fonts = $state.raw<string[]>([]);
 }

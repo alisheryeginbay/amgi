@@ -4,7 +4,7 @@ description: "Keyboard shortcuts, browsing, adding cards, saved views and search
 ---
 
 Keys while studying: <kbd>Space</kbd> shows the answer, <kbd>1</kbd>–<kbd>4</kbd> rate
-Again/Hard/Good/Easy, <kbd>⌘Z</kbd> takes back the last rating and shows that card again,
+Again/Hard/Good/Easy ([or keys you choose](#changing-the-answer-keys)), <kbd>⌘Z</kbd> takes back the last rating and shows that card again,
 <kbd>R</kbd> replays the card's sounds, <kbd>⌘O</kbd> opens a folder, <kbd>⌘R</kbd> reloads,
 <kbd>⌘1</kbd>–<kbd>⌘3</kbd> go to Dashboard, Review and Decks, and <kbd>⌃⌘S</kbd> shows
 or hides the sidebar. Files also reload
@@ -21,6 +21,25 @@ resize it, or hide it with **Hide Card** in the toolbar.
 
 For a card from a [note](/card-format#notes-with-fields), the note's fields are listed
 under it, by name, with the empty ones left out.
+
+## Changing the answer keys
+
+The keys that rate a card can be changed in `~/.config/amgi/config.toml` (or under
+`$XDG_CONFIG_HOME` when that's set). The file belongs to you rather than a collection,
+so the keys stay the same whichever folder you open.
+
+```toml ~/.config/amgi/config.toml
+[keys]
+again = "j"
+hard = "k"
+good = "l"
+easy = ";"
+```
+
+Each is one character; a grade left out keeps its number. <kbd>Space</kbd> and
+<kbd>R</kbd> are taken, and two grades can't share a key. The file is read again when
+the app comes to the front or you press <kbd>⌘R</kbd>; if it has a mistake, Amgi says
+what and keeps the keys it had. **Help ▸ Keyboard Shortcuts** shows the keys in use.
 
 ## When cards are due
 

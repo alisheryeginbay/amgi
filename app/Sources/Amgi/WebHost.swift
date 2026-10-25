@@ -108,7 +108,8 @@ final class WebHost: NSObject {
     /// Study keys reach the card wherever focus is, so selecting Review leaves the sidebar
     /// focused: arrows still move through it, and these keys answer the card instead of
     /// jumping to rows. Text being typed and the page's own key handling are left alone.
-    private static let studyKeys: Set<String> = [" ", "1", "2", "3", "4", "r"]
+    /// The answer keys come from the config file.
+    private var studyKeys: Set<String> { Set([" ", "r"] + (state?.environment.answerKeys ?? [])) }
     private var keyMonitor: Any?
 
     private func monitorStudyKeys() {
@@ -116,10 +117,11 @@ final class WebHost: NSObject {
             // Monitors run on the main thread.
             let window = event.window
             let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
-            let plain = event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+            // Shift is allowed, for answer keys such as `:` that need it.
+            let plain = event.modifierFlags.intersection([.command, .control, .option]).isEmpty
             let repeated = event.isARepeat
             let forwarded = MainActor.assumeIsolated { () -> Bool in
-                guard let self, plain, Self.studyKeys.contains(key),
+                guard let self, plain, self.studyKeys.contains(key),
                       self.ready, self.state?.pane == .study,
                       let window, window === self.webView.window,
                       window.firstResponder !== self.webView,

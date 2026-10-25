@@ -105,6 +105,11 @@ final class AppModel {
     var search = ""
     var errorMessage: String?
     var importSummary: ImportSummary?
+    /// The keys that rate a shown answer, from `~/.config/amgi/config.toml`.
+    private(set) var answerKeys = AnswerKeys(again: "1", hard: "2", good: "3", easy: "4")
+    /// The last error in that file, so it's shown once rather than every time the app
+    /// comes to the front.
+    @ObservationIgnored private var configError: String?
 
     /// Target probability of recalling a card when it comes due. The open collection's,
     /// kept in its database.
@@ -199,6 +204,7 @@ final class AppModel {
     init() {
         web.onMessage = { [weak self] in self?.handle($0) }
         web.contextMenu = { [weak self] ids in self?.menuItems(for: ids) ?? [] }
+        loadConfig()
         monitorReviewShortcuts()
         refreshCountsPeriodically()
         registerQuickAddShortcut()
@@ -308,8 +314,22 @@ final class AppModel {
 
     /// Re-read the Markdown files and update counts. Keeps the current card if it still exists.
     func reload() {
+        loadConfig()
         perform { try collection?.reload() }
         refresh()
+    }
+
+    /// Read the config file again. A broken file keeps the keys already in use.
+    private func loadConfig() {
+        do {
+            let config = try AmgiCore.loadConfig()
+            update(\.answerKeys, config.keys)
+            configError = nil
+        } catch {
+            let message = error.localizedDescription
+            if message != configError { errorMessage = message }
+            configError = message
+        }
     }
 
     func refresh() {
@@ -412,7 +432,7 @@ final class AppModel {
         }
         return WebState(
             pane: pane,
-            environment: .current(dayStart: dayStart),
+            environment: .current(dayStart: dayStart, answerKeys: answerKeys),
             fonts: fonts.stylesheets,
             icons: tagIcons,
             study: StudyPayload(
@@ -826,6 +846,11 @@ extension Rating: CaseIterable, Identifiable {
     }
 
     var index: Int { Self.allCases.firstIndex(of: self)! }
+}
+
+extension AnswerKeys {
+    /// Again, Hard, Good and Easy's keys, in that order.
+    var ordered: [String] { [again, hard, good, easy] }
 }
 
 /// The card being studied: its question, or its answer too.

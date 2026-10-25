@@ -126,15 +126,17 @@
     player.stop();
   });
 
-  /** Space shows the answer, 1–4 rate the card, R replays its sounds. The app forwards
-   *  these keys while focus is elsewhere, so they work without the page taking focus. */
+  /** Space shows the answer, the answer keys (1–4 unless the config file says otherwise)
+   *  rate the card, R replays its sounds. The app forwards these keys while focus is
+   *  elsewhere, so they work without the page taking focus. */
   function handleKey(key: string): boolean {
     if (!card || pending) return false;
     key = key.toLowerCase();
     if (key === " " && !revealed) {
       post({ type: "reveal", via: "key" });
-    } else if (["1", "2", "3", "4"].includes(key) && revealed) {
-      post({ type: "answer", rating: Number(key) as 1 | 2 | 3 | 4, via: "key" });
+    } else if (app.environment.answerKeys.includes(key) && revealed) {
+      const rating = (app.environment.answerKeys.indexOf(key) + 1) as 1 | 2 | 3 | 4;
+      post({ type: "answer", rating, via: "key" });
     } else if (key === "r") {
       replay();
     } else {

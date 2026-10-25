@@ -5,6 +5,7 @@
 
 pub mod anki;
 pub mod anki_connect;
+pub mod config;
 pub mod format;
 pub mod lint;
 pub mod media;
@@ -65,6 +66,9 @@ pub enum AmgiError {
     /// A card that can't be added, with a sentence saying why.
     #[error("{message}")]
     InvalidCard { message: String },
+    /// `~/.config/amgi/config.toml` can't be read, with a sentence naming the file and why.
+    #[error("{message}")]
+    Config { message: String },
 }
 
 impl From<std::io::Error> for AmgiError {

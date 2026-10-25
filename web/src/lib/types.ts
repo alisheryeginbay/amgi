@@ -102,6 +102,8 @@ export interface Environment {
   han?: "ko" | "ja" | "zh-hans" | "zh-hant";
   /** When the current study day started, in Unix seconds; absent with no collection open. */
   dayStart?: number;
+  /** The keys that rate Again, Hard, Good and Easy, lowercase, from the config file. */
+  answerKeys: string[];
 }
 
 /** What showed an answer or rated a card. */

@@ -66,6 +66,7 @@ struct AmgiApp: App {
         // Every shortcut in one list, opened from the Help menu with ⌘/.
         Window("Keyboard Shortcuts", id: "keyboard-shortcuts") {
             KeyboardShortcutsView()
+                .environment(model)
         }
         .defaultSize(width: 380, height: 560)
 

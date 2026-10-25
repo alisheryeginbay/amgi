@@ -39,13 +39,16 @@ struct EnvironmentPayload: Encodable, Equatable {
     /// When the current study day started (Unix seconds), for `is:due`; absent with no
     /// collection open.
     let dayStart: Int64?
+    /// The keys that rate Again, Hard, Good and Easy, lowercase.
+    let answerKeys: [String]
 
-    static func current(dayStart: Int64?) -> EnvironmentPayload {
+    static func current(dayStart: Int64?, answerKeys: AnswerKeys) -> EnvironmentPayload {
         EnvironmentPayload(
             locale: Locale.current.identifier(.bcp47),
             firstWeekday: Calendar.current.firstWeekday - 1,
             han: preferredHan,
-            dayStart: dayStart
+            dayStart: dayStart,
+            answerKeys: answerKeys.ordered
         )
     }
 

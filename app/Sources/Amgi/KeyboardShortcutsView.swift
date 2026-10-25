@@ -1,3 +1,4 @@
+import AmgiCore
 import SwiftUI
 
 /// A shortcut as listed in the Keyboard Shortcuts window.
@@ -18,9 +19,10 @@ struct ShortcutGroup: Identifiable {
     let shortcuts: [Shortcut]
     var id: String { title }
 
-    /// Every shortcut in the app. Keep in step with the menus, `AppModel`'s key monitor
-    /// and the page's key handlers in `Study.svelte` and `Browse.svelte`.
-    static let all = [
+    /// Every shortcut in the app, with the answer keys set in the config file. Keep in
+    /// step with the menus, `AppModel`'s key monitor and the page's key handlers in
+    /// `Study.svelte` and `Browse.svelte`.
+    static func all(answerKeys: AnswerKeys) -> [ShortcutGroup] { [
         ShortcutGroup(title: "General", shortcuts: [
             Shortcut("Open Folder", "⌘", "O"),
             Shortcut("Reload Cards", "⌘", "R"),
@@ -34,10 +36,10 @@ struct ShortcutGroup: Identifiable {
         ]),
         ShortcutGroup(title: "Study", shortcuts: [
             Shortcut("Show Answer", "Space"),
-            Shortcut("Again", "1"),
-            Shortcut("Hard", "2"),
-            Shortcut("Good", "3"),
-            Shortcut("Easy", "4"),
+            Shortcut("Again", answerKeys.again.uppercased()),
+            Shortcut("Hard", answerKeys.hard.uppercased()),
+            Shortcut("Good", answerKeys.good.uppercased()),
+            Shortcut("Easy", answerKeys.easy.uppercased()),
             Shortcut("Undo Answer", "⌘", "Z"),
             Shortcut("Replay Audio", "R"),
             Shortcut("Suspend Card", "⌘", "S"),
@@ -52,16 +54,17 @@ struct ShortcutGroup: Identifiable {
             Shortcut("Edit Card", "Return"),
             Shortcut("Card Info", "⌘", "I"),
         ]),
-    ]
+    ] }
 }
 
 /// The Keyboard Shortcuts window, opened from the Help menu with ⌘/.
 struct KeyboardShortcutsView: View {
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Form {
-            ForEach(ShortcutGroup.all) { group in
+            ForEach(ShortcutGroup.all(answerKeys: model.answerKeys)) { group in
                 Section(group.title) {
                     ForEach(group.shortcuts) { shortcut in
                         LabeledContent(shortcut.action) {
