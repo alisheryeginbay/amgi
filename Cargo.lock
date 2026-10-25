@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "amgi-cli"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "amgi-core",
  "clap",
@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "amgi-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64",
  "fsrs",
@@ -1159,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "uniffi",
 ]
