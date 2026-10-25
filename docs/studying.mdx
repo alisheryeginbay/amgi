@@ -53,6 +53,13 @@ retention**, how likely you should be to remember a card when it comes due, belo
 collection: they're kept in its `.amgi.sqlite`, so they move with the folder and the
 [`amgi` command](/cli) uses them too.
 
+The **Retention** table on the Dashboard (and in `amgi stats`) shows how much you
+remembered today, yesterday, and over the last week, month and year: the share of reviews
+not rated **Again**, counting only cards that were scheduled a day or more ahead, as
+Anki does, so a card you forgot isn't counted again when it comes back. It's split into
+young and mature cards by that interval: under 21 days is young. Compare
+it with your desired retention; if it's lower, cards are coming back too late.
+
 ## Adding cards
 
 **Add Card** (<kbd>⌥⌘N</kbd> from any app, or <kbd>⌘N</kbd> in Amgi) opens a small panel

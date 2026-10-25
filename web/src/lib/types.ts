@@ -51,8 +51,16 @@ export interface DashboardState {
   matureCards: number;
   /** Tagged `#suspended`; not counted as new, young or mature. */
   suspendedCards: number;
-  /** Missing without reviews to measure. */
-  retention?: number | null;
+  /** Today, yesterday, and the last 7, 30 and 365 days. */
+  retention: Retention[];
+}
+
+/** Reviews of cards last seen a day or more before; failed is rated Again. */
+export interface Retention {
+  youngPassed: number;
+  youngFailed: number;
+  maturePassed: number;
+  matureFailed: number;
 }
 
 export interface BrowseCard {

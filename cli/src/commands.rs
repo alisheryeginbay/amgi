@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use amgi_core::lint;
 use amgi_core::search::Query;
-use amgi_core::{BrowseCard, CardCollection, CardInfo, CardKind, Rating, StudyScope, format_interval};
+use amgi_core::{BrowseCard, CardCollection, CardInfo, CardKind, Rating, Retention, StudyScope, format_interval};
 use serde_json::json;
 
 use crate::diff::{self, Source};
@@ -439,12 +439,6 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>) -> 
     }
     field("Today", format!("{}{}", bold(count(today.reviewed, "review", "reviews")), dim(format!(", {} new", today.new_studied))));
     field("Streak", bold(count(dashboard.streak, "day", "days")));
-    field(
-        "Retention",
-        dashboard.retention.map_or(dim("not enough reviews yet"), |r| {
-            format!("{}{}", bold(format!("{:.0}%", r * 100.0)), dim(" over the last 30 days"))
-        }),
-    );
     let cards = [
         blue(format!("{} new", dashboard.new_cards)),
         format!("{} young", dashboard.young_cards),
@@ -470,6 +464,25 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>) -> 
     }
 
     println!();
+    println!("{}", bold("Retention"));
+    println!("  {}", dim(format!("{:<10}  {:>6}  {:>6}  {:>6}  {:>7}", "", "Young", "Mature", "Total", "Reviews")));
+    let r = &dashboard.retention;
+    for (label, p) in [("Today", r.today), ("Yesterday", r.yesterday), ("Last week", r.week), ("Last month", r.month), ("Last year", r.year)] {
+        let cell = |passed, of| match percent(passed, of) {
+            Some(p) => format!("{p:>6}"),
+            None => dim(format!("{:>6}", "–")),
+        };
+        println!(
+            "  {}  {}  {}  {}  {}",
+            dim(pad(label, 10)),
+            cell(p.young_passed, p.young_passed + p.young_failed),
+            cell(p.mature_passed, p.mature_passed + p.mature_failed),
+            cell(p.young_passed + p.mature_passed, total_reviews(&p)),
+            figure(total_reviews(&p), 7, |s| s)
+        );
+    }
+
+    println!();
     println!("{}", bold(format!("Due in the next {} days", dashboard.forecast.len())));
     let max = dashboard.forecast.iter().copied().max().unwrap_or(0);
     let now = text::now();
@@ -483,6 +496,15 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>) -> 
         println!("  {label}  {}  {}", figure(*n, 4, |s| s), blue(bar(*n, max, 30)));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn total_reviews(r: &Retention) -> u32 {
+    r.young_passed + r.young_failed + r.mature_passed + r.mature_failed
+}
+
+/// `passed` of `of` as a percentage to one decimal; `None` without reviews.
+fn percent(passed: u32, of: u32) -> Option<String> {
+    (of > 0).then(|| format!("{:.1}%", f64::from(passed) * 100.0 / f64::from(of)))
 }
 
 pub fn prune(c: &CardCollection, out: Output, trash: bool) -> Result {

@@ -102,7 +102,8 @@ struct DashboardPayload: Encodable, Equatable {
     let youngCards: UInt32
     let matureCards: UInt32
     let suspendedCards: UInt32
-    let retention: Double?
+    /// Today, yesterday, and the last 7, 30 and 365 days.
+    let retention: [RetentionPayload]
 
     init(_ d: Dashboard, due: UInt32, today: TodayStats) {
         self.due = due
@@ -116,7 +117,23 @@ struct DashboardPayload: Encodable, Equatable {
         youngCards = d.youngCards
         matureCards = d.matureCards
         suspendedCards = d.suspendedCards
-        retention = d.retention
+        let r = d.retention
+        retention = [r.today, r.yesterday, r.week, r.month, r.year].map(RetentionPayload.init)
+    }
+}
+
+/// Reviews of cards last seen a day or more before; failed is rated Again.
+struct RetentionPayload: Encodable, Equatable {
+    let youngPassed: UInt32
+    let youngFailed: UInt32
+    let maturePassed: UInt32
+    let matureFailed: UInt32
+
+    init(_ r: Retention) {
+        youngPassed = r.youngPassed
+        youngFailed = r.youngFailed
+        maturePassed = r.maturePassed
+        matureFailed = r.matureFailed
     }
 }
 

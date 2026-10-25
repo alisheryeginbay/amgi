@@ -5,7 +5,10 @@
   import { number } from "./format";
 
   const d = $derived(app.dashboard);
-  const percent = $derived(new Intl.NumberFormat(app.environment.locale, { style: "percent", maximumFractionDigits: 0 }));
+  const PERIODS = ["Today", "Yesterday", "Last week", "Last month", "Last year"];
+  const percent = $derived(
+    new Intl.NumberFormat(app.environment.locale, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+  );
 </script>
 
 {#if d}
@@ -38,15 +41,34 @@
               {@render count("Suspended", d.suspendedCards, "Tagged #suspended, so they don't come up")}
             {/if}
           </dl>
-          <hr />
-          <dl>
-            <div title="Reviews in the last 30 days not rated Again, counting cards last seen a day or more before">
-              <dt>Retention</dt>
-              <dd class="tabular">{d.retention == null ? "–" : percent.format(d.retention)}</dd>
-            </div>
-          </dl>
         </section>
       </div>
+
+      <section class="panel">
+        <h2 title="Reviews not rated Again, of cards scheduled a day or more ahead">Retention</h2>
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th title="Next review was less than 21 days after the one before">Young</th>
+              <th title="Next review was 21 days or more after the one before">Mature</th>
+              <th>Total</th>
+              <th>Reviews</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each d.retention as r, i (i)}
+              <tr>
+                <th scope="row">{PERIODS[i]}</th>
+                {@render recall(r.youngPassed, r.youngFailed)}
+                {@render recall(r.maturePassed, r.matureFailed)}
+                {@render recall(r.youngPassed + r.maturePassed, r.youngFailed + r.matureFailed)}
+                <td class="muted">{number(r.youngPassed + r.youngFailed + r.maturePassed + r.matureFailed)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </section>
     </div>
   </main>
 {/if}
@@ -56,6 +78,13 @@
     <div class="value">{value}</div>
     <div class="label">{label}</div>
   </div>
+{/snippet}
+
+{#snippet recall(passed: number, failed: number)}
+  {@const reviews = passed + failed}
+  <td title={reviews ? `${number(passed)} of ${number(reviews)} remembered` : undefined} class:muted={!reviews}>
+    {reviews ? percent.format(passed / reviews) : "–"}
+  </td>
 {/snippet}
 
 {#snippet count(label: string, value: number, help: string)}
@@ -150,9 +179,30 @@
     color: var(--secondary-label);
   }
 
-  hr {
-    margin: 10px 0;
-    border: none;
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+  }
+
+  th,
+  td {
+    padding: 5px 0 5px 12px;
+    text-align: right;
+    font-weight: normal;
+  }
+
+  thead th {
+    font-size: var(--font-callout);
+    color: var(--secondary-label);
+  }
+
+  tbody th {
+    padding-left: 0;
+    text-align: left;
+  }
+
+  tbody tr + tr > * {
     border-top: 1px solid var(--separator);
   }
 </style>

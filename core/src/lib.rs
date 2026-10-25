@@ -324,9 +324,44 @@ pub struct Dashboard {
     pub mature_cards: u32,
     /// Tagged `#suspended`; not counted as new, young or mature.
     pub suspended_cards: u32,
-    /// Share of reviews in the last 30 days, of cards last seen a day or more before,
-    /// that were not rated Again. `None` without such reviews.
-    pub retention: Option<f64>,
+    /// Reviews of cards scheduled a day or more ahead, and how many were remembered.
+    pub retention: RetentionTable,
+}
+
+/// Recall over recent study days, each period ending today.
+#[derive(Debug, Clone, Copy, Default, PartialEq, uniffi::Record, serde::Serialize)]
+pub struct RetentionTable {
+    pub today: Retention,
+    pub yesterday: Retention,
+    /// The last 7 days.
+    pub week: Retention,
+    /// The last 30 days.
+    pub month: Retention,
+    /// The last 365 days.
+    pub year: Retention,
+}
+
+/// Reviews in a period of cards the review before scheduled a day or more ahead, as in
+/// Anki: not a failed card back after minutes. Passed is any rating but Again. A card
+/// is mature when it was scheduled 21 days or more ahead.
+#[derive(Debug, Clone, Copy, Default, PartialEq, uniffi::Record, serde::Serialize)]
+pub struct Retention {
+    pub young_passed: u32,
+    pub young_failed: u32,
+    pub mature_passed: u32,
+    pub mature_failed: u32,
+}
+
+impl Retention {
+    fn add(&mut self, mature: bool, passed: u32, failed: u32) {
+        let (p, f) = if mature {
+            (&mut self.mature_passed, &mut self.mature_failed)
+        } else {
+            (&mut self.young_passed, &mut self.young_failed)
+        };
+        *p += passed;
+        *f += failed;
+    }
 }
 
 const MATURE_SECS: i64 = 21 * DAY_SECS;
@@ -1376,7 +1411,21 @@ impl Inner {
             }
         }
 
-        let (recalled_of, recalled) = self.store.recall_since(self.day_start(now) - 29 * DAY_SECS, ids)?;
+        let mut retention = RetentionTable::default();
+        let year_start = (today - 364) * DAY_SECS - shift;
+        for (day, mature, passed, failed) in self.store.recall_per_day(year_start, shift, MATURE_SECS, ids)? {
+            let ago = today - day;
+            let periods = [
+                (ago == 0, &mut retention.today),
+                (ago == 1, &mut retention.yesterday),
+                (ago < 7, &mut retention.week),
+                (ago < 30, &mut retention.month),
+                (ago < 365, &mut retention.year),
+            ];
+            for (_, r) in periods.into_iter().filter(|(within, _)| *within) {
+                r.add(mature, passed, failed);
+            }
+        }
         Ok(Dashboard {
             activity,
             activity_start: first * DAY_SECS - shift,
@@ -1386,7 +1435,7 @@ impl Inner {
             young_cards,
             mature_cards,
             suspended_cards,
-            retention: (recalled_of > 0).then(|| f64::from(recalled) / f64::from(recalled_of)),
+            retention,
         })
     }
 
@@ -1988,12 +2037,46 @@ mod tests {
         // The failed card is due today; the Easy one later.
         assert_eq!(d.forecast[0], 1);
         assert_eq!(d.forecast.iter().sum::<u32>(), 2);
-        // The Again was a review a day after the first one.
-        assert_eq!(d.retention, Some(0.0));
+        // The Again came a day after the first review, which scheduled the card days ahead.
+        let failed = Retention { young_failed: 1, ..Retention::default() };
+        assert_eq!(d.retention.today, Retention::default());
+        assert_eq!((d.retention.yesterday, d.retention.week, d.retention.year), (failed, failed, failed));
 
         inner.answer(&ids[2], Rating::Good, T0).unwrap();
         let d = inner.dashboard(&StudyScope::All, 5, T0).unwrap();
         assert_eq!((d.activity[4], d.streak), (1, 3));
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retention_by_period_and_maturity() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n")]);
+        let mut inner = c.lock();
+        let id = inner.cards[0].parsed.id.clone();
+        // Young until a review schedules the card 21 days or more ahead.
+        inner.answer(&id, Rating::Easy, T0 - 300 * DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Easy, T0 - 200 * DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Easy, T0 - 20 * DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Again, T0 - 3 * DAY_SECS).unwrap();
+        // Back after minutes, then days later: neither counts, as the Again scheduled
+        // it minutes ahead.
+        inner.answer(&id, Rating::Again, T0 - 3 * DAY_SECS + 600).unwrap();
+        inner.answer(&id, Rating::Good, T0 - DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Good, T0).unwrap();
+
+        let r = inner.dashboard(&StudyScope::All, 1, T0).unwrap().retention;
+        let retention = |young_passed, young_failed, mature_passed, mature_failed| Retention {
+            young_passed,
+            young_failed,
+            mature_passed,
+            mature_failed,
+        };
+        assert_eq!(r.today, retention(1, 0, 0, 0));
+        assert_eq!(r.yesterday, Retention::default());
+        assert_eq!(r.week, retention(1, 0, 0, 1));
+        assert_eq!(r.month, retention(1, 0, 1, 1));
+        assert_eq!(r.year, retention(2, 0, 1, 1));
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }

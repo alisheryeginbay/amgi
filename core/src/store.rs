@@ -396,18 +396,36 @@ impl Store {
         stmt.query_map(named_params! { ":since": since, ":shift": shift, ":all": all, ":cards": ids }, |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
     }
 
-    /// Reviews of already-seen cards at least a day after the previous review, at or
-    /// after `since`, and how many of them were not rated Again.
-    pub fn recall_since(&self, since: i64, cards: Option<&[String]>) -> rusqlite::Result<(u32, u32)> {
+    /// Reviews of cards the review before scheduled a day or more ahead, at or after
+    /// `since`, as Anki counts them: per study day (as in `reviews_per_day`) and by
+    /// whether the card was mature, scheduled `mature_secs` or more ahead.
+    /// `(day, mature, passed, failed)`, where failed is rated Again.
+    pub fn recall_per_day(
+        &self,
+        since: i64,
+        shift: i64,
+        mature_secs: i64,
+        cards: Option<&[String]>,
+    ) -> rusqlite::Result<Vec<(i64, bool, u32, u32)>> {
         let (all, ids) = card_list(cards);
-        self.conn.query_row(
-            &format!(
-                "SELECT COUNT(*), COALESCE(SUM(rating > 1), 0) FROM review_log
-                 WHERE rating > 0 AND NOT was_new AND elapsed_days >= 1 AND reviewed_at >= :since AND {IN_CARDS}"
-            ),
-            named_params! { ":since": since, ":all": all, ":cards": ids },
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        // Only the cards reviewed since, but all their reviews, for the interval before.
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT (reviewed_at + :shift) / 86400 AS day, last_interval >= :mature AS mature,
+                    SUM(rating > 1), SUM(rating = 1)
+             FROM (SELECT reviewed_at, rating, was_new,
+                          COALESCE(LAG(interval_secs) OVER (PARTITION BY card_id ORDER BY reviewed_at, id),
+                                   CAST(elapsed_days * 86400 AS INTEGER)) AS last_interval
+                   FROM review_log
+                   WHERE rating > 0 AND {IN_CARDS} AND card_id IN
+                         (SELECT card_id FROM review_log WHERE reviewed_at >= :since AND rating > 0))
+             WHERE NOT was_new AND last_interval >= 86400 AND reviewed_at >= :since
+             GROUP BY day, mature ORDER BY day"
+        ))?;
+        stmt.query_map(
+            named_params! { ":since": since, ":shift": shift, ":mature": mature_secs, ":all": all, ":cards": ids },
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?
+        .collect()
     }
 
     pub fn reviews_since(&self, since: i64, cards: Option<&[String]>) -> rusqlite::Result<u32> {
