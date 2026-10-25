@@ -10,6 +10,7 @@
   --separator: #0000001a;
   --accent: #0a84ff;
   --yellow: #ffcc00;
+  --blue: #007aff;
   --red: #ff3b30;
   --green: #28cd41;
   --selected-row: #0064e1;
@@ -67,6 +68,7 @@
     --quaternary-label: #ffffff1a;
     --separator: #ffffff1a;
     --yellow: #ffd60a;
+    --blue: #0a84ff;
     --red: #ff453a;
     --green: #32d74b;
     --unfocused-selected-row: #464646;
@@ -85,6 +87,7 @@
     --separator: -apple-system-separator;
     --accent: -apple-system-control-accent;
     --yellow: -apple-system-yellow;
+    --blue: -apple-system-blue;
     --red: -apple-system-red;
     --green: -apple-system-green;
     --selected-row: -apple-system-selected-content-background;

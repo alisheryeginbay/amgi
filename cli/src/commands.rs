@@ -27,9 +27,9 @@ fn print_json(value: &impl serde::Serialize) -> Result {
 
 const DAY: i64 = 86_400;
 
-/// `12 due · 5 new`, leaving out zeros.
-fn due_and_new(due: u32, new: u32) -> String {
-    [(due, "due", yellow as fn(String) -> String), (new, "new", blue)]
+/// `12 due · 2 learning · 5 new`, leaving out zeros.
+fn left_today(due: u32, learning: u32, new: u32) -> String {
+    [(due, "due", yellow as fn(String) -> String), (learning, "learning", red), (new, "new", blue)]
         .iter()
         .filter(|(n, _, _)| *n > 0)
         .map(|(n, label, paint)| paint(format!("{n} {label}")))
@@ -43,18 +43,20 @@ pub fn status(c: &CardCollection, out: Output, short: bool) -> Result {
     let decks: Vec<_> = c.decks()?.into_iter().filter(|d| !d.name.contains('/')).collect();
     // Not the decks' sum: they share the daily review limit.
     let due = today.due_available;
+    let learning = today.learning;
     let new = today.new_available;
     if out.json {
-        let decks: Vec<_> = decks.iter().filter(|d| d.due + d.new > 0).collect();
+        let decks: Vec<_> = decks.iter().filter(|d| d.due + d.learning + d.new > 0).collect();
         return print_json(&json!({
             "due": due,
+            "learning": learning,
             "new": new,
             "reviewed": today.reviewed,
             "new_studied": today.new_studied,
             "decks": decks,
         }));
     }
-    let left = due_and_new(due, new);
+    let left = left_today(due, learning, new);
     if short {
         if !left.is_empty() {
             println!("{left}");
@@ -63,10 +65,10 @@ pub fn status(c: &CardCollection, out: Output, short: bool) -> Result {
     }
     let left = if left.is_empty() { green("All caught up") } else { bold(left) };
     println!("{left}{}", dim(format!(" · {} today", count(today.reviewed, "review", "reviews"))));
-    let rows: Vec<_> = decks.iter().filter(|d| d.due + d.new > 0).collect();
+    let rows: Vec<_> = decks.iter().filter(|d| d.due + d.learning + d.new > 0).collect();
     let name_width = rows.iter().map(|d| width(&d.title)).max().unwrap_or(0);
     for d in rows {
-        println!("  {}  {}", pad(&d.title, name_width), due_and_new(d.due, d.new));
+        println!("  {}  {}", pad(&d.title, name_width), left_today(d.due, d.learning, d.new));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -238,10 +240,10 @@ pub fn decks(c: &CardCollection, out: Output) -> Result {
         })
         .collect();
     let name_width = names.iter().map(|(plain, _)| width(plain)).max().unwrap_or(0).max(4);
-    println!("{}", dim(format!("{}  {:>5}  {:>5}  {:>6}", pad("Deck", name_width), "Due", "New", "Total")));
+    println!("{}", dim(format!("{}  {:>5}  {:>8}  {:>5}  {:>6}", pad("Deck", name_width), "Due", "Learning", "New", "Total")));
     for (d, (plain, name)) in decks.iter().zip(&names) {
         let gap = " ".repeat(name_width - width(plain));
-        println!("{name}{gap}  {}  {}  {}", figure(d.due, 5, yellow), figure(d.new, 5, blue), figure(d.total, 6, |s| s));
+        println!("{name}{gap}  {}  {}  {}  {}", figure(d.due, 5, yellow), figure(d.learning, 8, red), figure(d.new, 5, blue), figure(d.total, 6, |s| s));
     }
     Ok(ExitCode::SUCCESS)
 }

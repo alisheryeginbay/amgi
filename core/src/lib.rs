@@ -115,7 +115,8 @@ pub struct DeckInfo {
     pub title: String,
     pub total: u32,
     pub due: u32,
-    /// Cards answered Again, waiting minutes to come back. Due once that time is up.
+    /// Cards answered Again and not yet passed, whether waiting minutes to come back or
+    /// back already. Not capped by the daily review limit.
     pub learning: u32,
     /// New cards available today, capped by the daily new-card limit.
     pub new: u32,
@@ -138,13 +139,24 @@ pub struct StudyCard {
     pub front: String,
     /// Markdown.
     pub back: String,
-    pub is_new: bool,
+    pub stage: StudyStage,
     /// Seconds until the card is due again for Again, Hard, Good, Easy.
     pub intervals: Vec<i64>,
     /// The answer to type before it shows, as Markdown; `None` unless the card asks for one.
     pub typed: Option<String>,
     /// The field that answer comes from, such as `Word`, which the typing box names.
     pub typed_field: Option<String>,
+}
+
+/// Which of today's counts a card to study comes from, as the deck list shows them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum StudyStage {
+    /// Never studied.
+    New,
+    /// Answered Again, back after minutes.
+    Learning,
+    /// Back after an interval of days.
+    Due,
 }
 
 /// A card as listed when browsing a deck.
@@ -237,9 +249,10 @@ pub struct TodayStats {
     pub new_studied: u32,
     /// New cards still available today across the collection, capped by the daily limit.
     pub new_available: u32,
-    /// Cards due now, failed ones coming back included, with reviews capped by the
-    /// daily review limit.
+    /// Reviews due now, capped by the daily review limit.
     pub due_available: u32,
+    /// Cards answered Again and not yet passed, as in `DeckInfo::learning`.
+    pub learning: u32,
 }
 
 /// A card to add to a deck's file.
@@ -1054,8 +1067,8 @@ impl Inner {
         let reviews_remaining = self.reviews_remaining(now)?;
         // Count each deck's own cards, then add them to the deck and its parents:
         // there are far fewer decks than cards. `due` holds reviews until the limit
-        // applies below; `learning` holds failed cards, which are due once their time is up.
-        let mut own: HashMap<&str, (u32, u32, u32, u32, u32)> = HashMap::new();
+        // applies below.
+        let mut own: HashMap<&str, (u32, u32, u32, u32)> = HashMap::new();
         for card in &self.cards {
             let counts = own.entry(&card.deck).or_default();
             counts.0 += 1;
@@ -1063,7 +1076,6 @@ impl Inner {
                 continue;
             }
             match self.states.get(&card.parsed.id) {
-                Some(s) if s.interval_secs < DAY_SECS && s.due <= now => counts.4 += 1,
                 Some(s) if s.interval_secs < DAY_SECS => counts.2 += 1,
                 Some(s) if self.is_due(s, now) => counts.1 += 1,
                 Some(_) => {}
@@ -1071,23 +1083,19 @@ impl Inner {
             }
         }
         // Keyed by path components, so parents sort before their children.
-        let mut decks: BTreeMap<Vec<&str>, (DeckInfo, u32)> = BTreeMap::new();
-        for (name, (total, due, learning, new, relearning)) in own {
+        let mut decks: BTreeMap<Vec<&str>, DeckInfo> = BTreeMap::new();
+        for (name, (total, due, learning, new)) in own {
             let parts: Vec<&str> = name.split('/').collect();
             for depth in 1..=parts.len() {
-                let (deck, failed) = decks.entry(parts[..depth].to_vec()).or_insert_with(|| {
-                    let deck = DeckInfo {
+                let deck = decks.entry(parts[..depth].to_vec()).or_insert_with(|| DeckInfo {
                         name: parts[..depth].join("/"),
                         title: String::new(),
                         total: 0,
                         due: 0,
                         learning: 0,
                         new: 0,
-                        note_type: None,
-                    };
-                    (deck, 0)
+                    note_type: None,
                 });
-                *failed += relearning;
                 deck.total += total;
                 deck.due += due;
                 deck.learning += learning;
@@ -1096,11 +1104,11 @@ impl Inner {
         }
         Ok(decks
             .into_values()
-            .map(|(d, failed)| DeckInfo {
+            .map(|d| DeckInfo {
                 title: self.deck_titles.get(&d.name).cloned().unwrap_or_else(|| {
                     d.name.rsplit('/').next().unwrap_or_default().to_string()
                 }),
-                due: failed + d.due.min(reviews_remaining),
+                due: d.due.min(reviews_remaining),
                 new: d.new.min(new_remaining),
                 note_type: self.deck_note_types.get(&d.name).cloned(),
                 ..d
@@ -1206,7 +1214,11 @@ impl Inner {
             kind: card.parsed.kind,
             front: card.parsed.front.clone(),
             back: card.parsed.back.clone(),
-            is_new: state.is_none(),
+            stage: match state {
+                None => StudyStage::New,
+                Some(s) if s.interval_secs < DAY_SECS => StudyStage::Learning,
+                Some(_) => StudyStage::Due,
+            },
             intervals: preview.iter().map(|o| o.interval_secs).collect(),
             typed: card.parsed.typed.as_ref().map(|t| t.answer.clone()),
             typed_field: card.parsed.typed.as_ref().map(|t| t.field.clone()),
@@ -1630,10 +1642,10 @@ impl Inner {
             .in_scope(scope)
             .filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id))
             .count() as u32;
-        let (mut failed, mut due) = (0, 0);
+        let (mut learning, mut due) = (0, 0);
         for state in self.in_scope(scope).filter(|c| !c.suspended()).filter_map(|c| self.states.get(&c.parsed.id)) {
             if state.interval_secs < DAY_SECS {
-                failed += u32::from(state.due <= now);
+                learning += 1;
             } else {
                 due += u32::from(self.is_due(state, now));
             }
@@ -1642,7 +1654,8 @@ impl Inner {
             reviewed: self.store.reviews_since(since, ids)?,
             new_studied: self.store.new_cards_since(since, ids)?,
             new_available: unseen.min(self.new_remaining(now)?),
-            due_available: failed + due.min(self.reviews_remaining(now)?),
+            due_available: due.min(self.reviews_remaining(now)?),
+            learning,
         })
     }
 }
@@ -1771,7 +1784,7 @@ mod tests {
         // New cards come in file order.
         let card = inner.next_card(&deck("a"), T0).unwrap().unwrap();
         assert_eq!(card.front, "1");
-        assert!(card.is_new);
+        assert_eq!(card.stage, StudyStage::New);
         assert_eq!(card.intervals.len(), 4);
         inner.answer(&card.id, Rating::Good, T0).unwrap();
 
@@ -1783,16 +1796,16 @@ mod tests {
         let decks = inner.decks(T0 + 60).unwrap();
         assert_eq!((decks[0].due, decks[0].learning, decks[0].new), (0, 1, 0));
         let decks = inner.decks(T0 + scheduler::AGAIN_DELAY_SECS).unwrap();
-        assert_eq!((decks[0].due, decks[0].learning), (1, 0));
+        assert_eq!((decks[0].due, decks[0].learning), (0, 1));
 
         // It is shown again within the learn-ahead window.
         let again = inner.next_card(&deck("a"), T0 + 60).unwrap().unwrap();
         assert_eq!(again.id, card2.id);
-        assert!(!again.is_new);
+        assert_eq!(again.stage, StudyStage::Learning);
 
-        // Two days later the first card is due.
+        // Two days later the first card is due; the failed one is still being learned.
         let decks = inner.decks(T0 + 2 * DAY_SECS).unwrap();
-        assert_eq!((decks[0].due, decks[0].new), (2, 0));
+        assert_eq!((decks[0].due, decks[0].learning, decks[0].new), (1, 1, 0));
         let today = inner.today(&StudyScope::All, T0).unwrap();
         assert_eq!((today.new_studied, today.new_available), (2, 2));
         assert!(matches!(
@@ -2212,15 +2225,15 @@ mod tests {
 
         // Forgetting the one review allowed brings it back, but no other review comes.
         let card = inner.next_card(&StudyScope::All, later).unwrap().unwrap();
-        assert!(!card.is_new);
+        assert_eq!(card.stage, StudyStage::Due);
         inner.answer(&card.id, Rating::Again, later).unwrap();
         let back = later + 600;
-        assert_eq!(inner.decks(back).unwrap()[0].due, 1);
+        assert_eq!((inner.decks(back).unwrap()[0].due, inner.decks(back).unwrap()[0].learning), (0, 1));
         assert_eq!(inner.next_card(&StudyScope::All, back).unwrap().unwrap().id, card.id);
         inner.answer(&card.id, Rating::Good, back).unwrap();
         // New cards have their own limit.
         let new = inner.next_card(&StudyScope::All, back).unwrap().unwrap();
-        assert!(new.is_new);
+        assert_eq!(new.stage, StudyStage::New);
         inner.answer(&new.id, Rating::Easy, back).unwrap();
         drop(inner);
         c.set_new_cards_per_day(1);

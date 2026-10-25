@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from "svelte";
   import { cubicOut } from "svelte/easing";
   import Flashcard from "./Flashcard.svelte";
+  import Icon from "../components/Icon.svelte";
   import { app, commands, post } from "../lib/app.svelte";
   import { player } from "../lib/audio.svelte";
   import { imageSources, soundSources } from "../lib/markdown";
@@ -60,6 +61,13 @@
   const total = $derived(reviewed + (shown?.remaining ?? 0));
   const progress = $derived(total > 0 ? reviewed / total : 0);
   const showProgress = $derived(shown?.progress ?? true);
+
+  /** Where the card on screen comes from, as the counts above name it. */
+  const stages = {
+    new: { label: "New", icon: "sparkle" },
+    learning: { label: "Learning", icon: "retry" },
+    due: { label: "Due", icon: "clock" },
+  } as const;
 
   // Each card is dealt anew, even the same card again, rather than fading back to its
   // question in place. New intervals for the card on screen keep it where it is.
@@ -171,6 +179,10 @@
           <div class="bar" style:transform="scaleX({progress})"></div>
         </div>
       {/if}
+      <div class="status {card.stage}">
+        <Icon name={stages[card.stage].icon} size={14} />
+        {stages[card.stage].label}
+      </div>
       <!-- The sheet stays put while what's on it is dealt anew, so it never blinks. -->
       <div class="sheet">
         {#key deal}
@@ -214,10 +226,37 @@
   /* Today's progress, a thin track above the card. */
   .progress {
     height: 4px;
-    margin-bottom: 16px;
+    margin-bottom: 10px;
     border-radius: 2px;
     background: var(--fill-strong);
     overflow: hidden;
+  }
+
+  /* The card's stage, between the progress bar and the card; only its icon is in color. */
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 10px;
+    font-size: var(--font-callout);
+    user-select: none;
+    cursor: default;
+  }
+
+  .status :global(svg) {
+    flex-shrink: 0;
+  }
+
+  .status.new :global(svg) {
+    color: var(--blue);
+  }
+
+  .status.learning :global(svg) {
+    color: var(--red);
+  }
+
+  .status.due :global(svg) {
+    color: var(--green);
   }
 
   .bar {

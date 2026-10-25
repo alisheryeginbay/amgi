@@ -2,6 +2,9 @@
 
 export type CardKind = "basic" | "cloze";
 export type Pane = "study" | "dashboard" | "browse";
+/** Which of today's counts a card to study comes from: never studied, answered Again
+ *  and not passed since, or back after days. */
+export type StudyStage = "new" | "learning" | "due";
 
 export interface StudyCard {
   id: string;
@@ -15,6 +18,7 @@ export interface StudyCard {
   front: string;
   /** Markdown. */
   back: string;
+  stage: StudyStage;
   /** The answer to type before it shows, as Markdown; null unless the card asks for one. */
   typed?: string | null;
   /** The field that answer comes from, such as `Word`, which the typing box names. */

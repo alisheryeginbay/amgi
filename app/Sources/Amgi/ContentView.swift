@@ -268,7 +268,7 @@ private struct ReviewRow: View {
     var body: some View {
         Label(model.folder?.lastPathComponent ?? "All Cards", systemImage: "rectangle.stack")
             .lineLimit(1)
-            .badge(Int(model.totalDue))
+            .badge(Int(model.totalDueAndLearning))
     }
 }
 

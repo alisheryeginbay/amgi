@@ -1,11 +1,20 @@
 <script lang="ts">
   // A few SF Symbols–like glyphs, drawn on a 20-unit grid in the current text color.
-  type Name = "speaker" | "speaker-playing" | "speaker-slash" | "photo";
+  type Name = "speaker" | "speaker-playing" | "speaker-slash" | "photo" | "sparkle" | "retry" | "clock";
   let { name, size = 16 }: { name: Name; size?: number } = $props();
 </script>
 
 <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden="true">
-  {#if name === "photo"}
+  {#if name === "sparkle"}
+    <path d="M10 2.5c.6 4.2 2.3 5.9 6.5 6.5-4.2.6-5.9 2.3-6.5 6.5-.6-4.2-2.3-5.9-6.5-6.5 4.2-.6 5.9-2.3 6.5-6.5z" fill="currentColor" />
+    <path d="M15.5 13c.2 1.4.8 2 2.2 2.2-1.4.2-2 .8-2.2 2.2-.2-1.4-.8-2-2.2-2.2 1.4-.2 2-.8 2.2-2.2z" fill="currentColor" />
+  {:else if name === "retry"}
+    <path d="M4.5 10a5.5 5.5 0 1 0 1.8-4.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+    <path d="M5.6 2.8v3.6h3.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+  {:else if name === "clock"}
+    <circle cx="10" cy="10" r="6.75" fill="none" stroke="currentColor" stroke-width="1.6" />
+    <path d="M10 6.2V10l2.6 1.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+  {:else if name === "photo"}
     <rect x="2.5" y="4" width="15" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5" />
     <circle cx="7" cy="8.5" r="1.5" fill="currentColor" />
     <path d="M3.5 14.5l4.2-4 3 2.8 2.3-2 3.5 3.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />

@@ -67,7 +67,7 @@ final class AppModel {
     /// The saved view shown in the add or edit sheet.
     var editingView: SavedViewDraft?
     private(set) var warnings: [CollectionWarning] = []
-    private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0)
+    private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0, learning: 0)
     /// When the current study day started (Unix seconds), for the browse search's `is:due`.
     private(set) var dayStart: Int64?
     /// The card being studied, and whether its answer shows.
@@ -227,9 +227,10 @@ final class AppModel {
 
     /// Due cards, with reviews capped by the daily limit, which decks share.
     var totalDue: UInt32 { today.dueAvailable }
-    /// Cards answered Again, waiting minutes to come back. Top-level decks already
-    /// include their subdecks.
-    var totalLearning: UInt32 { decks.filter { !$0.name.contains("/") }.reduce(0) { $0 + $1.learning } }
+    /// Cards answered Again and not yet passed, waiting to come back or back already.
+    var totalLearning: UInt32 { today.learning }
+    /// Due and learning cards, which the sidebar and menu bar badges count.
+    var totalDueAndLearning: UInt32 { totalDue + totalLearning }
     /// Cards still to study today: due, learning and new.
     var totalLeft: UInt32 { totalDue + totalLearning + today.newAvailable }
 
@@ -289,7 +290,7 @@ final class AppModel {
         savedViews = []
         editingView = nil
         warnings = []
-        today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0)
+        today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0, learning: 0)
         study = .none
         canUndoAnswer = false
         dashboard = nil
@@ -458,7 +459,7 @@ final class AppModel {
                 reviewed: today.reviewed,
                 remaining: totalLeft
             ),
-            dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDue, today: today) } : nil,
+            dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDueAndLearning, today: today) } : nil,
             cards: cardsJSON,
             noteTypes: noteTypesJSON,
             browse: browse,

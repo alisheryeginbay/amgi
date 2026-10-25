@@ -157,6 +157,8 @@ struct CardPayload: Encodable {
     let kind: String
     let front: String
     let back: String
+    /// `new`, `learning` or `due`.
+    let stage: String
     let typed: String?
     let typedField: String?
 
@@ -169,8 +171,19 @@ struct CardPayload: Encodable {
         kind = card.kind.name
         front = card.front
         back = card.back
+        stage = card.stage.name
         typed = card.typed
         typedField = card.typedField
+    }
+}
+
+private extension StudyStage {
+    var name: String {
+        switch self {
+        case .new: "new"
+        case .learning: "learning"
+        case .due: "due"
+        }
     }
 }
 

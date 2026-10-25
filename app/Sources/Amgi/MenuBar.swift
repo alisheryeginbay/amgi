@@ -10,7 +10,7 @@ struct MenuBarLabel: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let due = model.totalDue
+        let due = model.totalDueAndLearning
         HStack(spacing: 3) {
             Image(nsImage: MenuBarIcon.image)
             if due > 0 { Text("\(due)").monospacedDigit() }
