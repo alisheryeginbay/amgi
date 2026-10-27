@@ -130,6 +130,16 @@ final class AppModel {
         }
     }
 
+    /// How many new cards a day allows learning. The open collection's, kept in its database.
+    var newCardsPerDay: Int = 20 {
+        didSet {
+            let limit = UInt32(clamping: newCardsPerDay)
+            guard let collection, limit != collection.newCardsPerDay() else { return }
+            perform { try collection.setNewCardsPerDay(limit: limit) }
+            refresh()
+        }
+    }
+
     /// How many cards that came due a day allows reviewing, or `nil` for no limit. The
     /// open collection's, kept in its database.
     var reviewsPerDay: Int? {
@@ -262,6 +272,7 @@ final class AppModel {
             self.collection = collection
             self.desiredRetention = Double(collection.desiredRetention())
             self.rolloverHour = Int(collection.rolloverHour())
+            self.newCardsPerDay = Int(collection.newCardsPerDay())
             self.reviewsPerDay = collection.reviewsPerDay().map(Int.init)
             self.canUndoAnswer = false
             self.folder = url

@@ -58,11 +58,15 @@ retention**, how likely you should be to remember a card when it comes due, belo
 collection: they're kept in its `.amgi.sqlite`, so they move with the folder and the
 [`amgi` command](/cli) uses them too.
 
+**New cards per day** in Settings sets how many cards you haven't seen before come up each
+day, 20 unless you change it. Set it to 0 to only review what you've already learned.
+The limit covers the whole collection; deck counts and `amgi status` show what's left of it.
+
 To keep a day's work in check, turn on **Limit reviews per day** in Settings and choose
 how many. Once you've reviewed that many due cards, the rest wait for the next day, most
 overdue first, and the due counts stop there. Cards you forgot that day still come back,
-and new cards have their own limit of 20 a day; neither counts toward the limit. Like the
-settings above, the limit belongs to the collection. A low limit lets a backlog grow,
+and new cards have their own limit; neither counts toward the limit. Like the
+settings above, both limits belong to the collection. A low limit lets a backlog grow,
 so raise it again once you've caught up.
 
 The **Retention** table on the Dashboard (and in `amgi stats`) shows how much you

@@ -67,6 +67,20 @@ private struct StudySettings: View {
                 Text("Next day starts at")
                 Text("Cards are due for the whole day. Studying after midnight but before this hour counts as the day before. 4 AM suits most people.")
             }
+            let newCards = Binding(get: { model.newCardsPerDay }, set: { model.newCardsPerDay = max(0, $0) })
+            LabeledContent {
+                HStack(spacing: 4) {
+                    TextField("New cards per day", value: newCards, format: .number)
+                        .labelsHidden()
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 60)
+                    Stepper("New cards per day", value: newCards, in: 0...9999, step: 5)
+                        .labelsHidden()
+                }
+            } label: {
+                Text("New cards per day")
+                Text("How many cards you haven't seen before come up each day. Set 0 to only review. 20 suits most people.")
+            }
             Toggle(isOn: Binding(
                 get: { model.reviewsPerDay != nil },
                 set: { model.reviewsPerDay = $0 ? Self.defaultReviewsPerDay : nil }

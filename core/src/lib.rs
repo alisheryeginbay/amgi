@@ -48,6 +48,9 @@ const LEARN_AHEAD_SECS: i64 = 20 * 60;
 const RETENTION_KEY: &str = "desired_retention";
 const ROLLOVER_HOUR_KEY: &str = "rollover_hour";
 const REVIEWS_PER_DAY_KEY: &str = "reviews_per_day";
+const NEW_PER_DAY_KEY: &str = "new_cards_per_day";
+/// New cards a day allows when the collection hasn't set its own limit, as in Anki.
+const DEFAULT_NEW_PER_DAY: u32 = 20;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum AmgiError {
@@ -440,6 +443,7 @@ struct Inner {
     note_types: parser::NoteTypes,
     /// CJK scripts in the deck files, for the fonts the app fetches.
     scripts: Scripts,
+    /// New cards a day allows.
     new_per_day: u32,
     /// Reviews of due cards a day allows; `None` for no limit.
     reviews_per_day: Option<u32>,
@@ -480,8 +484,17 @@ impl CardCollection {
         self.lock().reload()
     }
 
-    pub fn set_new_cards_per_day(&self, limit: u32) {
-        self.lock().new_per_day = limit;
+    /// How many new cards a study day allows learning. Collection-wide; 0 means none.
+    pub fn new_cards_per_day(&self) -> u32 {
+        self.lock().new_per_day
+    }
+
+    /// Set and save the daily new-card limit.
+    pub fn set_new_cards_per_day(&self, limit: u32) -> Result<()> {
+        let mut inner = self.lock();
+        inner.store.set_setting(NEW_PER_DAY_KEY, limit.into())?;
+        inner.new_per_day = limit;
+        Ok(())
     }
 
     /// Local time zone offset, used to decide when the study day rolls over.
@@ -809,7 +822,7 @@ impl CardCollection {
             warnings: Vec::new(),
             note_types: parser::NoteTypes::default(),
             scripts: Scripts::default(),
-            new_per_day: 20,
+            new_per_day: DEFAULT_NEW_PER_DAY,
             reviews_per_day: None,
             utc_offset_secs: 0,
             rollover_secs: i64::from(DEFAULT_ROLLOVER_HOUR) * 3600,
@@ -839,6 +852,9 @@ impl Inner {
         }
         if let Some(hour) = self.store.setting(ROLLOVER_HOUR_KEY)? {
             self.rollover_secs = hour.clamp(0.0, 23.0) as i64 * 3600;
+        }
+        if let Some(limit) = self.store.setting(NEW_PER_DAY_KEY)? {
+            self.new_per_day = limit.clamp(0.0, u32::MAX.into()) as u32;
         }
         self.reviews_per_day = self.store.setting(REVIEWS_PER_DAY_KEY)?.map(|n| n.clamp(0.0, u32::MAX.into()) as u32);
         Ok(())
@@ -2195,7 +2211,7 @@ mod tests {
     #[test]
     fn new_card_limit() {
         let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n\nQ: 3\nA: 3\n")]);
-        c.set_new_cards_per_day(1);
+        c.set_new_cards_per_day(1).unwrap();
         let mut inner = c.lock();
         let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
         inner.answer(&card.id, Rating::Easy, T0).unwrap();
@@ -2203,6 +2219,19 @@ mod tests {
         assert_eq!(inner.decks(T0).unwrap()[0].new, 0);
         // Tomorrow the limit resets.
         assert!(inner.next_card(&StudyScope::All, T0 + DAY_SECS).unwrap().is_some());
+        drop(inner);
+        // Lowering the limit below what's been learned today leaves none.
+        c.set_new_cards_per_day(0).unwrap();
+        assert_eq!(c.lock().decks(T0).unwrap()[0].new, 0);
+        // Raising it lets more in the same day.
+        c.set_new_cards_per_day(5).unwrap();
+        assert_eq!(c.new_cards_per_day(), 5);
+        assert_eq!(c.lock().decks(T0).unwrap()[0].new, 2);
+        // The limit is kept in the database.
+        let mut inner = c.lock();
+        inner.new_per_day = DEFAULT_NEW_PER_DAY;
+        inner.load_settings().unwrap();
+        assert_eq!(inner.new_per_day, 5);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -2236,7 +2265,7 @@ mod tests {
         assert_eq!(new.stage, StudyStage::New);
         inner.answer(&new.id, Rating::Easy, back).unwrap();
         drop(inner);
-        c.set_new_cards_per_day(1);
+        c.set_new_cards_per_day(1).unwrap();
         let inner = c.lock();
         assert!(inner.next_card(&StudyScope::All, back).unwrap().is_none());
         assert_eq!(inner.today(&StudyScope::All, back).unwrap().due_available, 0);
