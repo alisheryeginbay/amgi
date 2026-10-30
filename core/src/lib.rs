@@ -465,6 +465,19 @@ struct Inner {
     store_notice: Option<CollectionWarning>,
     /// Answers given since the collection was opened, latest last, for `undo_answer`.
     answered: Vec<Answered>,
+    /// Every file the last load read, with its text, so a reload can skip parsing when
+    /// none changed. `None` until the first load.
+    sources: Option<Sources>,
+}
+
+/// The files a load reads, each with its path and text, in the order they're read.
+#[derive(PartialEq)]
+struct Sources {
+    note_types: Vec<(PathBuf, String)>,
+    decks: Vec<(PathBuf, String)>,
+    /// Markdown outside `cards`, checked for decks left behind there. Unreadable files
+    /// are left out, as they can't hold cards.
+    strays: Vec<(PathBuf, String)>,
 }
 
 /// An answer that can be taken back: the card, its review's log row and its state before.
@@ -507,8 +520,9 @@ impl CardCollection {
         Self::with_store(root, store).map(Arc::new)
     }
 
-    /// Re-read all Markdown files. Call after files change on disk.
-    pub fn reload(&self) -> Result<()> {
+    /// Re-read all Markdown files. Call after files change on disk. Returns whether
+    /// any changed; if none did, the cards are left as they were.
+    pub fn reload(&self) -> Result<bool> {
         self.lock().reload()
     }
 
@@ -888,6 +902,7 @@ impl CardCollection {
             rollover_secs: i64::from(DEFAULT_ROLLOVER_HOUR) * 3600,
             store_notice: None,
             answered: Vec::new(),
+            sources: None,
         };
         inner.load_settings()?;
         inner.reload()?;
@@ -953,14 +968,14 @@ impl Inner {
         self.store_notice = Some(CollectionWarning { path: relative(&self.root, &path), line: 0, message });
     }
 
-    fn reload(&mut self) -> Result<()> {
-        let cards_dir = self.root.join(CARDS_DIR);
-        let mut files = Vec::new();
-        if cards_dir.is_dir() {
-            collect_markdown(&cards_dir, &mut files)?;
+    /// Reads every file, and parses them only if one differs from the last load: a
+    /// reload when nothing changed costs only the reading. Returns whether any changed.
+    fn reload(&mut self) -> Result<bool> {
+        let sources = self.read_sources()?;
+        if self.sources.as_ref() == Some(&sources) {
+            self.carry_over_history()?;
+            return Ok(false);
         }
-        // By deck name, so a deck's own cards come before its subdecks'.
-        files.sort_by_key(|f| f.with_extension(""));
 
         self.cards.clear();
         self.index.clear();
@@ -968,15 +983,15 @@ impl Inner {
         self.deck_note_types.clear();
         self.warnings.clear();
         self.scripts = Scripts::default();
-        self.load_note_types()?;
-        self.warn_about_stray_decks()?;
-        for file in files {
-            let rel = relative(&self.root, &file);
-            let in_cards = relative(&cards_dir, &file);
+        self.load_note_types(&sources.note_types);
+        self.warn_about_stray_decks(&sources.strays);
+        let cards_dir = self.root.join(CARDS_DIR);
+        for (file, text) in &sources.decks {
+            let rel = relative(&self.root, file);
+            let in_cards = relative(&cards_dir, file);
             let deck = in_cards.strip_suffix(".md").unwrap_or(&in_cards).to_string();
-            let text = fs::read_to_string(&file)?;
-            self.scripts.scan(&text);
-            let result = parser::parse_deck(&text, &self.note_types, &rel);
+            self.scripts.scan(text);
+            let result = parser::parse_deck(text, &self.note_types, &rel);
             let mut counts: HashMap<&str, usize> = HashMap::new();
             for note in result.cards.iter().filter_map(|c| c.note.as_ref()) {
                 *counts.entry(&note.note_type).or_default() += 1;
@@ -1012,7 +1027,64 @@ impl Inner {
                 });
             }
         }
-        self.carry_over_history()
+        self.sources = Some(sources);
+        self.carry_over_history()?;
+        Ok(true)
+    }
+
+    /// Every file a load reads: note types, deck files, and Markdown outside `cards`.
+    /// A file that can't be read fails the load and leaves the cards as they were.
+    fn read_sources(&self) -> Result<Sources> {
+        let read = |files: Vec<PathBuf>| -> Result<Vec<(PathBuf, String)>> {
+            files
+                .into_iter()
+                .map(|file| {
+                    let text = fs::read_to_string(&file)?;
+                    Ok((file, text))
+                })
+                .collect()
+        };
+
+        let mut note_types: Vec<PathBuf> = match fs::read_dir(self.root.join(parser::NOTE_TYPES_DIR)) {
+            Ok(entries) => entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|e| e == "toml") && p.is_file())
+                .filter(|p| p.file_stem().is_some_and(|s| !s.to_string_lossy().starts_with('.')))
+                .collect(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(e.into()),
+        };
+        note_types.sort();
+
+        let cards_dir = self.root.join(CARDS_DIR);
+        let mut decks = Vec::new();
+        if cards_dir.is_dir() {
+            collect_markdown(&cards_dir, &mut decks)?;
+        }
+        // By deck name, so a deck's own cards come before its subdecks'.
+        decks.sort_by_key(|f| f.with_extension(""));
+
+        let mut strays = Vec::new();
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || [CARDS_DIR, MEDIA_DIR, parser::NOTE_TYPES_DIR].contains(&name.as_str()) {
+                continue;
+            }
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                collect_markdown(&path, &mut strays)?;
+            } else if path.extension().is_some_and(|e| e == "md") {
+                strays.push(path);
+            }
+        }
+        strays.sort();
+        let strays = strays
+            .into_iter()
+            .filter_map(|file| fs::read_to_string(&file).ok().map(|text| (file, text)))
+            .collect();
+
+        Ok(Sources { note_types: read(note_types)?, decks: read(decks)?, strays })
     }
 
     /// Move history saved under a card's id from before media links were resolved for
@@ -1033,26 +1105,12 @@ impl Inner {
 
     /// Markdown files with cards outside `cards`, as from before decks moved there, are
     /// left out; say so once, at the first of them.
-    fn warn_about_stray_decks(&mut self) -> Result<()> {
-        let mut files = Vec::new();
-        for entry in fs::read_dir(&self.root)? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') || [CARDS_DIR, MEDIA_DIR, parser::NOTE_TYPES_DIR].contains(&name.as_str()) {
-                continue;
-            }
-            let path = entry.path();
-            if entry.file_type()?.is_dir() {
-                collect_markdown(&path, &mut files)?;
-            } else if path.extension().is_some_and(|e| e == "md") {
-                files.push(path);
-            }
-        }
-        files.sort();
-        let has_cards = |file: &PathBuf| {
-            fs::read_to_string(file).is_ok_and(|text| !parser::parse_deck(&text, &self.note_types, &relative(&self.root, file)).cards.is_empty())
-        };
-        let stray: Vec<&PathBuf> = files.iter().filter(|f| has_cards(f)).collect();
+    fn warn_about_stray_decks(&mut self, files: &[(PathBuf, String)]) {
+        let stray: Vec<&PathBuf> = files
+            .iter()
+            .filter(|(file, text)| !parser::parse_deck(text, &self.note_types, &relative(&self.root, file)).cards.is_empty())
+            .map(|(file, _)| file)
+            .collect();
         if let Some(first) = stray.first() {
             let more = match stray.len() - 1 {
                 0 => String::new(),
@@ -1062,33 +1120,17 @@ impl Inner {
             let message = format!("decks are read from the `{CARDS_DIR}` folder, so this file{more} are left out: move them into it");
             self.warnings.push(CollectionWarning { path: relative(&self.root, first), line: 0, message });
         }
-        Ok(())
     }
 
     /// Every `note-types/Name.toml`, as note type `Name`.
-    fn load_note_types(&mut self) -> Result<()> {
+    fn load_note_types(&mut self, files: &[(PathBuf, String)]) {
         self.note_types = parser::NoteTypes::default();
-        let dir = self.root.join(parser::NOTE_TYPES_DIR);
-        let entries = match fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e.into()),
-        };
-        let mut files: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|e| e == "toml") && p.is_file())
-            .collect();
-        files.sort();
-        for file in files {
+        for (file, text) in files {
             let Some(name) = file.file_stem().map(|s| s.to_string_lossy().into_owned()) else { continue };
-            if name.starts_with('.') {
-                continue;
-            }
-            for w in self.note_types.insert(&name, &fs::read_to_string(&file)?) {
-                self.warnings.push(CollectionWarning { path: relative(&self.root, &file), line: w.line, message: w.message });
+            for w in self.note_types.insert(&name, text) {
+                self.warnings.push(CollectionWarning { path: relative(&self.root, file), line: w.line, message: w.message });
             }
         }
-        Ok(())
     }
 
     fn day_start(&self, now: i64) -> i64 {
@@ -2743,6 +2785,38 @@ mod tests {
         assert_eq!(logged[1].state, Some(New));
         assert_eq!(state.reps, 1);
         drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reload_parses_only_when_a_file_changed() {
+        let (dir, c) = collection(&[("a.md", "Q: cat\nA: one\n")]);
+        let fronts = |c: &CardCollection| c.cards(StudyScope::All).into_iter().map(|b| b.front).collect::<Vec<_>>();
+        assert!(!c.reload().unwrap());
+
+        // The same size, with the old modified date put back, still counts as changed.
+        let path = dir.join("cards/a.md");
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::write(&path, "Q: dog\nA: one\n").unwrap();
+        fs::File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+        assert!(c.reload().unwrap());
+        assert_eq!(fronts(&c), ["dog"]);
+        assert!(!c.reload().unwrap());
+
+        // A note type added later is read, and the deck parsed again with it.
+        fs::write(&path, "@Vocab\nWord: uno\nMeaning: one\n").unwrap();
+        assert!(c.reload().unwrap());
+        assert!(fronts(&c).is_empty());
+        fs::create_dir_all(dir.join(parser::NOTE_TYPES_DIR)).unwrap();
+        fs::write(dir.join(parser::NOTE_TYPES_DIR).join("Vocab.toml"), "fields = [\"Word\", \"Meaning\"]\n").unwrap();
+        assert!(c.reload().unwrap());
+        assert_eq!(fronts(&c), ["uno"]);
+
+        // So is a deck left outside `cards`.
+        fs::write(dir.join("old.md"), "Q: left\nA: behind\n").unwrap();
+        assert!(c.reload().unwrap());
+        assert!(c.warnings().iter().any(|w| w.path == "old.md"));
+        assert!(!c.reload().unwrap());
         fs::remove_dir_all(dir).unwrap();
     }
 

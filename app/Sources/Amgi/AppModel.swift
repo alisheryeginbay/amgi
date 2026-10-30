@@ -369,8 +369,10 @@ final class AppModel {
     /// Re-read the Markdown files and update counts. Keeps the current card if it still exists.
     func reload() {
         loadConfig()
-        perform { try collection?.reload() }
-        refresh()
+        // A failed reload refreshes everything, as the cards may be half read.
+        var changed = true
+        perform { changed = try collection?.reload() ?? false }
+        refresh(cardsChanged: changed)
     }
 
     /// Read the config file again. A broken file keeps the keys already in use.
@@ -386,7 +388,9 @@ final class AppModel {
         }
     }
 
-    func refresh() {
+    /// `cardsChanged` false skips sending the card list again, after a reload found no
+    /// file changed.
+    func refresh(cardsChanged: Bool = true) {
         guard let collection else { return }
         // Only changed values are assigned, so views that read the rest are left alone:
         // a reload when the app comes to the front usually changes nothing.
@@ -406,7 +410,11 @@ final class AppModel {
         loadCardInfo()
         if selection == .dashboard { loadDashboard() }
         // Studying changes cards on every answer; the list waits until it's browsed.
-        if isBrowsing { loadBrowsed() } else { cardsStale = true }
+        if isBrowsing {
+            if cardsChanged || cardsStale { loadBrowsed() }
+        } else if cardsChanged {
+            cardsStale = true
+        }
         if current == nil || !revealed { loadNext() }
     }
 
