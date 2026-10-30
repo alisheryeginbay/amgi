@@ -101,6 +101,24 @@ private struct StudySettings: View {
                     }
                 }
             }
+            let leechThreshold = Binding(get: { model.leechThreshold }, set: { model.leechThreshold = max(1, $0) })
+            LabeledContent {
+                HStack(spacing: 4) {
+                    TextField("Leech threshold", value: leechThreshold, format: .number)
+                        .labelsHidden()
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 60)
+                    Stepper("Leech threshold", value: leechThreshold, in: 1...99)
+                        .labelsHidden()
+                }
+            } label: {
+                Text("Leech threshold")
+                Text("Forgetting a card this many times makes it a leech, noted while you study and listed in the Leeches view. 8 suits most people.")
+            }
+            Toggle(isOn: $model.suspendsLeeches) {
+                Text("Suspend leeches")
+                Text("Tags a card #suspended in its file when it becomes a leech, so you can reword it before it comes up again.")
+            }
         }
         .disabled(model.folder == nil)
     }

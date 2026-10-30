@@ -10,8 +10,6 @@ use std::collections::HashMap;
 use crate::parser::NoteTypeInfo;
 use crate::{BrowseCard, CardKind};
 
-/// Forgotten this many times or more, as in Anki.
-pub const LEECH_LAPSES: u32 = 8;
 /// An interval of this many days or more makes a card mature, as in Anki.
 pub const MATURE_DAYS: i64 = 21;
 const DAY_SECS: i64 = 86_400;
@@ -133,7 +131,7 @@ impl Test {
                 State::New => c.due.is_none(),
                 State::Due => !c.suspended && c.due.is_some_and(|d| d < today + DAY_SECS),
                 State::Suspended => c.suspended,
-                State::Leech => c.lapses >= LEECH_LAPSES,
+                State::Leech => c.leech,
                 State::Mature => c.interval.is_some_and(|i| i >= MATURE_DAYS * DAY_SECS),
                 State::Cloze => c.kind == CardKind::Cloze,
                 State::Basic => c.kind == CardKind::Basic,
@@ -351,6 +349,7 @@ mod tests {
             reps: 0,
             lapses: 0,
             suspended: false,
+            leech: false,
         }
     }
 
@@ -392,6 +391,7 @@ mod tests {
                 back: "less than 100".into(),
                 deck: "science/physics".into(),
                 lapses: 9,
+                leech: true,
                 reps: 12,
                 due: Some(NOW - 60),
                 suspended: true,

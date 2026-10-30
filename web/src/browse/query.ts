@@ -2,8 +2,6 @@ import type { BrowseCard, NoteTypeInfo } from "../lib/types";
 
 // The browse search. Words must all match; see the README for the syntax.
 
-/** Forgotten this many times or more, as in Anki. */
-const LEECH_LAPSES = 8;
 /** An interval of this many days or more makes a card mature, as in Anki. */
 const MATURE_DAYS = 21;
 const DAY_SECS = 86_400;
@@ -20,7 +18,7 @@ const STATES: Record<string, (today: number) => Test> = {
   new: () => (c) => c.due === null,
   due: (today) => (c) => !c.suspended && c.due !== null && c.due < today + DAY_SECS,
   suspended: () => (c) => c.suspended,
-  leech: () => (c) => c.lapses >= LEECH_LAPSES,
+  leech: () => (c) => c.leech,
   mature: () => (c) => c.interval !== null && c.interval >= MATURE_DAYS * DAY_SECS,
   cloze: () => (c) => c.kind === "cloze",
   basic: () => (c) => c.kind === "basic",

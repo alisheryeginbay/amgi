@@ -6,7 +6,7 @@
   import { app, commands, post } from "../lib/app.svelte";
   import { player } from "../lib/audio.svelte";
   import { imageSources, soundSources } from "../lib/markdown";
-  import type { StudyCard, StudyState } from "../lib/types";
+  import type { LeechNotice, StudyCard, StudyState } from "../lib/types";
 
   // A new card waits for its images, so it shows whole instead of growing as they
   // arrive. The last card stays up meanwhile, but no longer than this.
@@ -61,6 +61,21 @@
   const total = $derived(reviewed + (shown?.remaining ?? 0));
   const progress = $derived(total > 0 ? reviewed / total : 0);
   const showProgress = $derived(shown?.progress ?? true);
+
+  // A leech is noted beside the next card's stage for a few seconds.
+  const LEECH_SHOWN_MS = 6000;
+  let leech = $state.raw<LeechNotice | null>(null);
+  let leechTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const next = app.study?.leech ?? null;
+    untrack(() => {
+      if (next?.id === leech?.id) return;
+      clearTimeout(leechTimer);
+      leech = next;
+      if (next) leechTimer = setTimeout(() => (leech = null), LEECH_SHOWN_MS);
+    });
+  });
+  onDestroy(() => clearTimeout(leechTimer));
 
   /** Where the card on screen comes from, as the counts above name it. */
   const stages = {
@@ -182,6 +197,12 @@
       <div class="status {card.stage}">
         <Icon name={stages[card.stage].icon} size={14} />
         {stages[card.stage].label}
+        {#if leech}
+          <span class="leech" title="Leeches are cards you keep forgetting, which usually need rewording or splitting. The Leeches view lists them; ⌘Z takes the answer back.">
+            <Icon name="warning" size={14} />
+            {leech.suspended ? "Suspended the last card, a leech" : "The last card is a leech"}: forgotten {leech.lapses} times
+          </span>
+        {/if}
       </div>
       <!-- The sheet stays put while what's on it is dealt anew, so it never blinks. -->
       <div class="sheet">
@@ -259,6 +280,26 @@
     color: var(--green);
   }
 
+  .leech {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    min-width: 0;
+    color: var(--secondary-label);
+    animation: fade-in 0.2s var(--ease-out);
+  }
+
+  .status .leech :global(svg) {
+    color: var(--yellow);
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+
   .bar {
     height: 100%;
     background: var(--accent);
@@ -269,6 +310,10 @@
   @media (prefers-reduced-motion: reduce) {
     .bar {
       transition: none;
+    }
+
+    .leech {
+      animation: none;
     }
   }
 </style>

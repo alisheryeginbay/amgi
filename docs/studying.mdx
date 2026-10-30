@@ -69,6 +69,16 @@ and new cards have their own limit; neither counts toward the limit. Like the
 settings above, both limits belong to the collection. A low limit lets a backlog grow,
 so raise it again once you've caught up.
 
+## Leeches
+
+A card you keep forgetting is a **leech**: it usually needs rewording or splitting more
+than it needs more reviews. Once you've forgotten a card 8 times, a note beside the next
+card says so, and again every 4 times after that. Change the number with **Leech
+threshold** in Settings; the notes then come every half threshold. Turn on **Suspend
+leeches** to have Amgi also [suspend](/card-format#suspending-cards) a card when it
+becomes a leech, by tagging it `#suspended` in its file. <kbd>⌘Z</kbd> takes back the
+answer and the suspension together. Both settings belong to the collection.
+
 The **Retention** table on the Dashboard (and in `amgi stats`) shows how much you
 remembered today, yesterday, and over the last week, month and year: the share of reviews
 not rated **Again**, counting only cards that were scheduled a day or more ahead, as
@@ -103,8 +113,8 @@ Hide it in **Settings** (<kbd>⌘,</kbd>).
 (the magnifier with a plus, next to the search field) to add one; the deck, tag or view
 you're browsing is part of it. Right-click a view to edit its search, give it an icon or
 delete it. Views are kept in `.amgi.sqlite`. Every collection starts with **Leeches**
-(`is:leech`): cards you have forgotten 8 or more times, which usually need rewording or
-splitting.
+(`is:leech`): cards you have forgotten as many times as the [leech threshold](#leeches)
+or more.
 
 ## Searching
 

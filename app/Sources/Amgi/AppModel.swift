@@ -78,6 +78,8 @@ final class AppModel {
     var revealed: Bool { study.revealed }
     /// Whether an answer given since the folder opened can be taken back with ⌘Z.
     private(set) var canUndoAnswer = false
+    /// The last answer made its card a leech; shown beside the next card.
+    private(set) var leechNotice: LeechNotice?
     private(set) var importing = false
     private(set) var dashboard: Dashboard?
     /// Every card, as JSON for the browse pane, which narrows it to the deck, tag or
@@ -137,6 +139,25 @@ final class AppModel {
             guard let collection, limit != collection.newCardsPerDay() else { return }
             perform { try collection.setNewCardsPerDay(limit: limit) }
             refresh()
+        }
+    }
+
+    /// How many times a card is forgotten before it's a leech. The open collection's,
+    /// kept in its database.
+    var leechThreshold: Int = 8 {
+        didSet {
+            let lapses = UInt32(clamping: max(1, leechThreshold))
+            guard let collection, lapses != collection.leechThreshold() else { return }
+            perform { try collection.setLeechThreshold(lapses: lapses) }
+            refresh()
+        }
+    }
+
+    /// Whether a card is suspended when it becomes a leech. The open collection's.
+    var suspendsLeeches = false {
+        didSet {
+            guard let collection, suspendsLeeches != collection.suspendsLeeches() else { return }
+            perform { try collection.setSuspendsLeeches(suspend: suspendsLeeches) }
         }
     }
 
@@ -274,7 +295,10 @@ final class AppModel {
             self.rolloverHour = Int(collection.rolloverHour())
             self.newCardsPerDay = Int(collection.newCardsPerDay())
             self.reviewsPerDay = collection.reviewsPerDay().map(Int.init)
+            self.leechThreshold = Int(collection.leechThreshold())
+            self.suspendsLeeches = collection.suspendsLeeches()
             self.canUndoAnswer = false
+            self.leechNotice = nil
             self.folder = url
             web.collectionRoot = url
             self.selection = .review
@@ -468,7 +492,8 @@ final class AppModel {
                 instant: studyInput == .key,
                 progress: progress,
                 reviewed: today.reviewed,
-                remaining: totalLeft
+                remaining: totalLeft,
+                leech: leechNotice
             ),
             dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDueAndLearning, today: today) } : nil,
             cards: cardsJSON,
@@ -603,7 +628,11 @@ final class AppModel {
         guard let collection, case .answer(let card) = study else { return }
         studyInput = input
         withAnimation(input.animation) {
-            perform { try collection.answer(cardId: card.id, rating: rating) }
+            var leech: Leech?
+            perform { leech = try collection.answer(cardId: card.id, rating: rating) }
+            leechNotice = leech.map {
+                LeechNotice(id: (leechNotice?.id ?? 0) + 1, lapses: $0.lapses, suspended: $0.suspended)
+            }
             canUndoAnswer = collection.canUndoAnswer()
             study = .none
             refresh()
@@ -620,6 +649,7 @@ final class AppModel {
         var card: StudyCard?
         perform { card = try collection.undoAnswer() }
         canUndoAnswer = collection.canUndoAnswer()
+        leechNotice = nil
         // A card no longer in its file can't be shown, so the next one comes up instead.
         study = card.map(StudyState.answer) ?? .none
         refresh()

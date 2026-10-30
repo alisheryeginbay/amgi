@@ -1,6 +1,6 @@
 <script lang="ts">
   // A few SF Symbols–like glyphs, drawn on a 20-unit grid in the current text color.
-  type Name = "speaker" | "speaker-playing" | "speaker-slash" | "photo" | "sparkle" | "retry" | "clock";
+  type Name = "speaker" | "speaker-playing" | "speaker-slash" | "photo" | "sparkle" | "retry" | "clock" | "warning";
   let { name, size = 16 }: { name: Name; size?: number } = $props();
 </script>
 
@@ -14,6 +14,11 @@
   {:else if name === "clock"}
     <circle cx="10" cy="10" r="6.75" fill="none" stroke="currentColor" stroke-width="1.6" />
     <path d="M10 6.2V10l2.6 1.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+  {:else if name === "warning"}
+    <path d="M8.7 3.4a1.5 1.5 0 0 1 2.6 0l6.3 11.3a1.5 1.5 0 0 1-1.3 2.2H3.7a1.5 1.5 0 0 1-1.3-2.2z" fill="currentColor" />
+    <!-- Dark on the yellow it's drawn in, like the system's caution sign. -->
+    <path d="M10 7.5v4" stroke="#1d1d1f" stroke-width="1.7" stroke-linecap="round" />
+    <circle cx="10" cy="14.2" r="1" fill="#1d1d1f" />
   {:else if name === "photo"}
     <rect x="2.5" y="4" width="15" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5" />
     <circle cx="7" cy="8.5" r="1.5" fill="currentColor" />

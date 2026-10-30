@@ -51,6 +51,10 @@ const REVIEWS_PER_DAY_KEY: &str = "reviews_per_day";
 const NEW_PER_DAY_KEY: &str = "new_cards_per_day";
 /// New cards a day allows when the collection hasn't set its own limit, as in Anki.
 const DEFAULT_NEW_PER_DAY: u32 = 20;
+const LEECH_THRESHOLD_KEY: &str = "leech_threshold";
+const LEECH_SUSPEND_KEY: &str = "leech_suspend";
+/// Lapses that make a card a leech when the collection hasn't set its own, as in Anki.
+pub const DEFAULT_LEECH_THRESHOLD: u32 = 8;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum AmgiError {
@@ -185,6 +189,8 @@ pub struct BrowseCard {
     pub lapses: u32,
     /// Tagged `#suspended`, so never studied.
     pub suspended: bool,
+    /// Forgotten as many times as the leech threshold, or more.
+    pub leech: bool,
     /// The note type of the note the card comes from; `None` for `Q:` and `C:` cards.
     #[serde(rename = "noteType")]
     pub note_type: Option<String>,
@@ -447,6 +453,10 @@ struct Inner {
     new_per_day: u32,
     /// Reviews of due cards a day allows; `None` for no limit.
     reviews_per_day: Option<u32>,
+    /// Lapses that make a card a leech; at least 1.
+    leech_threshold: u32,
+    /// Whether a card is suspended when it becomes a leech.
+    leech_suspend: bool,
     utc_offset_secs: i64,
     /// When the study day starts, in seconds after local midnight.
     rollover_secs: i64,
@@ -462,6 +472,24 @@ struct Answered {
     card_id: String,
     review_id: i64,
     prev: Option<CardState>,
+    /// Whether the answer made the card a leech and suspended it.
+    suspended: bool,
+}
+
+/// An answer that made its card a leech, or flagged it again as one.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Leech {
+    /// Times the card has been forgotten.
+    pub lapses: u32,
+    /// Whether it was suspended for it.
+    pub suspended: bool,
+}
+
+/// Whether a card forgotten for the `lapses`th time should be flagged as a leech: on
+/// reaching the threshold, then every half threshold after, as in Anki.
+fn leech_flagged(lapses: u32, threshold: u32) -> bool {
+    let every = (threshold / 2).max(1);
+    lapses >= threshold && (lapses - threshold).is_multiple_of(every)
 }
 
 #[derive(uniffi::Object)]
@@ -494,6 +522,33 @@ impl CardCollection {
         let mut inner = self.lock();
         inner.store.set_setting(NEW_PER_DAY_KEY, limit.into())?;
         inner.new_per_day = limit;
+        Ok(())
+    }
+
+    /// Lapses that make a card a leech. Collection-wide.
+    pub fn leech_threshold(&self) -> u32 {
+        self.lock().leech_threshold
+    }
+
+    /// Set and save the leech threshold; at least 1.
+    pub fn set_leech_threshold(&self, lapses: u32) -> Result<()> {
+        let mut inner = self.lock();
+        let lapses = lapses.max(1);
+        inner.store.set_setting(LEECH_THRESHOLD_KEY, lapses.into())?;
+        inner.leech_threshold = lapses;
+        Ok(())
+    }
+
+    /// Whether a card is suspended when it becomes a leech.
+    pub fn suspends_leeches(&self) -> bool {
+        self.lock().leech_suspend
+    }
+
+    /// Set and save whether leeches are suspended.
+    pub fn set_suspends_leeches(&self, suspend: bool) -> Result<()> {
+        let mut inner = self.lock();
+        inner.store.set_setting(LEECH_SUSPEND_KEY, f64::from(u8::from(suspend)))?;
+        inner.leech_suspend = suspend;
         Ok(())
     }
 
@@ -646,11 +701,14 @@ impl CardCollection {
         Ok(self.lock().store.delete_saved_view(id)?)
     }
 
-    pub fn answer(&self, card_id: String, rating: Rating) -> Result<()> {
+    /// Rate a card. Returns `Some` when forgetting it made it a leech, at the threshold
+    /// and every half threshold after; it's suspended then if `suspends_leeches`.
+    pub fn answer(&self, card_id: String, rating: Rating) -> Result<Option<Leech>> {
         self.lock().answer(&card_id, rating, unix_now())
     }
 
-    /// Take back the latest answer not yet undone, removing it from the history.
+    /// Take back the latest answer not yet undone, removing it from the history, and
+    /// unsuspend the card if the answer suspended it as a leech.
     /// Returns its card, scheduled as before, or `None` if there is nothing to undo or
     /// the card has since left the collection.
     pub fn undo_answer(&self) -> Result<Option<StudyCard>> {
@@ -824,6 +882,8 @@ impl CardCollection {
             scripts: Scripts::default(),
             new_per_day: DEFAULT_NEW_PER_DAY,
             reviews_per_day: None,
+            leech_threshold: DEFAULT_LEECH_THRESHOLD,
+            leech_suspend: false,
             utc_offset_secs: 0,
             rollover_secs: i64::from(DEFAULT_ROLLOVER_HOUR) * 3600,
             store_notice: None,
@@ -857,6 +917,12 @@ impl Inner {
             self.new_per_day = limit.clamp(0.0, u32::MAX.into()) as u32;
         }
         self.reviews_per_day = self.store.setting(REVIEWS_PER_DAY_KEY)?.map(|n| n.clamp(0.0, u32::MAX.into()) as u32);
+        if let Some(lapses) = self.store.setting(LEECH_THRESHOLD_KEY)? {
+            self.leech_threshold = lapses.clamp(1.0, u32::MAX.into()) as u32;
+        }
+        if let Some(suspend) = self.store.setting(LEECH_SUSPEND_KEY)? {
+            self.leech_suspend = suspend != 0.0;
+        }
         Ok(())
     }
 
@@ -1155,6 +1221,7 @@ impl Inner {
                     reps: state.map_or(0, |s| s.reps),
                     lapses: state.map_or(0, |s| s.lapses),
                     suspended: card.suspended(),
+                    leech: state.is_some_and(|s| s.lapses >= self.leech_threshold),
                     note_type: card.parsed.note.as_ref().map(|n| n.note_type.clone()),
                     fields: card.parsed.note.as_ref().map(|n| n.values.clone()).unwrap_or_default(),
                 }
@@ -1281,7 +1348,7 @@ impl Inner {
         }))
     }
 
-    fn answer(&mut self, card_id: &str, rating: Rating, now: i64) -> Result<()> {
+    fn answer(&mut self, card_id: &str, rating: Rating, now: i64) -> Result<Option<Leech>> {
         if !self.index.contains_key(card_id) {
             return Err(AmgiError::UnknownCard { id: card_id.into() });
         }
@@ -1300,21 +1367,35 @@ impl Inner {
             .store
             .record_review(card_id, now, rating, elapsed.into(), review_state, prev, outcome)?;
         self.states.insert(card_id.to_string(), state);
-        self.answered.push(Answered { card_id: card_id.to_string(), review_id, prev });
-        Ok(())
+        self.answered.push(Answered { card_id: card_id.to_string(), review_id, prev, suspended: false });
+        let lapsed = state.lapses > prev.map_or(0, |p| p.lapses);
+        if !lapsed || !leech_flagged(state.lapses, self.leech_threshold) {
+            return Ok(None);
+        }
+        let mut suspended = false;
+        if self.leech_suspend && !self.cards[self.index[card_id]].suspended() {
+            suspended = self.set_suspended(&[card_id.to_string()], true)? > 0;
+            if let Some(last) = self.answered.last_mut() {
+                last.suspended = suspended;
+            }
+        }
+        Ok(Some(Leech { lapses: state.lapses, suspended }))
     }
 
     fn undo_answer(&mut self, now: i64) -> Result<Option<StudyCard>> {
         let Some(answered) = self.answered.pop() else { return Ok(None) };
-        let Answered { card_id, review_id, prev } = answered;
+        let Answered { card_id, review_id, prev, suspended } = answered;
         if let Err(e) = self.store.undo_review(&card_id, review_id, prev) {
-            self.answered.push(Answered { card_id, review_id, prev });
+            self.answered.push(Answered { card_id, review_id, prev, suspended });
             return Err(e.into());
         }
         match prev {
             Some(state) => self.states.insert(card_id.clone(), state),
             None => self.states.remove(&card_id),
         };
+        if suspended && self.index.contains_key(&card_id) {
+            self.set_suspended(std::slice::from_ref(&card_id), false)?;
+        }
         match self.index.get(&card_id) {
             Some(&i) => self.study_card(&self.cards[i], now).map(Some),
             None => Ok(None),
@@ -2281,6 +2362,54 @@ mod tests {
         inner.load_settings().unwrap();
         assert_eq!(inner.reviews_per_day, Some(5));
         drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn leeches_are_flagged_at_the_threshold_then_every_half() {
+        let flagged = |threshold| (1..=20).filter(|&n| leech_flagged(n, threshold)).collect::<Vec<_>>();
+        assert_eq!(flagged(8), [8, 12, 16, 20]);
+        assert_eq!(flagged(5), [5, 7, 9, 11, 13, 15, 17, 19]);
+        assert_eq!(flagged(1), (1..=20).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn leeches_are_reported_and_optionally_suspended() {
+        let (dir, c) = collection(&[("a.md", "Q: capital of Peru\nA: Lima\n")]);
+        let id = c.cards(StudyScope::All)[0].id.clone();
+        c.set_leech_threshold(2).unwrap();
+        let mut inner = c.lock();
+        // Learning a card and forgetting it once doesn't make a leech.
+        assert_eq!(inner.answer(&id, Rating::Good, T0).unwrap(), None);
+        assert_eq!(inner.answer(&id, Rating::Again, T0 + DAY_SECS).unwrap(), None);
+        // Passing it isn't a lapse, even past the threshold.
+        assert_eq!(inner.answer(&id, Rating::Good, T0 + 2 * DAY_SECS).unwrap(), None);
+        let leech = inner.answer(&id, Rating::Again, T0 + 3 * DAY_SECS).unwrap();
+        assert_eq!(leech, Some(Leech { lapses: 2, suspended: false }));
+        assert!(inner.browse(&StudyScope::All)[0].leech);
+        drop(inner);
+
+        // Suspending leeches tags the card in its file, and undoing the answer untags it.
+        c.set_suspends_leeches(true).unwrap();
+        let mut inner = c.lock();
+        let leech = inner.answer(&id, Rating::Again, T0 + 4 * DAY_SECS).unwrap();
+        assert_eq!(leech, Some(Leech { lapses: 3, suspended: true }));
+        let file = dir.join(CARDS_DIR).join("a.md");
+        assert!(fs::read_to_string(&file).unwrap().contains("#suspended"));
+        assert!(inner.browse(&StudyScope::All)[0].suspended);
+        inner.undo_answer(T0 + 4 * DAY_SECS).unwrap().unwrap();
+        assert!(!fs::read_to_string(&file).unwrap().contains("#suspended"));
+        assert_eq!(inner.browse(&StudyScope::All)[0].lapses, 2);
+
+        // Both settings are kept in the database.
+        inner.leech_threshold = DEFAULT_LEECH_THRESHOLD;
+        inner.leech_suspend = false;
+        inner.load_settings().unwrap();
+        assert_eq!((inner.leech_threshold, inner.leech_suspend), (2, true));
+        drop(inner);
+        // A threshold of 0 would flag every card.
+        c.set_leech_threshold(0).unwrap();
+        assert_eq!(c.leech_threshold(), 1);
         fs::remove_dir_all(dir).unwrap();
     }
 

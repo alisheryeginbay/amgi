@@ -75,8 +75,10 @@ struct StudyPayload: Encodable, Equatable {
     /// Answers given today, and cards still to study today: due, learning and new.
     let reviewed: UInt32
     let remaining: UInt32
+    /// The last answer made its card a leech.
+    let leech: LeechNotice?
 
-    enum CodingKeys: CodingKey { case card, revealed, autoplay, instant, progress, reviewed, remaining }
+    enum CodingKeys: CodingKey { case card, revealed, autoplay, instant, progress, reviewed, remaining, leech }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -87,7 +89,16 @@ struct StudyPayload: Encodable, Equatable {
         try c.encode(progress, forKey: .progress)
         try c.encode(reviewed, forKey: .reviewed)
         try c.encode(remaining, forKey: .remaining)
+        try c.encode(leech, forKey: .leech)
     }
+}
+
+/// A card that the last answer made a leech; `id` is new for each, so the same
+/// count twice still shows.
+struct LeechNotice: Encodable, Equatable {
+    let id: Int
+    let lapses: UInt32
+    let suspended: Bool
 }
 
 struct DashboardPayload: Encodable, Equatable {

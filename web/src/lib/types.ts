@@ -37,6 +37,16 @@ export interface StudyState {
   reviewed: number;
   /** Cards still to study today: due, learning and new. */
   remaining: number;
+  /** The last answer made its card a leech; `id` is new for each one. */
+  leech: LeechNotice | null;
+}
+
+export interface LeechNotice {
+  id: number;
+  /** Times the card has been forgotten. */
+  lapses: number;
+  /** Whether it was suspended for it. */
+  suspended: boolean;
 }
 
 export interface DashboardState {
@@ -84,6 +94,8 @@ export interface BrowseCard {
   lapses: number;
   /** Tagged `#suspended`, so never studied. */
   suspended: boolean;
+  /** Forgotten as many times as the leech threshold, or more. */
+  leech: boolean;
   /** The note type of the note the card comes from; null for `Q:` and `C:` cards. */
   noteType: string | null;
   /** The note's fields as Markdown, in its note type's order; empty without a note. */
