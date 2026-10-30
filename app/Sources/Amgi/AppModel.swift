@@ -97,6 +97,9 @@ final class AppModel {
     @ObservationIgnored private var infoCardID: String?
     /// Opens the Card Info window. Set by the main window's view, which can open windows.
     @ObservationIgnored var openCardInfoWindow: () -> Void = {}
+    /// Set by the main window, which can open SwiftUI's windows; the command palette uses them.
+    @ObservationIgnored var openSettingsWindow: () -> Void = {}
+    @ObservationIgnored var openShortcutsWindow: () -> Void = {}
     /// Cards selected in the browse table.
     var browseSelection: Set<String> = [] {
         didSet { loadSelectedCards() }
@@ -241,6 +244,7 @@ final class AppModel {
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var countsTimer: Timer?
     @ObservationIgnored private let quickAdd = QuickAddPanel()
+    @ObservationIgnored private let commandPalette = CommandPalette()
     @ObservationIgnored private var quickAddHotKey: GlobalHotKey?
     @ObservationIgnored private var ankiConnectServer: AnkiConnectServer?
 
@@ -524,9 +528,9 @@ final class AppModel {
         refresh()
     }
 
-    /// ⌘S suspends the card being studied, ⌘K opens the More menu and ⌘Z takes back the
-    /// last answer; ⌘I shows Card Info for that card or the one selected in browse. Caught
-    /// before any view, so they work whether the web view, sidebar or nothing has focus.
+    /// ⌘S suspends the card being studied and ⌘Z takes back the last answer; ⌘I shows
+    /// Card Info for that card or the one selected in browse. Caught before any view, so
+    /// they work whether the web view, sidebar or nothing has focus.
     private func monitorReviewShortcuts() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
@@ -550,12 +554,8 @@ final class AppModel {
                     self.undoAnswer()
                     return true
                 }
-                guard key == "s" || key == "k", self.selection == .review, self.current != nil else { return false }
-                if key == "s" {
-                    if !event.isARepeat { self.suspendCurrent() }
-                } else {
-                    self.showMoreMenu()
-                }
+                guard key == "s", self.selection == .review, self.current != nil else { return false }
+                if !event.isARepeat { self.suspendCurrent() }
                 return true
             }
             return handled ? nil : event
@@ -567,7 +567,7 @@ final class AppModel {
         setSuspended([card.id], true)
     }
 
-    /// The review toolbar's More menu, native so ⌘K can open it as well as a click.
+    /// The review toolbar's More menu, opened under its button.
     func showMoreMenu() {
         guard let card = current else { return }
         let menu = NSMenu()
@@ -775,6 +775,11 @@ final class AppModel {
     /// Opens Add Card, or puts it away if it's showing.
     func toggleQuickAdd() {
         if quickAdd.isShown { quickAdd.close() } else { quickAdd.show(model: self) }
+    }
+
+    /// Opens the command palette over the front window, or puts it away if it's showing.
+    func toggleCommandPalette() {
+        if commandPalette.isShown { commandPalette.close() } else { commandPalette.show(paletteCommands()) }
     }
 
     /// Appends the card to its deck's file. Returns why it couldn't be added, if it couldn't.

@@ -89,14 +89,14 @@ private struct DetailToolbar: ToolbarContent {
                     }
                 }
                 ToolbarItem {
-                    // ⌘K and ⌘S are caught by `AppModel`, so they work from any focus.
+                    // ⌘S is caught by `AppModel`, so it works from any focus.
                     Button {
                         model.showMoreMenu()
                     } label: {
                         Label("More", systemImage: "ellipsis")
                     }
                     .background(MenuAnchorView { model.moreMenuAnchor = $0 })
-                    .help("More (⌘K)")
+                    .help("More")
                 }
                 ToolbarItem {
                     Button {

@@ -43,6 +43,9 @@ struct AmgiApp: App {
             }
             // The sidebar's first three items, as in Mail and Finder.
             CommandGroup(before: .sidebar) {
+                Button("Command Palette…") { model.toggleCommandPalette() }
+                    .keyboardShortcut("k")
+                Divider()
                 Button("Dashboard") { model.selection = .dashboard }
                     .keyboardShortcut("1")
                     .disabled(model.folder == nil)

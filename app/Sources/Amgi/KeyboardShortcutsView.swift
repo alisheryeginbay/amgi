@@ -24,6 +24,7 @@ struct ShortcutGroup: Identifiable {
     /// `Study.svelte` and `Browse.svelte`.
     static func all(answerKeys: AnswerKeys) -> [ShortcutGroup] { [
         ShortcutGroup(title: "General", shortcuts: [
+            Shortcut("Command Palette", "⌘", "K"),
             Shortcut("Open Folder", "⌘", "O"),
             Shortcut("Reload Cards", "⌘", "R"),
             Shortcut("Import Anki Deck", "⇧", "⌘", "I"),
@@ -44,7 +45,6 @@ struct ShortcutGroup: Identifiable {
             Shortcut("Replay Audio", "R"),
             Shortcut("Suspend Card", "⌘", "S"),
             Shortcut("Card Info", "⌘", "I"),
-            Shortcut("More", "⌘", "K"),
         ]),
         ShortcutGroup(title: "Browse", shortcuts: [
             Shortcut("Select Next or Previous Card", "↓", "↑"),
