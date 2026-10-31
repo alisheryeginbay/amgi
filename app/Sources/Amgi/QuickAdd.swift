@@ -41,6 +41,8 @@ final class QuickAddPanel: NSObject, NSWindowDelegate {
         }
         panel.isMovableByWindowBackground = true
         panel.level = .floating
+        // Tiling window managers float it rather than tile it.
+        panel.setAccessibilitySubrole(.floatingWindow)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false

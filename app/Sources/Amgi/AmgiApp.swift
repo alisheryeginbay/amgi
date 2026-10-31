@@ -63,6 +63,7 @@ struct AmgiApp: App {
         Window("Card Info", id: "card-info") {
             CardInfoView()
                 .environment(model)
+                .dialogWindow()
         }
         .defaultSize(width: 420, height: 600)
 
@@ -70,12 +71,14 @@ struct AmgiApp: App {
         Window("Keyboard Shortcuts", id: "keyboard-shortcuts") {
             KeyboardShortcutsView()
                 .environment(model)
+                .dialogWindow()
         }
         .defaultSize(width: 380, height: 560)
 
         Settings {
             SettingsView()
                 .environment(model)
+                .dialogWindow()
         }
 
         // Cards due at a glance, while the window is closed or behind others.
