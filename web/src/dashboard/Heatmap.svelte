@@ -1,21 +1,38 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { DAY_SECONDS, date, number, weekdayIndex } from "./format";
+  import { studyTime } from "./time";
   import { app } from "../lib/app.svelte";
 
   /** A year of reviews as a grid of days: one column per week, like GitHub's
-   *  contribution graph. Shade is the day's quartile among days with reviews. */
-  let { activity, start }: { activity: number[]; start: number } = $props();
+   *  contribution graph. Shade is the day's quartile among days with reviews, by
+   *  their count or, with `byTime`, the time they took. */
+  let {
+    activity,
+    secs,
+    start,
+    byTime = false,
+  }: { activity: number[]; secs: number[]; start: number; byTime?: boolean } = $props();
 
   interface Day {
     index: number;
     date: Date;
     count: number;
+    secs: number;
   }
 
   const days = $derived(
-    activity.map((count, index): Day => ({ index, date: new Date((start + index * DAY_SECONDS) * 1000), count })),
+    activity.map(
+      (count, index): Day => ({
+        index,
+        date: new Date((start + index * DAY_SECONDS) * 1000),
+        count,
+        secs: secs[index] ?? 0,
+      }),
+    ),
   );
+  const shaded = $derived(byTime ? secs : activity);
+  const value = (day: Day) => (byTime ? day.secs : day.count);
 
   /** Days grouped into week columns, padded with null before the first day and after today. */
   const weeks = $derived.by(() => {
@@ -31,10 +48,10 @@
 
   /** Quartile boundaries of the days with reviews, so one huge day does not wash out the rest. */
   const bounds = $derived.by(() => {
-    const active = activity.filter((n) => n > 0).sort((a, b) => a - b);
+    const active = shaded.filter((n) => n > 0).sort((a, b) => a - b);
     return active.length ? [0.25, 0.5, 0.75].map((q) => active[Math.floor((active.length - 1) * q)]) : [];
   });
-  const level = (count: number) => (count === 0 ? 0 : 1 + bounds.filter((b) => count > b).length);
+  const level = (n: number) => (n === 0 ? 0 : 1 + bounds.filter((b) => n > b).length);
 
   /** Short month names above the first column of each month, skipping any that would crowd the last. */
   const months = $derived.by(() => {
@@ -63,9 +80,11 @@
   );
 
   const summary = $derived.by(() => {
+    const studied = shaded.filter((n) => n > 0).length;
+    const onDays = `on ${number(studied)} ${studied === 1 ? "day" : "days"} in the last year`;
+    if (byTime) return `${studyTime(secs.reduce((a, b) => a + b, 0))} of study ${onDays}`;
     const total = activity.reduce((a, b) => a + b, 0);
-    const studied = activity.filter((n) => n > 0).length;
-    return `${number(total)} ${total === 1 ? "review" : "reviews"} on ${number(studied)} ${studied === 1 ? "day" : "days"} in the last year`;
+    return `${number(total)} ${total === 1 ? "review" : "reviews"} ${onDays}`;
   });
 
   let scroller: HTMLDivElement;
@@ -89,13 +108,14 @@
     const half = TOOLTIP_WIDTH / 2;
     // Keep the bubble inside the heatmap; the arrow still points at the cell.
     const x = Math.min(Math.max(hovered.x, half), Math.max(container.clientWidth - half, half));
-    const { count } = hovered.day;
+    const { count, secs } = hovered.day;
     return {
       x,
       y: hovered.y,
       arrow: hovered.x - x,
       amount: count === 0 ? "No" : number(count),
-      text: ` ${count === 1 ? "card" : "cards"} reviewed on ${date(hovered.day.date, {
+      // Days before reviews were timed have a count but no time.
+      text: ` ${count === 1 ? "card" : "cards"} reviewed${secs > 0 ? ` in ${studyTime(secs)}` : ""} on ${date(hovered.day.date, {
         weekday: "long",
         month: "long",
         day: "numeric",
@@ -124,7 +144,7 @@
             {#each week as day, row (row)}
               {#if day}
                 <div
-                  class="cell level-{level(day.count)}"
+                  class="cell level-{level(value(day))}"
                   role="presentation"
                   class:hovered={hovered?.day.index === day.index}
                   onpointerenter={(event) => hover(event, day)}

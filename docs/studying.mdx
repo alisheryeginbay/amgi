@@ -21,8 +21,9 @@ typed checked against it. Rate it with <kbd>1</kbd>–<kbd>4</kbd> as usual.
 
 The window's subtitle counts what's left today: **due** cards come back after
 [days](#when-cards-are-due), **learning** cards are ones you answered **Again** and
-haven't passed since, and **new** cards you haven't studied. Which of these the card on
-screen is shows just above it.
+haven't passed since, and **new** cards you haven't studied. Once some reviews are
+[timed](#time-spent-studying), it also says about how long they'll take. Which of these
+the card on screen is shows just above it.
 
 **Review** in the sidebar studies the whole collection. Pick a deck or tag to browse its
 cards in a table: search (<kbd>⌘F</kbd>), sort by any column, and double-click a card to open its file.
@@ -91,6 +92,28 @@ Anki does, so a card you forgot isn't counted again when it comes back. It's spl
 young and mature cards by that interval: under 21 days is young. Compare
 it with your desired retention; if it's lower, cards are coming back too late.
 
+## Time spent studying
+
+Amgi times each card from when it shows until you rate it. The timer pauses whenever you
+can't be studying: while another pane or app is in front, the window is minimized or
+covered, or the screen is asleep or locked. A card counts a minute at most, in case you
+step away with it on screen, as Anki does by default. If you take back an answer with
+<kbd>⌘Z</kbd>, the card's timer carries on from where it was.
+
+- The **Dashboard** shows the time studied today, about how long the cards left today will
+  take, the average time per day you studied and the time per review, over the last 30
+  days. Switch the **Activity** heatmap to **Time** to shade days by time instead of
+  reviews; hover a day for both.
+- The **forecast** says about how long each day's due cards will take.
+- **Card Info** (<kbd>⌘I</kbd>) shows a card's average and total time; hover a review for its own.
+- The window's subtitle and the menu bar show the time left today, and the menu bar the
+  time studied so far.
+
+The estimates go by your last 30 days: new cards by how long a new card took on the day
+you first studied it, Again and repeats included, and due cards by how long one took on
+the day it came back. Reviews from before Amgi timed them have no time, so days before
+then show their reviews but no time. [Anki imports](/anki-import) bring their times along.
+
 ## Adding cards
 
 **Add Card** (<kbd>⌥⌘N</kbd> from any app, or <kbd>⌘N</kbd> in Amgi) opens a small panel
@@ -107,8 +130,8 @@ field to copy it into the collection's `media` folder and link it there.
 
 ## Menu bar
 
-The menu bar shows how many cards are due or being learned. Its menu lists what's left today, the
-reviews done so far and each deck with cards to study; pick one to open it, or **Study
+The menu bar shows how many cards are due or being learned. Its menu lists what's left today
+and about how long it will take, the reviews and [time](#time-spent-studying) so far, and each deck with cards to study; pick one to open it, or **Study
 Now** to start reviewing. While it's shown, Amgi keeps running when its window is closed.
 Hide it in **Settings** (<kbd>⌘,</kbd>).
 

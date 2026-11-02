@@ -67,11 +67,13 @@ final class AppModel {
     /// The saved view shown in the add or edit sheet.
     var editingView: SavedViewDraft?
     private(set) var warnings: [CollectionWarning] = []
-    private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0, learning: 0)
+    private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0, learning: 0, studySecs: 0, secsLeft: nil)
     /// When the current study day started (Unix seconds), for the browse search's `is:due`.
     private(set) var dayStart: Int64?
     /// The card being studied, and whether its answer shows.
-    private(set) var study: StudyState = .none
+    private(set) var study: StudyState = .none {
+        didSet { timer.show(study.card?.id) }
+    }
     /// What last showed an answer or rated a card, for whether the change animates.
     private(set) var studyInput: StudyInput = .pointer
     var current: StudyCard? { study.card }
@@ -198,6 +200,7 @@ final class AppModel {
     var selection: SidebarItem = .review {
         didSet {
             guard oldValue != selection else { return }
+            timer.reviewing = selection == .review
             search = ""
             browseSelection = []
             browsedCount = nil
@@ -241,6 +244,8 @@ final class AppModel {
     @ObservationIgnored weak var moreMenuAnchor: NSView?
     /// The browse toolbar's search field, which ⌘F focuses.
     @ObservationIgnored weak var searchField: NSSearchField?
+    /// Times the card being studied.
+    @ObservationIgnored private let timer = StudyTimer()
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var countsTimer: Timer?
     @ObservationIgnored private let quickAdd = QuickAddPanel()
@@ -249,6 +254,8 @@ final class AppModel {
     @ObservationIgnored private var ankiConnectServer: AnkiConnectServer?
 
     init() {
+        timer.view = web.webView
+        timer.reviewing = selection == .review
         web.onMessage = { [weak self] in self?.handle($0) }
         web.contextMenu = { [weak self] ids in self?.menuItems(for: ids) ?? [] }
         loadConfig()
@@ -269,13 +276,22 @@ final class AppModel {
     /// Cards still to study today: due, learning and new.
     var totalLeft: UInt32 { totalDue + totalLearning + today.newAvailable }
 
-    /// "3 due · 2 learning · 5 new", leaving out learning when there is none.
+    /// "3 due · 2 learning · 5 new · about 8 min", leaving out learning when there is
+    /// none, and the time left until there are timed reviews to estimate it from.
     var studyCounts: String {
         [
             "\(totalDue) due",
             totalLearning > 0 ? "\(totalLearning) learning" : nil,
             "\(today.newAvailable) new",
+            timeLeft.map { "about \($0)" },
         ].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// About how long the cards left today will take, such as "8 min"; `nil` when none
+    /// are left or there's nothing to estimate it from.
+    var timeLeft: String? {
+        guard totalLeft > 0, let secs = today.secsLeft else { return nil }
+        return formatStudyTime(seconds: max(secs, 60))
     }
 
     func chooseFolder() {
@@ -329,8 +345,9 @@ final class AppModel {
         savedViews = []
         editingView = nil
         warnings = []
-        today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0, learning: 0)
+        today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0, learning: 0, studySecs: 0, secsLeft: nil)
         study = .none
+        timer.reset()
         canUndoAnswer = false
         dashboard = nil
         cardsJSON = nil
@@ -635,9 +652,10 @@ final class AppModel {
     func answer(_ rating: Rating, via input: StudyInput) {
         guard let collection, case .answer(let card) = study else { return }
         studyInput = input
+        let taken = timer.answer(card.id)
         withAnimation(input.animation) {
             var leech: Leech?
-            perform { leech = try collection.answer(cardId: card.id, rating: rating) }
+            perform { leech = try collection.answer(cardId: card.id, rating: rating, takenMs: taken) }
             leechNotice = leech.map {
                 LeechNotice(id: (leechNotice?.id ?? 0) + 1, lapses: $0.lapses, suspended: $0.suspended)
             }
@@ -658,6 +676,7 @@ final class AppModel {
         perform { card = try collection.undoAnswer() }
         canUndoAnswer = collection.canUndoAnswer()
         leechNotice = nil
+        timer.undo(card?.id)
         // A card no longer in its file can't be shown, so the next one comes up instead.
         study = card.map(StudyState.answer) ?? .none
         refresh()

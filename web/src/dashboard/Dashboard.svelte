@@ -3,8 +3,30 @@
   import Heatmap from "./Heatmap.svelte";
   import { app } from "../lib/app.svelte";
   import { number } from "./format";
+  import { dailyAverage, reviewTime, studyTime } from "./time";
 
   const d = $derived(app.dashboard);
+  /** Whether any review was ever timed, for showing time at all. */
+  const timed = $derived(d ? d.secsPerReview !== null || d.activitySecs.some((s) => s > 0) : false);
+  const average = $derived(d ? dailyAverage(d.activitySecs.slice(-30)) : null);
+
+  const HEATMAP_KEY = "dashboard.heatmapByTime";
+  let byTime = $state(read());
+  function read(): boolean {
+    try {
+      return localStorage.getItem(HEATMAP_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+  function shadeByTime(on: boolean) {
+    byTime = on;
+    try {
+      localStorage.setItem(HEATMAP_KEY, on ? "1" : "0");
+    } catch {
+      // Only a remembered preference.
+    }
+  }
   const PERIODS = ["Today", "Yesterday", "Last week", "Last month", "Last year"];
   const percent = $derived(
     new Intl.NumberFormat(app.environment.locale, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }),
@@ -19,17 +41,39 @@
         {@render tile(number(d.newToday), "New today")}
         {@render tile(number(d.reviewedToday), "Reviewed today")}
         {@render tile(d.streak === 1 ? "1 day" : `${number(d.streak)} days`, "Streak")}
+        {#if timed}
+          {@render tile(studyTime(d.studySecsToday), "Studied today")}
+          {@render tile(
+            d.secsLeft === null || d.due + d.newToday === 0 ? "–" : `≈ ${studyTime(Math.max(d.secsLeft, 60))}`,
+            "Left today",
+            "About how long the cards still due and new today will take, at your pace of the last 30 days",
+          )}
+          {@render tile(average === null ? "–" : studyTime(average), "Daily average", "Time per day studied, over the last 30 days")}
+          {@render tile(
+            d.secsPerReview === null ? "–" : reviewTime(d.secsPerReview),
+            "Per review",
+            "Time spent on a card before rating it, over the last 30 days",
+          )}
+        {/if}
       </div>
 
       <section class="panel">
-        <h2>Activity</h2>
-        <Heatmap activity={d.activity} start={d.activityStart} />
+        <div class="heading">
+          <h2>Activity</h2>
+          {#if timed}
+            <div class="segmented" role="group" aria-label="Shade days by">
+              <button class:on={!byTime} aria-pressed={!byTime} onclick={() => shadeByTime(false)}>Reviews</button>
+              <button class:on={byTime} aria-pressed={byTime} onclick={() => shadeByTime(true)}>Time</button>
+            </div>
+          {/if}
+        </div>
+        <Heatmap activity={d.activity} secs={d.activitySecs} start={d.activityStart} byTime={timed && byTime} />
       </section>
 
       <div class="row">
         <section class="panel">
           <h2>Due in the next two weeks</h2>
-          <Forecast forecast={d.forecast} />
+          <Forecast forecast={d.forecast} secsPerCard={d.secsPerDueCard} />
         </section>
         <section class="panel cards">
           <h2>Cards</h2>
@@ -73,8 +117,8 @@
   </main>
 {/if}
 
-{#snippet tile(value: string, label: string)}
-  <div class="tile">
+{#snippet tile(value: string, label: string, help?: string)}
+  <div class="tile" title={help}>
     <div class="value">{value}</div>
     <div class="label">{label}</div>
   </div>
@@ -134,6 +178,35 @@
     margin-top: 2px;
     font-size: var(--font-callout);
     color: var(--secondary-label);
+  }
+
+  .heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+
+  .segmented {
+    display: flex;
+    padding: 2px;
+    border-radius: 7px;
+    background: var(--quaternary-label);
+  }
+
+  .segmented button {
+    padding: 2px 10px;
+    border: none;
+    border-radius: 5px;
+    background: none;
+    color: var(--secondary-label);
+    font: inherit;
+    font-size: var(--font-caption);
+  }
+
+  .segmented button.on {
+    background: var(--text-background);
+    color: var(--label);
+    box-shadow: 0 0.5px 1.5px rgb(0 0 0 / 0.2);
   }
 
   h2 {

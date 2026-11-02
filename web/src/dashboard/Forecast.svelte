@@ -1,9 +1,11 @@
 <script lang="ts">
   import { DAY_SECONDS, date, number } from "./format";
+  import { studyTime } from "./time";
   import { app } from "../lib/app.svelte";
 
-  /** Cards due per day from today on. */
-  let { forecast }: { forecast: number[] } = $props();
+  /** Cards due per day from today on, and the seconds one usually takes, for the
+   *  time each day will. */
+  let { forecast, secsPerCard }: { forecast: number[]; secsPerCard: number | null } = $props();
 
   const HEIGHT = 180;
   const AXIS_WIDTH = 32;
@@ -91,6 +93,9 @@
   {#if selected !== null}
     <div class="tooltip" style:left="{tooltipX}px">
       <strong class="tabular">{forecast[selected] === 1 ? "1 card" : `${number(forecast[selected])} cards`}</strong>
+      {#if secsPerCard !== null && forecast[selected] > 0}
+        <span>about {studyTime(Math.max(forecast[selected] * secsPerCard, 60))}</span>
+      {/if}
       <span>{dayName(selected)}</span>
     </div>
   {/if}

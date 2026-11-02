@@ -53,9 +53,20 @@ export interface DashboardState {
   due: number;
   newToday: number;
   reviewedToday: number;
+  /** Seconds spent studying today, counting timed reviews. */
+  studySecsToday: number;
+  /** About how long the cards left today will take; null without timed reviews to go by. */
+  secsLeft: number | null;
   streak: number;
   /** Reviews per study day, oldest first, ending today. */
   activity: number[];
+  /** Seconds spent on each day of `activity`, counting timed reviews. */
+  activitySecs: number[];
+  /** Average seconds per review over the last 30 days; null without timed reviews. */
+  secsPerReview: number | null;
+  /** Average seconds a card studied before takes the day it comes back, its repeats
+   *  that day included, over the last 30 days; estimates the forecast's time. */
+  secsPerDueCard: number | null;
   /** Unix seconds at which the first day of `activity` starts. */
   activityStart: number;
   /** Cards due per day from today on; today includes overdue cards. */

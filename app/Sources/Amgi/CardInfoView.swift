@@ -91,6 +91,15 @@ private struct CardInfoForm: View {
                 Section("Reviews") {
                     LabeledContent("Reviews", value: "\(info.reps)")
                     LabeledContent("Lapses", value: "\(info.lapses)")
+                    let times = info.reviews.compactMap(\.takenMs).map(Double.init)
+                    if !times.isEmpty {
+                        let total = times.reduce(0, +) / 1000
+                        LabeledContent("Average Time", value: formatStudyTime(seconds: UInt32(total / Double(times.count) + 0.5)))
+                            .help(times.count == info.reviews.count
+                                ? "Time spent on the card before rating it, per review"
+                                : "Time spent on the card before rating it, per review; \(times.count) of \(info.reviews.count) reviews were timed")
+                        LabeledContent("Total Time", value: formatStudyTime(seconds: UInt32(total + 0.5)))
+                    }
                     ForEach(Array(info.reviews.enumerated().reversed()), id: \.offset) { _, review in
                         ReviewRow(review: review)
                     }
@@ -263,9 +272,14 @@ private struct ReviewRow: View {
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 44, alignment: .trailing)
         }
-        .help(review.wasNew
-            ? "First review; stability \(formatInterval(seconds: Int64(review.stability * 86_400)))"
-            : "\(Int(review.elapsedDays)) days after the review before; stability \(formatInterval(seconds: Int64(review.stability * 86_400)))")
+        .help(details)
+    }
+
+    private var details: String {
+        let stability = "stability \(formatInterval(seconds: Int64(review.stability * 86_400)))"
+        let when = review.wasNew ? "First review" : "\(Int(review.elapsedDays)) days after the review before"
+        let time = review.takenMs.map { "; took \(formatStudyTime(seconds: ($0 + 500) / 1000))" } ?? ""
+        return "\(when); \(stability)\(time)"
     }
 }
 

@@ -27,7 +27,8 @@ the root, and note tags become `#tag` lines.
 - Cloze notes become `C:` cards, with `Back Extra` kept as a note under the card. Anki
   can test several deletions together (`c1` used twice); amgi gives each its own card.
 - Review history is replayed through amgi's FSRS scheduler, and cards are due on the
-  same day as in Anki, whatever hour Anki's day starts at.
+  same day as in Anki, whatever hour Anki's day starts at. Each review keeps the
+  [time it took](/studying#time-spent-studying), up to a minute.
 - MathJax `\(…\)` and `\[…\]` become `$…$` and `$$…$$`. A cloze inside math is
   taken out of it, so the gap holds its own math.
 - Furigana in `<ruby>` follows its word in brackets, as in 日本（にほん）.

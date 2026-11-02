@@ -26,7 +26,7 @@ pub use scheduler::{Rating, ReviewState};
 pub use scripts::Scripts;
 use parser::ParsedCard;
 use scheduler::{Memory, Scheduler};
-use store::{CardState, LogEntry, LoggedReview, Store};
+use store::{CardState, CardTime, LogEntry, LoggedReview, Store};
 
 uniffi::setup_scaffolding!();
 
@@ -55,6 +55,11 @@ const LEECH_THRESHOLD_KEY: &str = "leech_threshold";
 const LEECH_SUSPEND_KEY: &str = "leech_suspend";
 /// Lapses that make a card a leech when the collection hasn't set its own, as in Anki.
 pub const DEFAULT_LEECH_THRESHOLD: u32 = 8;
+/// The most time one review counts, as Anki does by default: past this, the person
+/// has most likely stepped away with the card on screen.
+pub const MAX_ANSWER_MS: u32 = 60_000;
+/// Days of timed reviews that average time per card is taken over.
+const TIME_AVERAGE_DAYS: i64 = 30;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum AmgiError {
@@ -243,6 +248,8 @@ pub struct CardReview {
     /// Seconds until the card was due again.
     pub interval_secs: i64,
     pub was_new: bool,
+    /// Milliseconds spent on the card before rating it; `None` when not known.
+    pub taken_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
@@ -262,6 +269,11 @@ pub struct TodayStats {
     pub due_available: u32,
     /// Cards answered Again and not yet passed, as in `DeckInfo::learning`.
     pub learning: u32,
+    /// Time spent on today's reviews, counting only those timed.
+    pub study_secs: u32,
+    /// About how long the cards left today will take, from the time recent days took
+    /// per card; `None` without timed reviews in the last 30 days.
+    pub secs_left: Option<u32>,
 }
 
 /// A card to add to a deck's file.
@@ -314,6 +326,8 @@ pub enum HistoryEntry {
         state: Option<ReviewState>,
         /// When the other app scheduled the card next; `None` lets the scheduler decide.
         interval_secs: Option<i64>,
+        /// Milliseconds spent on the card before rating it, if the other app knows.
+        taken_ms: Option<u32>,
     },
     /// The card was made new again.
     Reset { time: i64 },
@@ -338,6 +352,13 @@ pub struct Imported {
 pub struct Dashboard {
     /// Reviews per study day, oldest first, ending today.
     pub activity: Vec<u32>,
+    /// Seconds spent on each day of `activity`, counting only timed reviews.
+    pub activity_secs: Vec<u32>,
+    /// Average seconds per review over the last 30 days; `None` without timed reviews.
+    pub secs_per_review: Option<f64>,
+    /// Average seconds a card studied before takes on the day it comes back, all its
+    /// reviews that day together, over the last 30 days. Estimates time for `forecast`.
+    pub secs_per_due_card: Option<f64>,
     /// Unix seconds at which the first day of `activity` starts.
     pub activity_start: i64,
     /// Cards due per day from today on; today includes overdue cards.
@@ -715,10 +736,12 @@ impl CardCollection {
         Ok(self.lock().store.delete_saved_view(id)?)
     }
 
-    /// Rate a card. Returns `Some` when forgetting it made it a leech, at the threshold
-    /// and every half threshold after; it's suspended then if `suspends_leeches`.
-    pub fn answer(&self, card_id: String, rating: Rating) -> Result<Option<Leech>> {
-        self.lock().answer(&card_id, rating, unix_now())
+    /// Rate a card. `taken_ms` is the time spent on it, which the review log keeps up
+    /// to `MAX_ANSWER_MS`; `None` when not timed.
+    /// Returns `Some` when forgetting it made it a leech, at the threshold and every half
+    /// threshold after; it's suspended then if `suspends_leeches`.
+    pub fn answer(&self, card_id: String, rating: Rating, taken_ms: Option<u32>) -> Result<Option<Leech>> {
+        self.lock().answer(&card_id, rating, taken_ms, unix_now())
     }
 
     /// Take back the latest answer not yet undone, removing it from the history, and
@@ -1133,6 +1156,12 @@ impl Inner {
         }
     }
 
+    /// Average time per card over the last `TIME_AVERAGE_DAYS` study days, today included.
+    fn time_per_card(&self, ids: Option<&[String]>, now: i64) -> Result<CardTime> {
+        let since = self.day_start(now) - (TIME_AVERAGE_DAYS - 1) * DAY_SECS;
+        Ok(self.store.time_per_card(since, self.utc_offset_secs - self.rollover_secs, ids)?)
+    }
+
     fn day_start(&self, now: i64) -> i64 {
         let local = now + self.utc_offset_secs - self.rollover_secs;
         local.div_euclid(DAY_SECS) * DAY_SECS + self.rollover_secs - self.utc_offset_secs
@@ -1385,12 +1414,13 @@ impl Inner {
                     difficulty: r.memory.difficulty,
                     interval_secs: r.interval_secs,
                     was_new: r.was_new,
+                    taken_ms: r.taken_ms,
                 })
                 .collect(),
         }))
     }
 
-    fn answer(&mut self, card_id: &str, rating: Rating, now: i64) -> Result<Option<Leech>> {
+    fn answer(&mut self, card_id: &str, rating: Rating, taken_ms: Option<u32>, now: i64) -> Result<Option<Leech>> {
         if !self.index.contains_key(card_id) {
             return Err(AmgiError::UnknownCard { id: card_id.into() });
         }
@@ -1407,7 +1437,7 @@ impl Inner {
         };
         let (state, review_id) = self
             .store
-            .record_review(card_id, now, rating, elapsed.into(), review_state, prev, outcome)?;
+            .record_review(card_id, now, rating, elapsed.into(), review_state, cap_taken(taken_ms), prev, outcome)?;
         self.states.insert(card_id.to_string(), state);
         self.answered.push(Answered { card_id: card_id.to_string(), review_id, prev, suspended: false });
         let lapsed = state.lapses > prev.map_or(0, |p| p.lapses);
@@ -1573,13 +1603,16 @@ impl Inner {
         // Every day studied, for the streak; the recent ones fill the activity heatmap.
         let per_day = self.store.reviews_per_day(0, shift, ids)?;
         let mut activity = vec![0; activity_days.max(1) as usize];
-        for &(day, count) in &per_day {
-            if let Some(slot) = usize::try_from(day - first).ok().and_then(|i| activity.get_mut(i)) {
-                *slot = count;
+        let mut activity_secs = activity.clone();
+        for &(day, count, ms) in &per_day {
+            if let Ok(i) = usize::try_from(day - first) && i < activity.len() {
+                activity[i] = count;
+                activity_secs[i] = (ms / 1000) as u32;
             }
         }
+        let time = self.time_per_card(ids, now)?;
 
-        let studied: HashSet<i64> = per_day.into_iter().map(|(d, _)| d).collect();
+        let studied: HashSet<i64> = per_day.into_iter().map(|(d, _, _)| d).collect();
         let from = if studied.contains(&today) { today } else { today - 1 };
         let streak = (0..).take_while(|n| studied.contains(&(from - n))).count() as u32;
 
@@ -1622,6 +1655,9 @@ impl Inner {
         }
         Ok(Dashboard {
             activity,
+            activity_secs,
+            secs_per_review: time.review_ms.map(|ms| ms / 1000.0),
+            secs_per_due_card: time.seen_ms.or(time.new_ms).map(|ms| ms / 1000.0),
             activity_start: first * DAY_SECS - shift,
             forecast,
             streak,
@@ -1726,6 +1762,7 @@ impl Inner {
                     rating,
                     state: stage,
                     interval_secs,
+                    taken_ms,
                 } => {
                     let (memory, elapsed) = self.elapsed(state.as_ref(), time);
                     // A history that starts mid-way has no New review, which tells the
@@ -1747,6 +1784,7 @@ impl Inner {
                         interval_secs,
                         was_new: state.is_none(),
                         state: Some(review_state),
+                        taken_ms: cap_taken(taken_ms),
                     }));
                     let lapse = u32::from(state.is_some() && rating == Rating::Again);
                     state = Some(CardState {
@@ -1789,14 +1827,36 @@ impl Inner {
                 due += u32::from(self.is_due(state, now));
             }
         }
+        let new_available = unseen.min(self.new_remaining(now)?);
+        let due_available = due.min(self.reviews_remaining(now)?);
+        let time = self.time_per_card(ids, now)?;
         Ok(TodayStats {
             reviewed: self.store.reviews_since(since, ids)?,
             new_studied: self.store.new_cards_since(since, ids)?,
-            new_available: unseen.min(self.new_remaining(now)?),
-            due_available: due.min(self.reviews_remaining(now)?),
+            new_available,
+            due_available,
             learning,
+            study_secs: (self.store.time_since(since, ids)? / 1000) as u32,
+            secs_left: time_left(time, new_available, due_available, learning),
         })
     }
+}
+
+/// A review's time as the log keeps it: up to `MAX_ANSWER_MS`.
+fn cap_taken(taken_ms: Option<u32>) -> Option<u32> {
+    taken_ms.map(|ms| ms.min(MAX_ANSWER_MS))
+}
+
+/// About how long the cards left today take, in seconds: new and returning cards each
+/// at their own average, which includes being failed and coming back the same day, and
+/// learning cards, already past that, at the time of one review. A kind of card without
+/// timed reviews takes the average of another.
+fn time_left(time: CardTime, new: u32, due: u32, learning: u32) -> Option<u32> {
+    let any = time.seen_ms.or(time.new_ms).or(time.review_ms)?;
+    let ms = f64::from(new) * time.new_ms.unwrap_or(any)
+        + f64::from(due) * time.seen_ms.unwrap_or(any)
+        + f64::from(learning) * time.review_ms.unwrap_or(any);
+    Some((ms / 1000.0).round() as u32)
 }
 
 /// Short human-readable interval for answer buttons: `10m`, `3d`, `1.5mo`, `2.1y`.
@@ -1925,11 +1985,11 @@ mod tests {
         assert_eq!(card.front, "1");
         assert_eq!(card.stage, StudyStage::New);
         assert_eq!(card.intervals.len(), 4);
-        inner.answer(&card.id, Rating::Good, T0).unwrap();
+        inner.answer(&card.id, Rating::Good, None, T0).unwrap();
 
         let card2 = inner.next_card(&deck("a"), T0).unwrap().unwrap();
         assert_eq!(card2.front, "2");
-        inner.answer(&card2.id, Rating::Again, T0).unwrap();
+        inner.answer(&card2.id, Rating::Again, None, T0).unwrap();
 
         // The failed card waits to come back, then is due.
         let decks = inner.decks(T0 + 60).unwrap();
@@ -1948,7 +2008,7 @@ mod tests {
         let today = inner.today(&StudyScope::All, T0).unwrap();
         assert_eq!((today.new_studied, today.new_available), (2, 2));
         assert!(matches!(
-            inner.answer("nope", Rating::Good, T0),
+            inner.answer("nope", Rating::Good, None, T0),
             Err(AmgiError::UnknownCard { .. })
         ));
 
@@ -1987,7 +2047,7 @@ mod tests {
 
         // Due this evening: due from the start of the day.
         assert_eq!((due(&inner, today), next(&inner, today)), (1, Some(ids[0].clone())));
-        inner.answer(&ids[0], Rating::Good, today).unwrap();
+        inner.answer(&ids[0], Rating::Good, None, today).unwrap();
         // Due five minutes into tomorrow: not shown early, though nothing else is left.
         let late = today + DAY_SECS - 10 * 60;
         assert_eq!((due(&inner, late), next(&inner, late)), (0, None));
@@ -1995,9 +2055,9 @@ mod tests {
 
         // A failed card is shown early when nothing else is left, but not past the
         // day's end.
-        inner.answer(&ids[1], Rating::Again, today + 2 * hour).unwrap();
+        inner.answer(&ids[1], Rating::Again, None, today + 2 * hour).unwrap();
         assert_eq!(next(&inner, today + 2 * hour + 60), Some(ids[1].clone()));
-        inner.answer(&ids[1], Rating::Again, late).unwrap();
+        inner.answer(&ids[1], Rating::Again, None, late).unwrap();
         assert_eq!(next(&inner, late + 60), None);
         assert_eq!(next(&inner, late + scheduler::AGAIN_DELAY_SECS), Some(ids[1].clone()));
 
@@ -2037,9 +2097,9 @@ mod tests {
         let mut inner = c.lock();
         let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
         // Card 6 is studied a day before the others, so it falls due a day earlier.
-        inner.answer(&ids[5], Rating::Good, T0 - DAY_SECS).unwrap();
+        inner.answer(&ids[5], Rating::Good, None, T0 - DAY_SECS).unwrap();
         for id in &ids[..5] {
-            inner.answer(id, Rating::Good, T0).unwrap();
+            inner.answer(id, Rating::Good, None, T0).unwrap();
         }
         let later = T0 + 60 * DAY_SECS;
         let next = |inner: &Inner, now| inner.next_card(&StudyScope::All, now).unwrap().unwrap().id;
@@ -2047,7 +2107,7 @@ mod tests {
         // The most overdue day first, then a fixed shuffle within the day, the same
         // each time it is asked.
         assert_eq!(next(&inner, later), ids[5]);
-        inner.answer(&ids[5], Rating::Good, later).unwrap();
+        inner.answer(&ids[5], Rating::Good, None, later).unwrap();
         let key = |id: &String| parser::stable_hash(&[id, &T0.to_string()]);
         let mut expected = ids[..5].to_vec();
         expected.sort_by_key(key);
@@ -2055,7 +2115,7 @@ mod tests {
         assert_eq!(next(&inner, later), expected[0]);
 
         // A failed card comes back after its delay, ahead of the reviews still due.
-        inner.answer(&expected[0], Rating::Again, later).unwrap();
+        inner.answer(&expected[0], Rating::Again, None, later).unwrap();
         assert_eq!(next(&inner, later), expected[1]);
         assert_eq!(next(&inner, later + scheduler::AGAIN_DELAY_SECS), expected[0]);
 
@@ -2084,7 +2144,7 @@ mod tests {
         let c = CardCollection::open(dir.to_string_lossy().into_owned()).unwrap();
         let db = dir.join(DB_FILE);
         let id = c.cards(StudyScope::All)[0].id.clone();
-        c.answer(id.clone(), Rating::Good).unwrap();
+        c.answer(id.clone(), Rating::Good, None).unwrap();
         let saved = dir.join("saved.sqlite");
         fs::copy(&db, &saved).unwrap();
         let reps = |c: &CardCollection| c.cards(StudyScope::All)[0].reps;
@@ -2095,11 +2155,11 @@ mod tests {
         fs::remove_file(&db).unwrap();
         assert_eq!(reps(&c), 0);
         assert!(c.warnings()[0].message.contains("deleted"));
-        c.answer(id.clone(), Rating::Good).unwrap();
+        c.answer(id.clone(), Rating::Good, None).unwrap();
         assert_eq!(Store::open(&db).unwrap().reviews(&id).unwrap().len(), 1);
 
         // Replaced, as by a sync or restore: its history is used.
-        c.answer(id.clone(), Rating::Good).unwrap();
+        c.answer(id.clone(), Rating::Good, None).unwrap();
         assert_eq!(reps(&c), 2);
         fs::rename(&saved, &db).unwrap();
         assert_eq!(reps(&c), 1);
@@ -2126,7 +2186,7 @@ mod tests {
         let (dir, c) = collection(&[("a.md", "Q: 1\nA: one\n#x\n\nQ: 2\nA: two\n"), ("b.md", "Q: 3\nA: three\n")]);
         let mut inner = c.lock();
         let first = inner.next_card(&deck("a"), T0).unwrap().unwrap();
-        inner.answer(&first.id, Rating::Again, T0).unwrap();
+        inner.answer(&first.id, Rating::Again, None, T0).unwrap();
 
         let cards = inner.browse(&deck("a"));
         let fronts: Vec<_> = cards.iter().map(|c| c.front.as_str()).collect();
@@ -2149,8 +2209,8 @@ mod tests {
         assert_eq!((new.front.as_str(), new.tags.as_slice(), new.due), ("1", ["x".to_string()].as_slice(), None));
         assert_eq!((new.stability, new.retrievability, new.reviews.len()), (None, None, 0));
 
-        inner.answer(&id, Rating::Good, T0).unwrap();
-        inner.answer(&id, Rating::Again, T0 + 3 * DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Good, None, T0).unwrap();
+        inner.answer(&id, Rating::Again, None, T0 + 3 * DAY_SECS).unwrap();
         let info = inner.card_info(&id, T0 + 3 * DAY_SECS).unwrap().unwrap();
         assert_eq!((info.reps, info.lapses), (2, 1));
         assert_eq!(info.reviews.iter().map(|r| r.rating).collect::<Vec<_>>(), [Rating::Good, Rating::Again]);
@@ -2161,7 +2221,7 @@ mod tests {
         assert!(later.retrievability.unwrap() < 1.0);
 
         // Review stages: a lapse seen again the same day is relearned.
-        inner.answer(&id, Rating::Good, T0 + 3 * DAY_SECS + 600).unwrap();
+        inner.answer(&id, Rating::Good, None, T0 + 3 * DAY_SECS + 600).unwrap();
         let states: Vec<_> = inner.store.reviews(&id).unwrap().iter().map(|r| r.state).collect();
         use ReviewState::*;
         assert_eq!(states, [Some(New), Some(Review), Some(Relearning)]);
@@ -2228,9 +2288,9 @@ mod tests {
         let mut inner = c.lock();
         let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
         // Study on three consecutive days, ending yesterday.
-        inner.answer(&ids[0], Rating::Good, T0 - 2 * DAY_SECS).unwrap();
-        inner.answer(&ids[1], Rating::Easy, T0 - DAY_SECS).unwrap();
-        inner.answer(&ids[0], Rating::Again, T0 - DAY_SECS + 60).unwrap();
+        inner.answer(&ids[0], Rating::Good, None, T0 - 2 * DAY_SECS).unwrap();
+        inner.answer(&ids[1], Rating::Easy, None, T0 - DAY_SECS).unwrap();
+        inner.answer(&ids[0], Rating::Again, None, T0 - DAY_SECS + 60).unwrap();
 
         let d = inner.dashboard(&StudyScope::All, 5, T0).unwrap();
         assert_eq!(d.activity, [0, 0, 1, 2, 0]);
@@ -2246,11 +2306,55 @@ mod tests {
         assert_eq!(d.retention.today, Retention::default());
         assert_eq!((d.retention.yesterday, d.retention.week, d.retention.year), (failed, failed, failed));
 
-        inner.answer(&ids[2], Rating::Good, T0).unwrap();
+        inner.answer(&ids[2], Rating::Good, None, T0).unwrap();
         let d = inner.dashboard(&StudyScope::All, 5, T0).unwrap();
         assert_eq!((d.activity[4], d.streak), (1, 3));
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn time_spent_studying() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n\nQ: 3\nA: 3\n\nQ: 4\nA: 4\n")]);
+        let mut inner = c.lock();
+        let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
+        // Yesterday a new card took 15 s over two reviews.
+        inner.answer(&ids[0], Rating::Again, Some(10_000), T0 - DAY_SECS).unwrap();
+        inner.answer(&ids[0], Rating::Good, Some(5_000), T0 - DAY_SECS + 60).unwrap();
+        // Today a new card left on screen counts a minute, a seen one 8 s, and one
+        // not timed nothing.
+        inner.answer(&ids[1], Rating::Good, Some(120_000), T0).unwrap();
+        inner.answer(&ids[0], Rating::Good, Some(8_000), T0 + 120).unwrap();
+        inner.answer(&ids[2], Rating::Good, None, T0 + 180).unwrap();
+
+        let today = inner.today(&StudyScope::All, T0 + 200).unwrap();
+        assert_eq!((today.reviewed, today.study_secs), (3, 68));
+        // New cards at 37.5 s, the average of 15 s and 60 s; others at 8 s, or one
+        // review's 20.75 s while learning.
+        let left = f64::from(today.new_available) * 37.5
+            + f64::from(today.due_available) * 8.0
+            + f64::from(today.learning) * 20.75;
+        assert_eq!(today.new_available, 1);
+        assert_eq!(today.secs_left, Some(left.round() as u32));
+
+        let d = inner.dashboard(&StudyScope::All, 3, T0 + 200).unwrap();
+        assert_eq!(d.activity, [0, 2, 3]);
+        assert_eq!(d.activity_secs, [0, 15, 68]);
+        assert_eq!((d.secs_per_review, d.secs_per_due_card), (Some(20.75), Some(8.0)));
+
+        let info = inner.card_info(&ids[1], T0 + 200).unwrap().unwrap();
+        assert_eq!(info.reviews[0].taken_ms, Some(MAX_ANSWER_MS));
+        drop(inner);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn time_left_falls_back_to_other_averages() {
+        let only_seen = CardTime { seen_ms: Some(10_000.0), ..CardTime::default() };
+        assert_eq!(time_left(only_seen, 2, 3, 1), Some(60));
+        assert_eq!(time_left(CardTime::default(), 2, 3, 1), None);
+        let all = CardTime { new_ms: Some(30_000.0), seen_ms: Some(6_000.0), review_ms: Some(4_000.0) };
+        assert_eq!(time_left(all, 1, 5, 2), Some(68));
     }
 
     #[test]
@@ -2259,15 +2363,15 @@ mod tests {
         let mut inner = c.lock();
         let id = inner.cards[0].parsed.id.clone();
         // Young until a review schedules the card 21 days or more ahead.
-        inner.answer(&id, Rating::Easy, T0 - 300 * DAY_SECS).unwrap();
-        inner.answer(&id, Rating::Easy, T0 - 200 * DAY_SECS).unwrap();
-        inner.answer(&id, Rating::Easy, T0 - 20 * DAY_SECS).unwrap();
-        inner.answer(&id, Rating::Again, T0 - 3 * DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Easy, None, T0 - 300 * DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Easy, None, T0 - 200 * DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Easy, None, T0 - 20 * DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Again, None, T0 - 3 * DAY_SECS).unwrap();
         // Back after minutes, then days later: neither counts, as the Again scheduled
         // it minutes ahead.
-        inner.answer(&id, Rating::Again, T0 - 3 * DAY_SECS + 600).unwrap();
-        inner.answer(&id, Rating::Good, T0 - DAY_SECS).unwrap();
-        inner.answer(&id, Rating::Good, T0).unwrap();
+        inner.answer(&id, Rating::Again, None, T0 - 3 * DAY_SECS + 600).unwrap();
+        inner.answer(&id, Rating::Good, None, T0 - DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Good, None, T0).unwrap();
 
         let r = inner.dashboard(&StudyScope::All, 1, T0).unwrap().retention;
         let retention = |young_passed, young_failed, mature_passed, mature_failed| Retention {
@@ -2295,9 +2399,9 @@ mod tests {
         let mut inner = c.lock();
         let id = |deck: &str| inner.cards.iter().find(|c| c.deck == deck).unwrap().parsed.id.clone();
         let (sub, b) = (id("a/sub"), id("b"));
-        inner.answer(&sub, Rating::Good, T0 - DAY_SECS).unwrap();
-        inner.answer(&b, Rating::Good, T0).unwrap();
-        inner.answer(&b, Rating::Good, T0 + 60).unwrap();
+        inner.answer(&sub, Rating::Good, None, T0 - DAY_SECS).unwrap();
+        inner.answer(&b, Rating::Good, None, T0).unwrap();
+        inner.answer(&b, Rating::Good, None, T0 + 60).unwrap();
 
         // A deck takes in its subdecks, and only their reviews.
         let a = StudyScope::Deck { name: "a".into() };
@@ -2337,7 +2441,7 @@ mod tests {
         c.set_new_cards_per_day(1).unwrap();
         let mut inner = c.lock();
         let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
-        inner.answer(&card.id, Rating::Easy, T0).unwrap();
+        inner.answer(&card.id, Rating::Easy, None, T0).unwrap();
         assert!(inner.next_card(&StudyScope::All, T0).unwrap().is_none());
         assert_eq!(inner.decks(T0).unwrap()[0].new, 0);
         // Tomorrow the limit resets.
@@ -2365,7 +2469,7 @@ mod tests {
         let mut inner = c.lock();
         for _ in 0..3 {
             let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
-            inner.answer(&card.id, Rating::Good, T0).unwrap();
+            inner.answer(&card.id, Rating::Good, None, T0).unwrap();
         }
         drop(inner);
         c.set_reviews_per_day(Some(1)).unwrap();
@@ -2378,15 +2482,15 @@ mod tests {
         // Forgetting the one review allowed brings it back, but no other review comes.
         let card = inner.next_card(&StudyScope::All, later).unwrap().unwrap();
         assert_eq!(card.stage, StudyStage::Due);
-        inner.answer(&card.id, Rating::Again, later).unwrap();
+        inner.answer(&card.id, Rating::Again, None, later).unwrap();
         let back = later + 600;
         assert_eq!((inner.decks(back).unwrap()[0].due, inner.decks(back).unwrap()[0].learning), (0, 1));
         assert_eq!(inner.next_card(&StudyScope::All, back).unwrap().unwrap().id, card.id);
-        inner.answer(&card.id, Rating::Good, back).unwrap();
+        inner.answer(&card.id, Rating::Good, None, back).unwrap();
         // New cards have their own limit.
         let new = inner.next_card(&StudyScope::All, back).unwrap().unwrap();
         assert_eq!(new.stage, StudyStage::New);
-        inner.answer(&new.id, Rating::Easy, back).unwrap();
+        inner.answer(&new.id, Rating::Easy, None, back).unwrap();
         drop(inner);
         c.set_new_cards_per_day(1).unwrap();
         let inner = c.lock();
@@ -2422,11 +2526,11 @@ mod tests {
         c.set_leech_threshold(2).unwrap();
         let mut inner = c.lock();
         // Learning a card and forgetting it once doesn't make a leech.
-        assert_eq!(inner.answer(&id, Rating::Good, T0).unwrap(), None);
-        assert_eq!(inner.answer(&id, Rating::Again, T0 + DAY_SECS).unwrap(), None);
+        assert_eq!(inner.answer(&id, Rating::Good, None, T0).unwrap(), None);
+        assert_eq!(inner.answer(&id, Rating::Again, None, T0 + DAY_SECS).unwrap(), None);
         // Passing it isn't a lapse, even past the threshold.
-        assert_eq!(inner.answer(&id, Rating::Good, T0 + 2 * DAY_SECS).unwrap(), None);
-        let leech = inner.answer(&id, Rating::Again, T0 + 3 * DAY_SECS).unwrap();
+        assert_eq!(inner.answer(&id, Rating::Good, None, T0 + 2 * DAY_SECS).unwrap(), None);
+        let leech = inner.answer(&id, Rating::Again, None, T0 + 3 * DAY_SECS).unwrap();
         assert_eq!(leech, Some(Leech { lapses: 2, suspended: false }));
         assert!(inner.browse(&StudyScope::All)[0].leech);
         drop(inner);
@@ -2434,7 +2538,7 @@ mod tests {
         // Suspending leeches tags the card in its file, and undoing the answer untags it.
         c.set_suspends_leeches(true).unwrap();
         let mut inner = c.lock();
-        let leech = inner.answer(&id, Rating::Again, T0 + 4 * DAY_SECS).unwrap();
+        let leech = inner.answer(&id, Rating::Again, None, T0 + 4 * DAY_SECS).unwrap();
         assert_eq!(leech, Some(Leech { lapses: 3, suspended: true }));
         let file = dir.join(CARDS_DIR).join("a.md");
         assert!(fs::read_to_string(&file).unwrap().contains("#suspended"));
@@ -2467,7 +2571,7 @@ mod tests {
         assert_eq!(inner.today(&StudyScope::All, T0).unwrap().new_available, 1);
         let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
         assert_eq!(card.front, "kept");
-        inner.answer(&card.id, Rating::Good, T0).unwrap();
+        inner.answer(&card.id, Rating::Good, None, T0).unwrap();
         assert!(inner.next_card(&StudyScope::All, T0).unwrap().is_none());
         let browsed = inner.browse(&StudyScope::All);
         assert_eq!(browsed.iter().map(|c| c.suspended).collect::<Vec<_>>(), [false, true, true]);
@@ -2507,10 +2611,10 @@ mod tests {
         let old = parser::parse(card).cards[0].id.clone();
         assert_ne!(id, old);
         // Reviewed by a version that hashed links as written.
-        inner.answer(&id, Rating::Good, T0).unwrap();
+        inner.answer(&id, Rating::Good, None, T0).unwrap();
         inner.store.move_history(&[(id.clone(), old.clone())]).unwrap();
         // And since then under the new id, before the old history moved over.
-        inner.answer(&id, Rating::Good, T0 + DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Good, None, T0 + DAY_SECS).unwrap();
         inner.states = inner.store.states().unwrap();
 
         // Loading merges both, keeping the latest state.
@@ -2545,6 +2649,7 @@ mod tests {
             rating: Rating::Good,
             state: Some(ReviewState::Learning),
             interval_secs: Some(interval_days * DAY_SECS),
+            taken_ms: None,
         };
         let import = || Import {
             decks: vec![("Default".into(), studied.into()), ("Lang/Verbs".into(), "Q: fresh\nA: no\n".into())],
@@ -2727,6 +2832,7 @@ mod tests {
             rating,
             state,
             interval_secs: Some(interval_secs),
+            taken_ms: None,
         };
         let reviews = |entries: Vec<LogEntry>| -> Vec<LoggedReview> {
             entries.into_iter().filter_map(|e| if let LogEntry::Review(r) = e { Some(r) } else { None }).collect()
@@ -2767,9 +2873,12 @@ mod tests {
         let (entries, state) = inner.replay(&[log[1], unknown]).unwrap().unwrap();
         assert_eq!(reviews(entries).iter().map(|r| r.state).collect::<Vec<_>>(), [Some(New), Some(Review)]);
         assert_eq!((state.reps, state.due), (2, T0 + 8 * DAY_SECS));
-        let unscheduled = HistoryEntry::Review { time: T0, rating: Good, state: None, interval_secs: None };
+        let unscheduled = HistoryEntry::Review { time: T0, rating: Good, state: None, interval_secs: None, taken_ms: Some(90_000) };
         let (entries, state) = inner.replay(&[unscheduled]).unwrap().unwrap();
-        assert_eq!(state.due, T0 + reviews(entries)[0].interval_secs);
+        let replayed = reviews(entries)[0];
+        assert_eq!(state.due, T0 + replayed.interval_secs);
+        // Imported times are capped like the app's own.
+        assert_eq!(replayed.taken_ms, Some(MAX_ANSWER_MS));
 
         // Rescheduling moves the card; a reset makes it new again and is logged.
         let moved = HistoryEntry::Reschedule { time: T0 + DAY_SECS, interval_secs: 10 * DAY_SECS };

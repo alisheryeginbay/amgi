@@ -71,6 +71,10 @@ CREATE TABLE setting (
     key   TEXT PRIMARY KEY,
     value NOT NULL
 );
+"#, r#"
+-- Milliseconds spent on the card before rating it; NULL when not known, as for
+-- reviews logged before this column.
+ALTER TABLE review_log ADD COLUMN taken_ms INTEGER;
 "#];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -103,6 +107,8 @@ pub struct LoggedReview {
     pub was_new: bool,
     /// `None` for reviews logged before amgi recorded it.
     pub state: Option<ReviewState>,
+    /// Milliseconds spent on the card before rating it; `None` when not known.
+    pub taken_ms: Option<u32>,
 }
 
 /// An entry to write to the review log.
@@ -111,6 +117,17 @@ pub enum LogEntry {
     Review(LoggedReview),
     /// The card was reset to new at this time (Unix seconds).
     Reset(i64),
+}
+
+/// Average milliseconds spent, from `Store::time_per_card`. `None` without timed reviews.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CardTime {
+    /// On a new card the day it was first studied.
+    pub new_ms: Option<f64>,
+    /// On a card studied before, the day it came back.
+    pub seen_ms: Option<f64>,
+    /// On one review.
+    pub review_ms: Option<f64>,
 }
 
 pub struct Store {
@@ -224,7 +241,7 @@ impl Store {
     /// A card's review log, oldest first. Rows with an unknown rating are skipped.
     pub fn reviews(&self, card_id: &str) -> rusqlite::Result<Vec<LoggedReview>> {
         let mut stmt = self.conn.prepare(
-            "SELECT reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new, review_state
+            "SELECT reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new, review_state, taken_ms
              FROM review_log WHERE card_id = ?1 ORDER BY reviewed_at, id",
         )?;
         let rows = stmt.query_map([card_id], |r| {
@@ -240,6 +257,7 @@ impl Store {
                 interval_secs: r.get(5)?,
                 was_new: r.get(6)?,
                 state: r.get::<_, Option<i64>>(7)?.and_then(ReviewState::from_number),
+                taken_ms: r.get(8)?,
             }))
         })?;
         rows.filter_map(Result::transpose).collect()
@@ -270,6 +288,7 @@ impl Store {
         rating: Rating,
         elapsed_days: f64,
         review_state: ReviewState,
+        taken_ms: Option<u32>,
         prev: Option<CardState>,
         outcome: Outcome,
     ) -> rusqlite::Result<(CardState, i64)> {
@@ -294,6 +313,7 @@ impl Store {
                 interval_secs: outcome.interval_secs,
                 was_new: prev.is_none(),
                 state: Some(review_state),
+                taken_ms,
             },
         )?;
         let review_id = tx.last_insert_rowid();
@@ -385,15 +405,64 @@ impl Store {
         )
     }
 
-    /// Review counts per day at or after `since`, where day `n` starts at
-    /// `n * 86400 - shift` seconds. Days without reviews are absent.
-    pub fn reviews_per_day(&self, since: i64, shift: i64, cards: Option<&[String]>) -> rusqlite::Result<Vec<(i64, u32)>> {
+    /// Reviews per day at or after `since`, where day `n` starts at `n * 86400 - shift`
+    /// seconds: `(day, count, milliseconds spent)`, counting only the reviews timed.
+    /// Days without reviews are absent.
+    pub fn reviews_per_day(
+        &self,
+        since: i64,
+        shift: i64,
+        cards: Option<&[String]>,
+    ) -> rusqlite::Result<Vec<(i64, u32, i64)>> {
         let (all, ids) = card_list(cards);
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT (reviewed_at + :shift) / 86400 AS day, COUNT(*) FROM review_log
+            "SELECT (reviewed_at + :shift) / 86400 AS day, COUNT(*), COALESCE(SUM(taken_ms), 0) FROM review_log
              WHERE rating > 0 AND reviewed_at >= :since AND {IN_CARDS} GROUP BY day ORDER BY day"
         ))?;
-        stmt.query_map(named_params! { ":since": since, ":shift": shift, ":all": all, ":cards": ids }, |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
+        stmt.query_map(named_params! { ":since": since, ":shift": shift, ":all": all, ":cards": ids }, |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?
+        .collect()
+    }
+
+    /// Milliseconds spent on reviews at or after `since`, counting only the reviews timed.
+    pub fn time_since(&self, since: i64, cards: Option<&[String]>) -> rusqlite::Result<i64> {
+        let (all, ids) = card_list(cards);
+        self.conn.query_row(
+            &format!(
+                "SELECT COALESCE(SUM(taken_ms), 0) FROM review_log
+                 WHERE rating > 0 AND reviewed_at >= :since AND {IN_CARDS}"
+            ),
+            named_params! { ":since": since, ":all": all, ":cards": ids },
+            |r| r.get(0),
+        )
+    }
+
+    /// Average time spent on a card on a day it was studied, at or after `since`, with
+    /// days as in `reviews_per_day`: all of that day's reviews of it, such as again
+    /// after forgetting it. Only timed reviews count.
+    pub fn time_per_card(&self, since: i64, shift: i64, cards: Option<&[String]>) -> rusqlite::Result<CardTime> {
+        let (all, ids) = card_list(cards);
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT new, AVG(ms), SUM(ms), SUM(reviews) FROM
+               (SELECT MAX(was_new) AS new, SUM(taken_ms) AS ms, COUNT(*) AS reviews FROM review_log
+                WHERE rating > 0 AND taken_ms IS NOT NULL AND reviewed_at >= :since AND {IN_CARDS}
+                GROUP BY card_id, (reviewed_at + :shift) / 86400)
+             GROUP BY new"
+        ))?;
+        let mut time = CardTime::default();
+        let (mut ms, mut reviews) = (0.0, 0.0);
+        let rows = stmt.query_map(named_params! { ":since": since, ":shift": shift, ":all": all, ":cards": ids }, |r| {
+            Ok((r.get::<_, bool>(0)?, r.get::<_, f64>(1)?, r.get::<_, f64>(2)?, r.get::<_, f64>(3)?))
+        })?;
+        for row in rows {
+            let (new, average, total, count) = row?;
+            *(if new { &mut time.new_ms } else { &mut time.seen_ms }) = Some(average);
+            ms += total;
+            reviews += count;
+        }
+        time.review_ms = (reviews > 0.0).then(|| ms / reviews);
+        Ok(time)
     }
 
     /// Reviews of cards the review before scheduled a day or more ahead, at or after
@@ -514,8 +583,8 @@ impl Store {
 fn insert_review(tx: &Transaction, card_id: &str, r: &LoggedReview) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT INTO review_log
-           (card_id, reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new, review_state)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+           (card_id, reviewed_at, rating, elapsed_days, stability, difficulty, interval_secs, was_new, review_state, taken_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             card_id,
             r.reviewed_at,
@@ -526,6 +595,7 @@ fn insert_review(tx: &Transaction, card_id: &str, r: &LoggedReview) -> rusqlite:
             r.interval_secs,
             r.was_new,
             r.state.map(|s| s as i64),
+            r.taken_ms,
         ],
     )?;
     Ok(())
@@ -604,12 +674,12 @@ mod tests {
             interval_secs: 86_400,
         };
         let (s1, _) = store
-            .record_review("abc", 1000, Rating::Good, 0.0, ReviewState::New, None, outcome)
+            .record_review("abc", 1000, Rating::Good, 0.0, ReviewState::New, Some(4000), None, outcome)
             .unwrap();
         assert_eq!((s1.reps, s1.lapses, s1.due), (1, 0, 87_400));
 
         let (s2, _) = store
-            .record_review("abc", 90_000, Rating::Again, 1.0, ReviewState::Review, Some(s1), outcome)
+            .record_review("abc", 90_000, Rating::Again, 1.0, ReviewState::Review, Some(2500), Some(s1), outcome)
             .unwrap();
         assert_eq!((s2.reps, s2.lapses), (2, 1));
         assert_eq!(store.state("abc").unwrap(), Some(s2));
@@ -627,14 +697,41 @@ mod tests {
     }
 
     #[test]
+    fn review_time() {
+        let mut store = Store::open_in_memory().unwrap();
+        let outcome = Outcome { memory: Memory { stability: 2.0, difficulty: 5.0 }, interval_secs: 600 };
+        // A new card, failed and passed on day 0; a seen one on day 1; one not timed.
+        let (a, _) = store
+            .record_review("a", 1000, Rating::Again, 0.0, ReviewState::New, Some(4000), None, outcome)
+            .unwrap();
+        store
+            .record_review("a", 1600, Rating::Good, 0.0, ReviewState::Learning, Some(2000), Some(a), outcome)
+            .unwrap();
+        store
+            .record_review("b", 90_000, Rating::Good, 1.0, ReviewState::Review, Some(3000), Some(a), outcome)
+            .unwrap();
+        store
+            .record_review("c", 90_100, Rating::Good, 0.0, ReviewState::New, None, None, outcome)
+            .unwrap();
+
+        assert_eq!(store.reviews("a").unwrap().iter().map(|r| r.taken_ms).collect::<Vec<_>>(), [Some(4000), Some(2000)]);
+        assert_eq!(store.reviews_per_day(0, 0, None).unwrap(), [(0, 2, 6000), (1, 2, 3000)]);
+        assert_eq!(store.time_since(86_400, None).unwrap(), 3000);
+        assert_eq!(store.time_since(0, Some(&["a".into()])).unwrap(), 6000);
+        let time = store.time_per_card(0, 0, None).unwrap();
+        assert_eq!(time, CardTime { new_ms: Some(6000.0), seen_ms: Some(3000.0), review_ms: Some(3000.0) });
+        assert_eq!(store.time_per_card(86_400, 0, Some(&["c".into()])).unwrap(), CardTime::default());
+    }
+
+    #[test]
     fn undo_reviews() {
         let mut store = Store::open_in_memory().unwrap();
         let outcome = |interval_secs| Outcome { memory: Memory { stability: 2.0, difficulty: 5.0 }, interval_secs };
         let (s1, r1) = store
-            .record_review("abc", 1000, Rating::Good, 0.0, ReviewState::New, None, outcome(86_400))
+            .record_review("abc", 1000, Rating::Good, 0.0, ReviewState::New, None, None, outcome(86_400))
             .unwrap();
         let (_, r2) = store
-            .record_review("abc", 90_000, Rating::Again, 1.0, ReviewState::Review, Some(s1), outcome(600))
+            .record_review("abc", 90_000, Rating::Again, 1.0, ReviewState::Review, None, Some(s1), outcome(600))
             .unwrap();
 
         store.undo_review("abc", r2, Some(s1)).unwrap();
@@ -658,6 +755,7 @@ mod tests {
             interval_secs: 86_400,
             was_new: true,
             state: Some(ReviewState::New),
+            taken_ms: Some(1500),
         };
         let relearned = LoggedReview { reviewed_at: 3000, ..review };
         let state = CardState { memory: review.memory, due: 89_400, last_review: 3000, reps: 1, lapses: 0, interval_secs: 86_400 };
@@ -669,7 +767,7 @@ mod tests {
         assert_eq!(store.reviews("abc").unwrap(), [review, relearned]);
         assert_eq!(store.reviews_since(0, None).unwrap(), 2);
         assert_eq!(store.new_cards_since(0, None).unwrap(), 2);
-        assert_eq!(store.reviews_per_day(0, 0, None).unwrap(), [(0, 2)]);
+        assert_eq!(store.reviews_per_day(0, 0, None).unwrap(), [(0, 2, 3000)]);
         assert_eq!(store.last_review_state("abc").unwrap(), Some(ReviewState::New));
     }
 

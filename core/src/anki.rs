@@ -148,6 +148,9 @@ pub struct Revlog {
     /// Ease in permille, or difficulty under FSRS. 0 on a filtered-deck review with
     /// rescheduling off, which left the card's schedule alone.
     pub factor: i64,
+    /// Milliseconds spent answering, capped by the deck's "Maximum answer seconds";
+    /// 0 for manual changes.
+    pub taken_ms: u32,
 }
 
 impl Revlog {
@@ -179,6 +182,7 @@ impl Revlog {
                     _ => None,
                 },
                 interval_secs: (self.interval != 0).then(|| self.interval_secs()),
+                taken_ms: (self.taken_ms > 0).then_some(self.taken_ms),
             }),
             // Manual entries: "Forget" resets the card, "Set Due Date" and FSRS
             // rescheduling move the due date.
@@ -286,7 +290,7 @@ impl Package {
             })?
             .collect::<rusqlite::Result<_>>()?;
         let mut revlog: HashMap<i64, Vec<Revlog>> = HashMap::new();
-        let mut stmt = conn.prepare("SELECT cid, id, ease, type, ivl, factor FROM revlog ORDER BY id")?;
+        let mut stmt = conn.prepare("SELECT cid, id, ease, type, ivl, factor, time FROM revlog ORDER BY id")?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
             revlog.entry(r.get(0)?).or_default().push(Revlog {
@@ -295,6 +299,8 @@ impl Package {
                 kind: r.get(3)?,
                 interval: r.get(4)?,
                 factor: r.get(5)?,
+                // Negative or past `u32` only in a damaged collection.
+                taken_ms: u32::try_from(r.get::<_, i64>(6)?).unwrap_or(0),
             });
         }
         Ok(Package {
@@ -1169,7 +1175,7 @@ pub(crate) mod tests {
             "CREATE TABLE col (crt INTEGER, conf TEXT, decks TEXT, models TEXT);
              CREATE TABLE notes (id INTEGER, mid INTEGER, flds TEXT, tags TEXT);
              CREATE TABLE cards (id INTEGER, nid INTEGER, did INTEGER, odid INTEGER, ord INTEGER, type INTEGER, queue INTEGER, due INTEGER, odue INTEGER);
-             CREATE TABLE revlog (id INTEGER, cid INTEGER, ease INTEGER, type INTEGER, ivl INTEGER, factor INTEGER);",
+             CREATE TABLE revlog (id INTEGER, cid INTEGER, ease INTEGER, type INTEGER, ivl INTEGER, factor INTEGER, time INTEGER);",
         )
         .unwrap();
         // No time zones in `conf`: days count from `crt`, as in collections from before Anki 2.1.
@@ -1186,9 +1192,9 @@ pub(crate) mod tests {
                (1020, 102, 1, 0, 0, 0, 0, 9, 0),
                (1030, 103, 1, 0, 0, 2, -1, 4, 0);
              INSERT INTO revlog VALUES
-               (1700000000000, 1000, 3, 0, 1, 2500), (1700086400000, 1000, 3, 1, 3, 2500),
-               (1700000000000, 1010, 1, 0, -600, 2500),
-               (1700000000000, 1030, 3, 0, 1, 2500);",
+               (1700000000000, 1000, 3, 0, 1, 2500, 8000), (1700086400000, 1000, 3, 1, 3, 2500, 4200),
+               (1700000000000, 1010, 1, 0, -600, 2500, 12000),
+               (1700000000000, 1030, 3, 0, 1, 2500, 0);",
         )
         .unwrap();
         conn
@@ -1214,7 +1220,7 @@ pub(crate) mod tests {
             "CREATE TABLE col (crt INTEGER, conf TEXT, decks TEXT, models TEXT);
              CREATE TABLE notes (id INTEGER, mid INTEGER, flds TEXT, tags TEXT);
              CREATE TABLE cards (id INTEGER, nid INTEGER, did INTEGER, odid INTEGER, ord INTEGER, type INTEGER, queue INTEGER, due INTEGER, odue INTEGER);
-             CREATE TABLE revlog (id INTEGER, cid INTEGER, ease INTEGER, type INTEGER, ivl INTEGER, factor INTEGER);",
+             CREATE TABLE revlog (id INTEGER, cid INTEGER, ease INTEGER, type INTEGER, ivl INTEGER, factor INTEGER, time INTEGER);",
         )
         .unwrap();
         conn.execute("INSERT INTO col VALUES (1699920000, '{}', ?1, ?2)", [r#"{"20": {"name": "Spanish"}}"#, models]).unwrap();
@@ -1234,7 +1240,7 @@ pub(crate) mod tests {
              (2020, 202, 20, 0, 0, 0, 0, 3, 0),
              (2030, 203, 20, 0, 0, 0, 0, 4, 0),
              (2040, 204, 20, 0, 0, 0, -1, 7, 0), (2041, 204, 20, 0, 1, 0, 0, 8, 0)";
-        let revlog = "INSERT INTO revlog VALUES (1700000000000, 2001, 3, 0, 1, 2500);";
+        let revlog = "INSERT INTO revlog VALUES (1700000000000, 2001, 3, 0, 1, 2500, 5000);";
         let out = Package::from_db(&vocab_collection(notes, cards, revlog)).unwrap().convert();
         let paths: Vec<_> = out.decks.iter().map(|(p, _)| p.as_str()).collect();
         // One file for the deck, whatever note types its notes have.
@@ -1299,7 +1305,7 @@ pub(crate) mod tests {
         assert_eq!(out.histories.len(), 3);
         assert_eq!(out.histories[0].id, all[0].id);
         assert_eq!(out.histories[0].log.len(), 2);
-        assert_eq!(out.histories[0].log[1], Revlog { time: 1_700_086_400, ease: 3, kind: 1, interval: 3, factor: 2500 });
+        assert_eq!(out.histories[0].log[1], Revlog { time: 1_700_086_400, ease: 3, kind: 1, interval: 3, factor: 2500, taken_ms: 4200 });
         // Day 5 of the collection: the card was in a filtered deck, which keeps its
         // own due date in `odue`.
         assert_eq!(out.histories[0].due, Some(Due::Day(1_699_920_000 + 5 * 86_400)));
@@ -1310,7 +1316,7 @@ pub(crate) mod tests {
 
     #[test]
     fn history_ends_at_anki_due_date() {
-        let review = Revlog { time: 1_000, ease: 3, kind: 1, interval: 3, factor: 2500 };
+        let review = Revlog { time: 1_000, ease: 3, kind: 1, interval: 3, factor: 2500, taken_ms: 3000 };
         let history = History { id: "a".into(), log: vec![review], due: Some(Due::At(1_000 + 10 * 86_400)) };
         let (_, entries) = history.entries();
         // Anki moved the card from 3 days out to 10 without logging it.
@@ -1322,7 +1328,7 @@ pub(crate) mod tests {
         // Reviewed 2026-10-12 at 16:55 and due on the Anki day that starts 2026-10-22
         // at 2 am (UTC+5): ten days later, at 16:55, so the card isn't due before the
         // 22nd starts in amgi.
-        let review = Revlog { time: 1_791_806_155, ease: 3, kind: 1, interval: 10, factor: 2500 };
+        let review = Revlog { time: 1_791_806_155, ease: 3, kind: 1, interval: 10, factor: 2500, taken_ms: 3000 };
         let history = History { id: "a".into(), log: vec![review], due: Some(Due::Day(1_792_616_400)) };
         let (_, entries) = history.entries();
         assert_eq!(entries[1], HistoryEntry::Reschedule { time: 1_791_806_155, interval_secs: 10 * DAY_SECS });
@@ -1342,8 +1348,10 @@ pub(crate) mod tests {
 
     #[test]
     fn revlog_becomes_history() {
-        let entry = |ease, kind, interval, factor| Revlog { time: 100, ease, kind, interval, factor };
-        let review = |rating, state, interval_secs| Some(HistoryEntry::Review { time: 100, rating, state, interval_secs });
+        let entry = |ease, kind, interval, factor| Revlog { time: 100, ease, kind, interval, factor, taken_ms: 0 };
+        let review = |rating, state, interval_secs| {
+            Some(HistoryEntry::Review { time: 100, rating, state, interval_secs, taken_ms: None })
+        };
         assert_eq!(entry(1, 0, -600, 2500).history(), review(Rating::Again, Some(ReviewState::Learning), Some(600)));
         assert_eq!(entry(3, 1, 4, 2500).history(), review(Rating::Good, Some(ReviewState::Review), Some(4 * 86_400)));
         assert_eq!(entry(4, 2, 0, 2500).history(), review(Rating::Easy, Some(ReviewState::Relearning), None));
@@ -1355,6 +1363,9 @@ pub(crate) mod tests {
         assert_eq!(entry(0, 4, 10, 0).history(), Some(HistoryEntry::Reschedule { time: 100, interval_secs: 10 * 86_400 }));
         assert_eq!(entry(0, 5, 3, 0).history(), Some(HistoryEntry::Reschedule { time: 100, interval_secs: 3 * 86_400 }));
         assert_eq!(entry(3, 4, 3, 0).history(), None);
+        // The time spent answering comes along; 0 means Anki didn't time it.
+        let timed = Revlog { taken_ms: 6500, ..entry(3, 1, 4, 2500) };
+        assert!(matches!(timed.history(), Some(HistoryEntry::Review { taken_ms: Some(6500), .. })));
     }
 
     #[test]

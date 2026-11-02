@@ -71,13 +71,17 @@ struct MenuBarMenu: View {
 
     private var summary: String {
         if model.totalLeft == 0 { return "All caught up" }
-        return parts(due: model.totalDue, learning: model.totalLearning, new: model.today.newAvailable)
+        return (parts(due: model.totalDue, learning: model.totalLearning, new: model.today.newAvailable)
+            + [model.timeLeft.map { "about \($0)" }].compactMap { $0 })
             .joined(separator: " · ")
     }
 
+    /// "42 reviews today · 18 min", without the time until a review is timed.
     private var reviewedToday: String {
         let reviewed = model.today.reviewed
-        return reviewed == 1 ? "1 review today" : "\(reviewed) reviews today"
+        let count = reviewed == 1 ? "1 review today" : "\(reviewed) reviews today"
+        let secs = model.today.studySecs
+        return secs > 0 ? "\(count) · \(formatStudyTime(seconds: secs))" : count
     }
 
     private func counts(due: UInt32, learning: UInt32, new: UInt32) -> String {

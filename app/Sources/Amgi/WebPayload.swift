@@ -105,8 +105,17 @@ struct DashboardPayload: Encodable, Equatable {
     let due: UInt32
     let newToday: UInt32
     let reviewedToday: UInt32
+    /// Seconds spent studying today, counting timed reviews.
+    let studySecsToday: UInt32
+    /// About how long the cards left today will take; `nil` without timed reviews to go by.
+    let secsLeft: UInt32?
     let streak: UInt32
     let activity: [UInt32]
+    /// Seconds spent on each day of `activity`.
+    let activitySecs: [UInt32]
+    /// Averages over the last 30 days; `nil` without timed reviews.
+    let secsPerReview: Double?
+    let secsPerDueCard: Double?
     let activityStart: Int64
     let forecast: [UInt32]
     let newCards: UInt32
@@ -120,8 +129,13 @@ struct DashboardPayload: Encodable, Equatable {
         self.due = due
         newToday = today.newAvailable
         reviewedToday = today.reviewed
+        studySecsToday = today.studySecs
+        secsLeft = today.secsLeft
         streak = d.streak
         activity = d.activity
+        activitySecs = d.activitySecs
+        secsPerReview = d.secsPerReview
+        secsPerDueCard = d.secsPerDueCard
         activityStart = d.activityStart
         forecast = d.forecast
         newCards = d.newCards
