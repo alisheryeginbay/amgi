@@ -5,7 +5,6 @@ import SwiftUI
 struct AmgiApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
     @State private var model = AppModel()
-    @State private var updater = Updater()
     @AppStorage(showMenuBarKey) private var showMenuBar = true
 
     var body: some Scene {
@@ -21,7 +20,6 @@ struct AmgiApp: App {
         // The welcome screen is a fixed size; the collection's window resizes freely.
         .windowResizability(.contentSize)
         .commands {
-            UpdateCommands(updater: updater)
             HelpCommands()
             // View ▸ Show/Hide Sidebar, with ⌃⌘S as in Finder and Mail.
             SidebarCommands()

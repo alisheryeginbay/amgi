@@ -9,8 +9,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alisheryeginbay/amgi/releases/latest"><b>Download for macOS</b></a>
-  ·
   <a href="https://docs.amgi.study">Docs</a>
   ·
   <a href="https://docs.amgi.study/anki-import">Import from Anki</a>
@@ -79,17 +77,12 @@ note-types/
 
 ## Install
 
-[Download the latest release](https://github.com/alisheryeginbay/amgi/releases/latest),
-open the `.dmg` and drag Amgi into Applications. Needs macOS 26 on Apple Silicon.
-Amgi checks for new versions itself and installs them in one click.
-
-## Build from source
-
-Amgi is a Rust core with a SwiftUI app and Svelte panes in a web view. Building needs
-macOS, Rust and [Bun](https://bun.sh).
+Amgi is early and changing quickly, so there are no downloads for now: build it from
+source. It's a Rust core with a SwiftUI app and Svelte panes in a web view, and needs
+macOS 26 on Apple Silicon, Xcode, Rust and [Bun](https://bun.sh).
 
 ```sh
-make                         # build what changed, then run the app
+make install                 # build Amgi.app and put it in /Applications
 cargo install --path cli     # the amgi command
 ```
 

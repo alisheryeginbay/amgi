@@ -19,9 +19,10 @@ make dev                     # same, with the panes served by Vite and reloaded 
 make build                   # build without running
 make test                    # core and web tests
 make bundle                  # build target/bundle/Amgi.app (release, signed ad-hoc)
+make install                 # same, then put it in /Applications
 ```
 
-Building needs Rust and [Bun](https://bun.sh); `make bundle` also needs Xcode, whose `actool`
+Building needs Rust and [Bun](https://bun.sh); `make bundle` and `make install` also need Xcode, whose `actool`
 compiles the app icon, `app/Amgi.icon` (open it in Icon Composer to change it). `make` runs `scripts/build-core.sh` and
 `scripts/build-web.sh` for you, only when `core/` or `web/` changed; `PROFILE=debug make`
 builds the core without optimizations. If you open `app/Package.swift` in Xcode, run
@@ -53,54 +54,16 @@ files in `media/`.
 
 The version is set once, under `[workspace.package]` in the root `Cargo.toml`; the
 crates, `amgi --version` and the app's bundle all read it. The app's build number is the
-commit count. Until 1.0, bump the minor version for new features and the patch version
-for fixes, then tag the release commit `vX.Y.Z`. A change to card ids loses review
-history, so call it out in the release.
+commit count.
 
-## Releases
+## Installing
 
-Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`: it builds Amgi.app, signs
-it with the Developer ID, notarizes it and attaches it to a draft release on GitHub as
-`Amgi-X.Y.Z.dmg` and `Amgi-X.Y.Z.zip`. Write the notes there, then publish it. The tag
-has to match the version in `Cargo.toml`.
-
-The release also carries `appcast.xml`, the feed that installed copies check through
-[Sparkle](https://sparkle-project.org) (Amgi ▸ Check for Updates…). It lists the zip,
-signed with an EdDSA key (`scripts/appcast.sh`). The app reads the feed from
-`https://amgi.study/appcast.xml`, which redirects to
-`https://github.com/alisheryeginbay/amgi/releases/latest/download/appcast.xml`, the copy on
-the latest published release, so a draft isn't offered until it's published. Copies from
-0.4.0 and earlier read the GitHub address directly, so keep attaching `appcast.xml` to
-releases even if the redirect later points elsewhere. Keep the private
-key safe: without it, installed copies can't be updated.
-
-The disk image is made by [dmgbuild](https://dmgbuild.readthedocs.io), run through
-[uv](https://docs.astral.sh/uv/); `scripts/dmg-settings.py` places the icons to match
-the drawn arrow in `media/dmg-background.tiff`. That background comes from the separate
-amgi-install repo as one TIFF with a 1x and a 2x image, a dpi for each and a color
-profile: replace it as a whole and don't convert, resize or strip it, or Finder loses
-the Retina image. `scripts/dmg.sh path/to/Amgi.app` builds an unsigned image to check
-the layout.
-
-The workflow needs these repository secrets:
-
-- `DEVELOPER_ID_P12`: the Developer ID Application certificate with its private key,
-  exported from Keychain Access as a .p12 and base64-encoded (`base64 -i cert.p12 | pbcopy`)
-- `DEVELOPER_ID_P12_PASSWORD`: the password chosen when exporting it
-- `NOTARY_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`: an App Store Connect API key
-  (Users and Access ▸ Integrations), the .p8 file's contents and its two ids
-- `SPARKLE_ED_PRIVATE_KEY`: the private key from Sparkle's `generate_keys`, exported
-  with `generate_keys -x key.txt`; its public half is `SUPublicEDKey` in
-  `scripts/bundle.sh`
-
-To release from this Mac instead:
-
-```sh
-AMGI_SIGN_IDENTITY="Developer ID Application" scripts/bundle.sh
-NOTARY_PROFILE=amgi scripts/notarize.sh   # after `xcrun notarytool store-credentials amgi`;
-                                          # writes the .zip and the .dmg
-scripts/appcast.sh                        # signs with the key in the login keychain
-```
+There are no releases for now, while things change quickly. `make install` builds
+Amgi.app in release mode and puts it in `/Applications`, quitting and reopening Amgi if
+it's open. It's signed ad-hoc, so macOS may ask again for access to the collection's
+folder after an install; `AMGI_SIGN_IDENTITY="name" make install` signs with a
+certificate from the keychain instead (a self-signed code-signing one will do), which
+keeps the app's identity between builds. The old releases on GitHub stay up.
 
 The Chinese, Japanese and Korean fonts aren't in the app: it downloads them from the
 `fonts-1` GitHub release when a collection first needs them (`FontPacks.swift`).

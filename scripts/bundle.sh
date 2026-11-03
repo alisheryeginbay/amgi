@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Build Amgi.app: the Rust core, the web panes and the app in release mode, put
-# together as a macOS app bundle and signed.
-#   scripts/bundle.sh            ad-hoc signature, for this Mac
-#   AMGI_SIGN_IDENTITY="Developer ID Application" scripts/bundle.sh
-#                                signed for distribution (notarize separately)
+# together as a macOS app bundle and signed for this Mac. `make install` copies it into
+# /Applications.
+#   scripts/bundle.sh                      ad-hoc signature
+#   AMGI_SIGN_IDENTITY="name" scripts/bundle.sh
+#                                          a certificate from the keychain, which keeps
+#                                          the app's identity, and so the folder access
+#                                          macOS granted it, from one build to the next
 # Writes target/bundle/Amgi.app.
 set -euo pipefail
 
@@ -50,12 +53,6 @@ cp -R "$bin/Amgi_Amgi.bundle" "$app/Contents/Resources/"
 # Drop debug symbols, which also name the object files they came from.
 strip -S -x "$app/Contents/MacOS/Amgi"
 
-# Sparkle, the updater. Its XPC services are only for sandboxed apps, which Amgi isn't.
-sparkle="$app/Contents/Frameworks/Sparkle.framework"
-mkdir -p "$app/Contents/Frameworks"
-ditto "$bin/Sparkle.framework" "$sparkle"
-rm -rf "$sparkle/XPCServices" "$sparkle/Versions/B/XPCServices"
-
 # The app icon, made in Icon Composer: layers macOS renders as Liquid Glass, in light,
 # dark, clear and tinted. actool (Xcode's, not the Command Line Tools') compiles it into
 # Assets.car, plus Amgi.icns for older systems. It needs absolute paths.
@@ -100,23 +97,11 @@ cat > "$app/Contents/Info.plist" <<EOF
     <string>public.app-category.education</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <key>SUFeedURL</key>
-    <string>https://amgi.study/appcast.xml</string>
-    <key>SUPublicEDKey</key>
-    <string>TShzf8QQ88x/3EE1dfKeQ2QFi59r2r7/zXfZK808aXY=</string>
 </dict>
 </plist>
 EOF
 
-# Ad-hoc (`-`) runs on this Mac. A Developer ID signature also needs the hardened
-# runtime and a secure timestamp to pass notarization.
-sign=(--force --sign "$identity")
-[[ "$identity" != "-" ]] && sign+=(--options runtime --timestamp)
-# Inside out: Sparkle's helpers, the framework, then the app.
-codesign "${sign[@]}" "$sparkle/Versions/B/Autoupdate"
-codesign "${sign[@]}" "$sparkle/Versions/B/Updater.app"
-codesign "${sign[@]}" "$sparkle"
-codesign "${sign[@]}" "$app"
+codesign --force --sign "$identity" "$app"
 codesign --verify --strict --deep "$app"
 
 # Check that no home folder path made it into the bundle.

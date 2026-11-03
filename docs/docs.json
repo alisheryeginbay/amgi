@@ -34,8 +34,8 @@
     ],
     "primary": {
       "type": "button",
-      "label": "Download",
-      "href": "https://github.com/alisheryeginbay/amgi/releases/latest"
+      "label": "Install",
+      "href": "/install"
     }
   },
   "footer": {

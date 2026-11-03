@@ -4,6 +4,7 @@
 #   make build     build everything without running
 #   make test      core and web tests
 #   make bundle    build target/bundle/Amgi.app
+#   make install   build Amgi.app and put it in /Applications
 # PROFILE=debug builds the Rust core without optimizations (faster to compile).
 
 PROFILE ?= release
@@ -11,7 +12,7 @@ WEB_OUT := app/Sources/Amgi/Web/index.html
 WEB_SRC := $(shell find web/src -type f) web/index.html web/vite.config.ts \
 	web/svelte.config.js web/tsconfig.json web/node_modules/.installed
 
-.PHONY: run dev build core web test bundle
+.PHONY: run dev build core web test bundle install
 
 run: build
 	swift run --package-path app
@@ -42,3 +43,6 @@ test:
 
 bundle:
 	scripts/bundle.sh
+
+install:
+	scripts/install.sh

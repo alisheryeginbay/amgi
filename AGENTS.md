@@ -18,8 +18,8 @@ Use `PROFILE=debug make build` for a faster core build while iterating.
 
 ## Rules
 
-- Don't run `make bundle` / `scripts/bundle.sh` or launch `Amgi.app`; the owner runs
-  the app themselves.
+- Don't run `make bundle` / `make install` (`scripts/bundle.sh`, `scripts/install.sh`)
+  or launch `Amgi.app`; the owner runs the app themselves.
 - Don't edit generated code: `app/Sources/AmgiCore/`, `app/Sources/amgi_coreFFI/include/`
   (UniFFI, from `scripts/build-core.sh`) and `app/Sources/Amgi/Web/` (from
   `scripts/build-web.sh`). Change `core/` or `web/` and rebuild.
