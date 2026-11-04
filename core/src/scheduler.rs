@@ -165,9 +165,140 @@ impl Scheduler {
     }
 }
 
+/// A card already studied, for [`Scheduler::simulate_reviews`], with days counted from
+/// today.
+#[derive(Debug, Clone, Copy)]
+pub struct PlannedCard {
+    pub memory: Memory,
+    /// Day of the last review: 0 or before.
+    pub last_day: i64,
+    /// Day it comes due: 0 for today or overdue.
+    pub due_day: i64,
+    pub lapses: u32,
+}
+
+/// How often each rating is given, for [`Scheduler::simulate_reviews`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RatingHabits {
+    /// On a card's first review, Again to Easy.
+    pub first: [f32; 4],
+    /// On a remembered review, Hard to Easy.
+    pub passed: [f32; 3],
+}
+
+impl Default for RatingHabits {
+    /// The FSRS simulator's defaults, taken from many people's reviews.
+    fn default() -> Self {
+        let config = fsrs::SimulatorConfig::default();
+        RatingHabits {
+            first: config.first_rating_prob,
+            passed: config.review_rating_prob,
+        }
+    }
+}
+
+/// Simulated runs averaged in [`Scheduler::simulate_reviews`].
+const SIMULATION_RUNS: u64 = 50;
+
+impl Scheduler {
+    /// Reviews expected on each of `days` days from today, of `cards` and of `new_cards`
+    /// first studied today, not counting those first views. It averages runs of the
+    /// FSRS simulator, which draws whether each review is remembered from the card's
+    /// retrievability and its rating from `habits`. A failed card is studied again the
+    /// same day, as with Again's short delay. There's no daily review limit; a card
+    /// stops coming back after `suspend_after` lapses, when that is set.
+    pub fn simulate_reviews(
+        &self,
+        cards: &[PlannedCard],
+        new_cards: u32,
+        days: usize,
+        habits: RatingHabits,
+        suspend_after: Option<u32>,
+    ) -> fsrs::Result<Vec<f64>> {
+        let deck_size = cards.len() + new_cards as usize;
+        if deck_size == 0 || days == 0 {
+            return Ok(vec![0.0; days]);
+        }
+        let config = fsrs::SimulatorConfig {
+            deck_size,
+            learn_span: days,
+            max_cost_perday: f32::INFINITY,
+            max_ivl: MAX_INTERVAL_DAYS,
+            first_rating_prob: habits.first,
+            review_rating_prob: habits.passed,
+            learn_limit: new_cards as usize,
+            suspend_after_lapses: suspend_after,
+            // One more look after Again, as the card comes back ten minutes later.
+            learning_step_count: 1,
+            relearning_step_count: 1,
+            ..fsrs::SimulatorConfig::default()
+        };
+        let existing: Vec<fsrs::Card> = cards
+            .iter()
+            .enumerate()
+            .map(|(i, c)| fsrs::Card {
+                id: i as i64 + 1,
+                difficulty: c.memory.difficulty as f32,
+                stability: c.memory.stability as f32,
+                last_date: c.last_day as f32,
+                due: c.due_day.max(0) as f32,
+                interval: (c.due_day - c.last_day).max(1) as f32,
+                lapses: c.lapses,
+                desired_retention: self.desired_retention,
+                ..fsrs::Card::default()
+            })
+            .collect();
+        let mut totals = vec![0usize; days];
+        for seed in 0..SIMULATION_RUNS {
+            let result = fsrs::simulate(
+                &config,
+                &fsrs::DEFAULT_PARAMETERS,
+                self.desired_retention,
+                Some(seed),
+                Some(existing.clone()),
+            )?;
+            for (total, n) in totals.iter_mut().zip(result.review_cnt_per_day) {
+                *total += n;
+            }
+        }
+        Ok(totals.into_iter().map(|n| n as f64 / SIMULATION_RUNS as f64).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simulated_reviews_of_new_cards() {
+        let s = Scheduler::default();
+        let habits = RatingHabits::default();
+        let reviews = s.simulate_reviews(&[], 100, 60, habits, None).unwrap();
+        // First views aren't counted, and most cards come back within days.
+        assert_eq!(reviews[0], 0.0);
+        assert!(reviews[1..8].iter().sum::<f64>() > 80.0);
+        // Fewer each week as intervals grow.
+        let week = |w: usize| reviews[w * 7..w * 7 + 7].iter().sum::<f64>();
+        assert!(week(1) > week(6), "{} <= {}", week(1), week(6));
+        assert_eq!(s.simulate_reviews(&[], 0, 30, habits, None).unwrap(), vec![0.0; 30]);
+    }
+
+    #[test]
+    fn simulated_reviews_of_studied_cards() {
+        let s = Scheduler::default();
+        let card = |due_day| PlannedCard {
+            memory: Memory { stability: 30.0, difficulty: 5.0 },
+            last_day: -20,
+            due_day,
+            lapses: 0,
+        };
+        let reviews = s.simulate_reviews(&[card(-3), card(0), card(4)], 0, 10, RatingHabits::default(), None).unwrap();
+        // Overdue cards are due today; a remembered card isn't back within the 10 days,
+        // but a forgotten one can be.
+        assert_eq!(reviews[0], 2.0);
+        assert!((1.0..1.2).contains(&reviews[4]), "{}", reviews[4]);
+        assert!(reviews.iter().sum::<f64>() < 3.5);
+    }
 
     fn days(o: &Outcome) -> i64 {
         o.interval_secs / DAY_SECS

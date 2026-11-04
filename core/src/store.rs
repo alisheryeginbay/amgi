@@ -406,6 +406,28 @@ impl Store {
         )
     }
 
+    /// How often each rating was given: on a card's first review, Again to Easy, and on
+    /// remembered reviews of cards due after a day or more, Hard to Easy.
+    pub fn rating_counts(&self) -> rusqlite::Result<([u32; 4], [u32; 3])> {
+        let mut stmt = self.conn.prepare(
+            "SELECT was_new, rating, COUNT(*) FROM review_log
+             WHERE rating > 0 AND (was_new OR (review_state = ?1 AND rating > 1))
+             GROUP BY was_new, rating",
+        )?;
+        let (mut first, mut passed) = ([0; 4], [0; 3]);
+        let rows = stmt.query_map([ReviewState::Review as i64], |r| {
+            Ok((r.get::<_, bool>(0)?, r.get::<_, i64>(1)?, r.get::<_, u32>(2)?))
+        })?;
+        for row in rows {
+            match row? {
+                (true, rating @ 1..=4, n) => first[rating as usize - 1] += n,
+                (false, rating @ 2..=4, n) => passed[rating as usize - 2] += n,
+                _ => {}
+            }
+        }
+        Ok((first, passed))
+    }
+
     /// Reviews per day at or after `since`, where day `n` starts at `n * 86400 - shift`
     /// seconds: `(day, count, milliseconds spent)`, counting only the reviews timed.
     /// Days without reviews are absent.

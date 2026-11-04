@@ -110,6 +110,19 @@ enum Command {
         #[arg(long)]
         time: bool,
     },
+    /// Reviews to expect in the coming days, simulated from each card's memory, and
+    /// what studying new cards today would add to them.
+    Forecast {
+        /// New cards to study today.
+        #[arg(long, short, default_value_t = 0, value_name = "N")]
+        new: u32,
+        /// Days ahead to show; past a month, a line per week.
+        #[arg(long, default_value_t = 30)]
+        days: u32,
+        /// Only this deck and its subdecks, such as `lang/french`.
+        #[arg(long, short)]
+        deck: Option<String>,
+    },
 }
 
 /// `amgi search --help`, after the options.
@@ -158,6 +171,7 @@ fn main() -> ExitCode {
         Command::Prune { trash } => commands::prune(&collection, out, trash),
         Command::Diff { revs, staged, check, reviewed } => commands::diff(&collection, out, &revs, staged, check, reviewed),
         Command::Stats { days, deck, time } => commands::stats(&collection, out, days, deck.as_deref(), time),
+        Command::Forecast { new, days, deck } => commands::forecast(&collection, out, new, days, deck.as_deref()),
     };
     match result {
         Ok(code) => code,

@@ -412,19 +412,23 @@ fn print_info(info: &CardInfo) {
     }
 }
 
-pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_time: bool) -> Result {
-    let days = days.max(1);
-    let scope = match deck.map(|d| d.trim_matches('/')) {
+/// The deck or folder of decks named by `--deck`, as `deck:` in a search has them.
+fn deck_scope(c: &CardCollection, deck: Option<&str>) -> Result<StudyScope> {
+    Ok(match deck.map(|d| d.trim_matches('/')) {
         None => StudyScope::All,
         Some(name) => {
-            // The deck or a folder of decks, as `deck:` in a search has them.
             let below = format!("{name}/");
             if !c.decks()?.iter().any(|d| d.name == name || d.name.starts_with(&below)) {
                 return Err(format!("no deck named `{name}`; `amgi decks` lists them").into());
             }
             StudyScope::Deck { name: name.to_string() }
         }
-    };
+    })
+}
+
+pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_time: bool) -> Result {
+    let days = days.max(1);
+    let scope = deck_scope(c, deck)?;
     // At least the 30 days the daily average is taken over.
     let mut stats = c.stats(scope.clone(), days.max(30))?;
     let today = c.today(scope.clone())?;
@@ -550,6 +554,107 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
         };
         println!("  {label}  {}  {line}", figure(*n, 4, |s| s));
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Days `amgi forecast` shows one by one; longer stretches show a line per week.
+const FORECAST_DAILY_DAYS: u32 = 31;
+
+pub fn forecast(c: &CardCollection, out: Output, new_cards: u32, days: u32, deck: Option<&str>) -> Result {
+    let days = days.max(1);
+    let scope = deck_scope(c, deck)?;
+    let w = c.workload(scope.clone(), new_cards, days)?;
+    if out.json {
+        let deck = match &scope {
+            StudyScope::All => None,
+            StudyScope::Deck { name } => Some(name.as_str()),
+        };
+        return print_json(&json!({ "deck": deck, "workload": w }));
+    }
+
+    // Cards to study each day: those studied before, and what the new ones add, them
+    // included today. Seconds where reviews were timed.
+    let added: Vec<f64> = w.added_reviews.iter().enumerate().map(|(i, n)| n + if i == 0 { f64::from(new_cards) } else { 0.0 }).collect();
+    let secs = |i: usize| -> Option<f64> {
+        let new = if i == 0 { f64::from(new_cards) * w.secs_per_new_card? } else { 0.0 };
+        Some((w.reviews[i] + w.added_reviews[i]) * w.secs_per_due_card? + new)
+    };
+    let now = text::now();
+    let day_label = |i: usize| match i {
+        0 => "Today".to_string(),
+        1 => "Tomorrow".to_string(),
+        i => format!("{} {}", text::weekday(now + i as i64 * DAY), &text::date(now + i as i64 * DAY)[5..]),
+    };
+    // A row per day, or per week from today over longer stretches.
+    let span = if days <= FORECAST_DAILY_DAYS { 1 } else { 7 };
+    let rows: Vec<(String, f64, f64, Option<f64>)> = (0..days as usize)
+        .step_by(span)
+        .map(|start| {
+            let range = start..(start + span).min(days as usize);
+            let label = match span {
+                1 => day_label(start),
+                _ if start == 0 => "This week".to_string(),
+                _ => format!("From {}", &text::date(now + start as i64 * DAY)[5..]),
+            };
+            let sum = |v: &[f64]| v[range.clone()].iter().sum::<f64>();
+            let time = range.clone().map(secs).sum::<Option<f64>>();
+            (label, sum(&w.reviews), sum(&added), time)
+        })
+        .collect();
+
+    let mut heading = format!("Reviews in the next {}", count(days, "day", "days"));
+    if new_cards > 0 {
+        heading += &format!(", studying {} today", count(new_cards, "new card", "new cards"));
+    }
+    println!("{}", bold(heading));
+    let max = rows.iter().map(|r| (r.1 + r.2).round() as u32).max().unwrap_or(0);
+    for (i, (label, before, added, time)) in rows.iter().enumerate() {
+        let total = (before + added).round() as u32;
+        let added = added.round() as u32;
+        let label = if i == 0 { bold(pad(label, 9)) } else { dim(pad(label, 9)) };
+        let plus = if new_cards == 0 {
+            String::new()
+        } else if added == 0 {
+            dim(format!("{:>6}", ""))
+        } else {
+            blue(format!("{:>6}", format!("+{added}")))
+        };
+        // Cards studied before, then the new ones' share, padded to line up the times.
+        let len = bar(total, max, 30).chars().count();
+        let new_len = bar(added, max, 30).chars().count().min(len);
+        let bar = format!("{}{}{}", yellow("█".repeat(len - new_len)), blue("▒".repeat(new_len)), " ".repeat(30 - len));
+        let time = match time {
+            Some(t) if total > 0 => dim(format!("  about {}", text::study_time(t.round() as u32))),
+            _ => String::new(),
+        };
+        println!("  {label}  {}{plus}  {bar}{time}", figure(total, 5, |s| s));
+    }
+
+    let before: f64 = w.reviews.iter().sum();
+    let reviews: f64 = w.added_reviews.iter().sum();
+    let total_time = |v: &[f64], new: u32| -> Option<f64> {
+        let new = if new > 0 { f64::from(new) * w.secs_per_new_card? } else { 0.0 };
+        Some(v.iter().sum::<f64>() * w.secs_per_due_card? + new)
+    };
+    let about = |secs: Option<f64>| secs.map(|s| format!(", about {}", text::study_time(s.round() as u32))).unwrap_or_default();
+    println!();
+    println!(
+        "  {}{}",
+        count(before.round() as u32, "review", "reviews"),
+        dim(format!(" of cards studied before{}", about(total_time(&w.reviews, 0))))
+    );
+    if new_cards > 0 {
+        println!(
+            "  {}{}",
+            blue(format!("+{}", count(reviews.round() as u32, "review", "reviews"))),
+            dim(format!(
+                " of the {} after today{}",
+                count(new_cards, "new card", "new cards"),
+                about(total_time(&w.added_reviews, new_cards))
+            ))
+        );
+    }
+    println!("  {}", dim("Simulated from each card's memory, without the daily review limit."));
     Ok(ExitCode::SUCCESS)
 }
 

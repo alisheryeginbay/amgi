@@ -25,7 +25,7 @@ pub use parser::CardKind;
 pub use scheduler::{Rating, ReviewState};
 pub use scripts::Scripts;
 use parser::ParsedCard;
-use scheduler::{Memory, Scheduler};
+use scheduler::{Memory, PlannedCard, RatingHabits, Scheduler};
 use store::{CardState, CardTime, LogEntry, LoggedReview, Store};
 
 uniffi::setup_scaffolding!();
@@ -414,6 +414,25 @@ impl Retention {
 
 const MATURE_SECS: i64 = 21 * DAY_SECS;
 const FORECAST_DAYS: usize = 14;
+/// Ratings needed before the simulator goes by the collection's own rather than the
+/// defaults.
+const MIN_RATINGS: u32 = 100;
+
+/// Reviews expected in the coming days, simulated, as `amgi forecast` shows them.
+#[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
+pub struct Workload {
+    /// Reviews expected each day from today of the cards studied before, averaged over
+    /// simulated runs; today includes overdue cards. Not held to the daily review limit.
+    pub reviews: Vec<f64>,
+    /// Reviews the new cards add each day after they are first studied today.
+    pub added_reviews: Vec<f64>,
+    /// New cards first studied today.
+    pub new_cards: u32,
+    /// Average seconds a card studied before takes on a day it comes back.
+    pub secs_per_due_card: Option<f64>,
+    /// Average seconds a new card takes the day it is first studied.
+    pub secs_per_new_card: Option<f64>,
+}
 
 /// Which cards to study or list.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
@@ -748,6 +767,12 @@ impl CardCollection {
     /// review history.
     pub fn stats(&self, scope: StudyScope, activity_days: u32) -> Result<Stats> {
         self.lock().stats(&scope, activity_days, unix_now())
+    }
+
+    /// Reviews expected over the next `days` days, in a deck or the whole collection,
+    /// if `new_cards` new cards are first studied today.
+    pub fn workload(&self, scope: StudyScope, new_cards: u32, days: u32) -> Result<Workload> {
+        self.lock().workload(&scope, new_cards, days, unix_now())
     }
 
     pub fn warnings(&self) -> Vec<CollectionWarning> {
@@ -1603,6 +1628,50 @@ impl Inner {
         })
     }
 
+    fn workload(&self, scope: &StudyScope, new_cards: u32, days: u32, now: i64) -> Result<Workload> {
+        let shift = self.utc_offset_secs - self.rollover_secs;
+        let today = (now + shift).div_euclid(DAY_SECS);
+        let day = |t: i64| (t + shift).div_euclid(DAY_SECS) - today;
+        let cards: Vec<PlannedCard> = self
+            .in_scope(scope)
+            .filter(|c| !c.suspended())
+            .filter_map(|c| self.states.get(&c.parsed.id))
+            .map(|s| PlannedCard {
+                memory: s.memory,
+                last_day: day(s.last_review),
+                due_day: day(s.due),
+                lapses: s.lapses,
+            })
+            .collect();
+        // The collection's own habits once there are enough ratings to go by.
+        let (first, passed) = self.store.rating_counts()?;
+        let share = |counts: &[u32]| {
+            let total: u32 = counts.iter().sum();
+            (total >= MIN_RATINGS).then(|| counts.iter().map(|&n| n as f32 / total as f32).collect::<Vec<_>>())
+        };
+        let mut habits = RatingHabits::default();
+        if let Some(p) = share(&first) {
+            habits.first.copy_from_slice(&p);
+        }
+        if let Some(p) = share(&passed) {
+            habits.passed.copy_from_slice(&p);
+        }
+        let suspend_after = self.leech_suspend.then_some(self.leech_threshold);
+        let days = days.max(1) as usize;
+        // Cards don't affect each other without a review limit, so the new ones are
+        // simulated apart and what they add stays clear of the others' noise.
+        let reviews = self.scheduler.simulate_reviews(&cards, 0, days, habits, suspend_after)?;
+        let added_reviews = self.scheduler.simulate_reviews(&[], new_cards, days, habits, suspend_after)?;
+        let time = self.time_per_card(self.scope_ids(scope).as_deref(), now)?;
+        Ok(Workload {
+            reviews,
+            added_reviews,
+            new_cards,
+            secs_per_due_card: time.seen_ms.or(time.new_ms).map(|ms| ms / 1000.0),
+            secs_per_new_card: time.new_ms.or(time.seen_ms).map(|ms| ms / 1000.0),
+        })
+    }
+
     fn import(&mut self, import: Import) -> Result<Imported> {
         let mut files = Vec::new();
         // A note type already here with the same definition is shared; a different one
@@ -2198,6 +2267,28 @@ mod tests {
         // An unclosed code block would take the card in; the file is left as it was.
         assert!(err(new("b", CardKind::Basic, "three")).contains("unclosed code block"));
         assert_eq!(fs::read_to_string(dir.join("cards/b.md")).unwrap(), "```\nopen");
+        drop(c);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn workload_with_new_cards() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n\nQ: 3\nA: 3\n")]);
+        let mut inner = c.lock();
+        let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
+        // Failed yesterday, so due today; the others are new.
+        inner.answer(&ids[0], Rating::Again, None, T0 - DAY_SECS).unwrap();
+
+        let w = inner.workload(&StudyScope::All, 0, 30, T0).unwrap();
+        assert_eq!(w.reviews.len(), 30);
+        assert_eq!(w.reviews[0], 1.0);
+        assert_eq!(w.added_reviews, vec![0.0; 30]);
+
+        let w = inner.workload(&StudyScope::All, 20, 30, T0).unwrap();
+        assert_eq!(w.new_cards, 20);
+        assert_eq!(w.added_reviews[0], 0.0);
+        assert!(w.added_reviews.iter().sum::<f64>() > 20.0);
+        drop(inner);
         drop(c);
         fs::remove_dir_all(dir).unwrap();
     }
