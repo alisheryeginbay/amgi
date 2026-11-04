@@ -117,6 +117,7 @@ function renderer(compact: boolean): Marked {
             // whatever the option.
             return `<span class="temml-error" style="color:#b22222">${escapeHTML(token.raw as string)}</span>`;
           }
+          html = italicOperators(html);
           return display || compact ? html : breakable(html);
         },
       },
@@ -130,6 +131,20 @@ function renderer(compact: boolean): Marked {
     },
   });
   return marked;
+}
+
+/** A letter used as an operator, as in `x \mathrel{R} y`, comes from Temml as
+ *  `<mo mathvariant="italic">R</mo>`. WebKit puts both of that operator's spaces after
+ *  it, so the letter is written in math italic instead (`𝑅`), which it spaces evenly. */
+function italicOperators(html: string): string {
+  return html.replace(/<mo mathvariant="italic"([^>]*)>([^<]*)<\/mo>/g, (_, attributes: string, text: string) => {
+    const italic = text.replace(/[A-Za-z]/g, (letter) => {
+      if (letter === "h") return "ℎ";
+      const code = letter.charCodeAt(0);
+      return String.fromCodePoint(code < 97 ? 0x1d434 + code - 65 : 0x1d44e + code - 97);
+    });
+    return `<mo${attributes}>${italic}</mo>`;
+  });
 }
 
 /** Inline MathML as one `<math>` per group Temml marked, with a line break allowed between

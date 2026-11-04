@@ -71,6 +71,13 @@ test("reads paths starting `@/` from the collection root", () => {
   assert.deepEqual(imageSources(source, "cards/plants/trees.md"), ["amgi://collection/media/oak.png"]);
 });
 
+test("writes a letter used as an operator in math italic, so it spaces evenly", () => {
+  const html = renderInline("$x \\mathrel{R} y$ and $a \\mathbin{h} b$");
+  assert.ok(html.includes(`<mo lspace="0.2778em" rspace="0.2778em">𝑅</mo>`));
+  assert.ok(html.includes(">ℎ</mo>"));
+  assert.ok(!html.includes("mathvariant"));
+});
+
 test("keeps a formula with a mistake on one line in table cells", () => {
   const cell = renderInline(oneLine("Area\n$$$\nx^2 + y\n$$$\nof a square"), true);
   assert.ok(!cell.includes("pre-line"));
