@@ -406,6 +406,13 @@ impl Store {
         )
     }
 
+    /// Ids of the new cards first reviewed at or after `since`.
+    pub fn new_card_ids_since(&self, since: i64) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT card_id FROM review_log WHERE was_new AND reviewed_at >= ?1")?;
+        let ids = stmt.query_map([since], |r| r.get(0))?;
+        ids.collect()
+    }
+
     /// How often each rating was given: on a card's first review, Again to Easy, and on
     /// remembered reviews of cards due after a day or more, Hard to Easy.
     pub fn rating_counts(&self) -> rusqlite::Result<([u32; 4], [u32; 3])> {

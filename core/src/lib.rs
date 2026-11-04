@@ -1295,12 +1295,59 @@ impl Inner {
 
         let card = match relearning.map_or_else(review, |c| Ok(Some(c)))? {
             Some(c) => Some(c),
-            None if self.new_remaining(now)? > 0 => studied()
-                .find(|c| !self.states.contains_key(&c.parsed.id))
-                .or_else(ahead),
+            None if self.new_remaining(now)? > 0 => self.next_new_card(scope, now)?.or_else(ahead),
             None => ahead(),
         };
         card.map(|c| self.study_card(c, now)).transpose()
+    }
+
+    /// The next new card, with decks taking turns. From the top of the deck tree down,
+    /// each step goes to the folder or file that has given the fewest new cards today,
+    /// counting everything inside it; ties go by a hash of its name and the day. A file
+    /// gives its cards in file order.
+    fn next_new_card(&self, scope: &StudyScope, now: i64) -> Result<Option<&Card>> {
+        // Each deck's next new card.
+        let mut decks = HashSet::new();
+        let mut candidates: Vec<&Card> = self
+            .in_scope(scope)
+            .filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id))
+            .filter(|c| decks.insert(c.deck.as_str()))
+            .collect();
+        let mut today: HashMap<&str, u32> = HashMap::new();
+        for id in self.store.new_card_ids_since(self.day_start(now))? {
+            if let Some(&i) = self.index.get(&id) {
+                *today.entry(self.cards[i].deck.as_str()).or_default() += 1;
+            }
+        }
+        let day = self.day_start(now).to_string();
+
+        // Every candidate is in the deck at `depth` components of its name. A step down
+        // goes to a subdeck, with its own subdecks, or to that deck's own file, as
+        // `a.md` is beside `a/`; the deck list makes `a` the parent of `a/b` too.
+        let mut depth = 0;
+        while candidates.len() > 1 {
+            let mut steps: BTreeMap<(String, bool), Vec<&Card>> = BTreeMap::new();
+            for card in candidates {
+                let parts: Vec<&str> = card.deck.split('/').collect();
+                let own_file = parts.len() == depth;
+                let path = parts[..parts.len().min(depth + 1)].join("/");
+                steps.entry((path, own_file)).or_default().push(card);
+            }
+            let given = |path: &str, own_file: bool| -> u32 {
+                let counts = |deck: &str| if own_file { deck == path } else { contains(path, deck) };
+                today.iter().filter(|(deck, _)| counts(deck)).map(|(_, n)| n).sum()
+            };
+            let (_, cards) = steps
+                .into_iter()
+                .min_by_key(|((path, own_file), _)| {
+                    let kind = if *own_file { "file" } else { "deck" };
+                    (given(path, *own_file), parser::stable_hash(&[path, kind, &day]))
+                })
+                .expect("there are candidates");
+            candidates = cards;
+            depth += 1;
+        }
+        Ok(candidates.first().copied())
     }
 
     /// Memory state and whole study days since the last review (0 on the same day).
@@ -2092,6 +2139,76 @@ mod tests {
     }
 
     #[test]
+    fn new_cards_take_turns() {
+        let (dir, c) = collection(&[
+            ("languages.md", "Q: l1\nA: -\n\nQ: l2\nA: -\n"),
+            ("languages/korean.md", "Q: k1\nA: -\n\nQ: k2\nA: -\n\nQ: k3\nA: -\n\nQ: k4\nA: -\n"),
+            ("languages/french.md", "Q: f1\nA: -\n\nQ: f2\nA: -\n"),
+            ("misc.md", "Q: m1\nA: -\n\nQ: m2\nA: -\n\nQ: m3\nA: -\n\nQ: m4\nA: -\n\nQ: m5\nA: -\n"),
+        ]);
+        let mut inner = c.lock();
+        inner.new_per_day = 100;
+        let mut order = Vec::new();
+        while let Some(card) = inner.next_card(&StudyScope::All, T0).unwrap() {
+            // Asking again gives the same card.
+            assert_eq!(inner.next_card(&StudyScope::All, T0).unwrap().unwrap().id, card.id);
+            inner.answer(&card.id, Rating::Easy, None, T0).unwrap();
+            order.push(card.front.trim().to_string());
+        }
+        assert_eq!(order.len(), 13);
+        let picks = |prefix: char, n: usize| order[..n].iter().filter(|f| f.starts_with(prefix)).count();
+        let count = |n: usize, decks: &str| decks.chars().map(|d| picks(d, n)).sum::<usize>();
+
+        // `languages` and `misc` take turns while both have cards, `languages.md` counting
+        // as part of `languages`; then languages' last cards are left.
+        for n in 1..=10 {
+            assert!(count(n, "lkf").abs_diff(count(n, "m")) <= 1, "{order:?}");
+        }
+        // Inside `languages`: its own file, `korean` and `french` take turns, until
+        // the smaller ones run out.
+        let languages: Vec<_> = order.iter().filter(|f| !f.starts_with('m')).collect();
+        let firsts: Vec<char> = languages[..6].iter().map(|f| f.chars().next().unwrap()).collect();
+        for chunk in firsts.chunks(3) {
+            assert_eq!(chunk.iter().collect::<HashSet<_>>().len(), 3, "{order:?}");
+        }
+        // Each file keeps its own order.
+        for deck in ['l', 'k', 'f', 'm'] {
+            let cards: Vec<_> = order.iter().filter(|f| f.starts_with(deck)).collect();
+            assert!(cards.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+        }
+
+        // Cards studied in one deck alone count toward its turn: after two korean cards,
+        // studying everything starts away from `languages`.
+        let (_dir2, c2) = collection(&[
+            ("languages/korean.md", "Q: k1\nA: -\n\nQ: k2\nA: -\n\nQ: k3\nA: -\n"),
+            ("misc.md", "Q: m1\nA: -\n\nQ: m2\nA: -\n\nQ: m3\nA: -\n"),
+        ]);
+        let mut inner2 = c2.lock();
+        for _ in 0..2 {
+            let card = inner2.next_card(&deck("languages/korean"), T0).unwrap().unwrap();
+            inner2.answer(&card.id, Rating::Easy, None, T0).unwrap();
+        }
+        let fronts: Vec<String> = (0..2)
+            .map(|_| {
+                let card = inner2.next_card(&StudyScope::All, T0).unwrap().unwrap();
+                inner2.answer(&card.id, Rating::Easy, None, T0).unwrap();
+                card.front.trim().to_string()
+            })
+            .collect();
+        assert_eq!(fronts, ["m1", "m2"]);
+
+        // The next day, counts start over.
+        let tomorrow = T0 + DAY_SECS;
+        let card = inner2.next_card(&StudyScope::All, tomorrow).unwrap().unwrap();
+        let misc_first = parser::stable_hash(&["misc", "deck", &inner2.day_start(tomorrow).to_string()])
+            < parser::stable_hash(&["languages", "deck", &inner2.day_start(tomorrow).to_string()]);
+        assert_eq!(card.front.trim(), if misc_first { "m3" } else { "k3" });
+        drop(inner);
+        drop(inner2);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn review_order() {
         let (dir, c) = collection(&[
             ("a.md", "Q: 1\nA: -\n\nQ: 2\nA: -\n\nQ: 3\nA: -\n"),
@@ -2440,7 +2557,7 @@ mod tests {
         assert_eq!(tags, [("lang".into(), 3), ("Verbs".into(), 2)]);
         let titles: Vec<_> = inner.decks(T0).unwrap().into_iter().map(|d| d.title).collect();
         assert_eq!(titles, ["en", "Korean"]);
-        let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
+        let card = inner.next_card(&deck("en"), T0).unwrap().unwrap();
         assert_eq!(card.tags, ["Verbs", "lang"]);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
