@@ -7,7 +7,7 @@ use unicode_normalization::char::is_combining_mark;
 use std::collections::HashMap;
 
 use crate::parser::NoteTypeInfo;
-use crate::{BrowseCard, CardKind};
+use crate::{CardSummary, CardKind};
 
 /// An interval of this many days or more makes a card mature, as in Anki.
 pub const MATURE_DAYS: i64 = 21;
@@ -41,7 +41,7 @@ impl Query {
         Query { tests }
     }
 
-    pub fn matches(&self, card: &BrowseCard) -> bool {
+    pub fn matches(&self, card: &CardSummary) -> bool {
         self.tests.iter().all(|(negated, test)| test.matches(card) != *negated)
     }
 }
@@ -98,7 +98,7 @@ enum Op {
 }
 
 impl Test {
-    fn matches(&self, c: &BrowseCard) -> bool {
+    fn matches(&self, c: &CardSummary) -> bool {
         match self {
             Test::Text { needle, fields } => {
                 let found = |f: &str| fold(f).contains(needle.as_str());
@@ -331,8 +331,8 @@ mod tests {
     const NOW: i64 = 1_800_000_000;
     const DAY: i64 = 86_400;
 
-    fn card(id: &str) -> BrowseCard {
-        BrowseCard {
+    fn card(id: &str) -> CardSummary {
+        CardSummary {
             id: id.into(),
             deck: "geography".into(),
             tags: vec![],
@@ -356,9 +356,9 @@ mod tests {
         t.iter().map(|s| s.to_string()).collect()
     }
 
-    fn cards() -> Vec<BrowseCard> {
+    fn cards() -> Vec<CardSummary> {
         vec![
-            BrowseCard {
+            CardSummary {
                 front: "Capital of France?".into(),
                 back: "Paris".into(),
                 tags: tags(&["europe", "capitals"]),
@@ -367,7 +367,7 @@ mod tests {
                 reps: 4,
                 ..card("paris")
             },
-            BrowseCard {
+            CardSummary {
                 front: "What does café mean?".into(),
                 back: "coffee".into(),
                 deck: "lang/french/words".into(),
@@ -377,7 +377,7 @@ mod tests {
                 reps: 2,
                 ..card("cafe")
             },
-            BrowseCard {
+            CardSummary {
                 front: "Formula for water".into(),
                 back: "H2O".into(),
                 deck: "science".into(),
@@ -385,7 +385,7 @@ mod tests {
                 tags: tags(&["chem::basics"]),
                 ..card("water")
             },
-            BrowseCard {
+            CardSummary {
                 front: "Boiling point at 12:30 altitude".into(),
                 back: "less than 100".into(),
                 deck: "science/physics".into(),
@@ -541,7 +541,7 @@ mod tests {
             name: "Vocab".into(),
             fields: vec!["Word".into(), "Word Meaning".into(), "Notes".into()],
         }];
-        let note = |id: &str, values: [&str; 3]| BrowseCard {
+        let note = |id: &str, values: [&str; 3]| CardSummary {
             note_type: Some("Vocab".into()),
             fields: values.iter().map(|v| v.to_string()).collect(),
             ..card(id)

@@ -10,7 +10,7 @@ amgi status                  # cards left today, by deck, and about how long; --
 amgi check                   # problems in the deck files as path:line: message; exits 1 if any
 amgi lint                    # deck files that break the rules in amgi.toml; --fix fixes them
 amgi fmt                     # deck files in one layout; --check lists those that would change
-amgi search deck:french is:due   # the search syntax; --view Leeches runs a saved view
+amgi search deck:french is:due   # cards matching a search, such as is:leech
 amgi decks                   # every deck with due, learning, new and total counts
 amgi tags                    # every tag with its card count
 amgi info cards/geography.md:12   # a card's schedule and history, by id, path:line or a search
@@ -65,12 +65,6 @@ ignoring case and accents. Words can also be filters:
 | `interval>=7` | next due at least 7 days after its last review. New cards have no interval |
 
 Anything else, such as `12:30`, is searched as text.
-
-## Saved views
-
-Saved views are searches with a name, kept in `.amgi.sqlite`. `amgi search --view Leeches`
-runs one. Every collection starts with **Leeches** (`is:leech`): cards you have forgotten
-as many times as the [leech threshold](/studying#leeches) or more.
 
 ## Lint
 

@@ -9,7 +9,6 @@ use std::rc::Rc;
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Transaction, named_params, params};
 
-use crate::SavedView;
 use crate::scheduler::{Memory, Outcome, Rating, ReviewState};
 
 const MIGRATIONS: &[&str] = &[r#"
@@ -36,11 +35,13 @@ CREATE TABLE review_log (
 CREATE INDEX review_log_card ON review_log (card_id, reviewed_at);
 CREATE INDEX review_log_time ON review_log (reviewed_at);
 "#, r#"
+-- No longer used: tag icons and saved views went with the app's browse pane.
 CREATE TABLE tag_icon (
     tag  TEXT PRIMARY KEY,
     icon TEXT NOT NULL
 );
 "#, r#"
+-- No longer used: tag icons and saved views went with the app's browse pane.
 CREATE TABLE saved_view (
     id    INTEGER PRIMARY KEY,
     name  TEXT NOT NULL,
@@ -534,50 +535,6 @@ impl Store {
         self.conn.execute("DELETE FROM setting WHERE key = ?1", [key])?;
         Ok(())
     }
-
-    /// Lowercased tag → icon.
-    pub fn tag_icons(&self) -> rusqlite::Result<HashMap<String, String>> {
-        let mut stmt = self.conn.prepare("SELECT tag, icon FROM tag_icon")?;
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
-    }
-
-    /// `None` removes the icon. `tag` is stored lowercased.
-    pub fn set_tag_icon(&self, tag: &str, icon: Option<&str>) -> rusqlite::Result<()> {
-        let tag = tag.to_lowercase();
-        match icon {
-            Some(icon) => self.conn.execute(
-                "INSERT INTO tag_icon (tag, icon) VALUES (?1, ?2)
-                 ON CONFLICT (tag) DO UPDATE SET icon = excluded.icon",
-                params![tag, icon],
-            )?,
-            None => self.conn.execute("DELETE FROM tag_icon WHERE tag = ?1", [tag])?,
-        };
-        Ok(())
-    }
-
-    pub fn saved_views(&self) -> rusqlite::Result<Vec<SavedView>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, query, icon FROM saved_view ORDER BY id")?;
-        stmt.query_map([], |r| Ok(SavedView { id: r.get(0)?, name: r.get(1)?, query: r.get(2)?, icon: r.get(3)? }))?
-            .collect()
-    }
-
-    pub fn add_saved_view(&self, name: &str, query: &str) -> rusqlite::Result<i64> {
-        self.conn.execute("INSERT INTO saved_view (name, query) VALUES (?1, ?2)", [name, query])?;
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    pub fn update_saved_view(&self, view: &SavedView) -> rusqlite::Result<()> {
-        self.conn.execute(
-            "UPDATE saved_view SET name = ?2, query = ?3, icon = ?4 WHERE id = ?1",
-            params![view.id, view.name, view.query, view.icon],
-        )?;
-        Ok(())
-    }
-
-    pub fn delete_saved_view(&self, id: i64) -> rusqlite::Result<()> {
-        self.conn.execute("DELETE FROM saved_view WHERE id = ?1", [id])?;
-        Ok(())
-    }
 }
 
 fn insert_review(tx: &Transaction, card_id: &str, r: &LoggedReview) -> rusqlite::Result<()> {
@@ -635,33 +592,6 @@ fn upsert_state(tx: &Transaction, card_id: &str, state: &CardState) -> rusqlite:
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn saved_views() {
-        let store = Store::open_in_memory().unwrap();
-        let leeches = SavedView { id: 1, name: "Leeches".into(), query: "is:leech".into(), icon: Some("🐞".into()) };
-        assert_eq!(store.saved_views().unwrap(), [leeches.clone()]);
-
-        let id = store.add_saved_view("Due soon", "due<3").unwrap();
-        let mut due = SavedView { id, name: "Due soon".into(), query: "due<3".into(), icon: None };
-        assert_eq!(store.saved_views().unwrap(), [leeches.clone(), due.clone()]);
-
-        due.query = "due<7 -is:suspended".into();
-        due.icon = Some("⏰".into());
-        store.update_saved_view(&due).unwrap();
-        store.delete_saved_view(leeches.id).unwrap();
-        assert_eq!(store.saved_views().unwrap(), [due]);
-    }
-
-    #[test]
-    fn tag_icons() {
-        let store = Store::open_in_memory().unwrap();
-        store.set_tag_icon("Korean", Some("🇰🇷")).unwrap();
-        store.set_tag_icon("korean", Some("🐯")).unwrap();
-        store.set_tag_icon("verbs", Some("🏃")).unwrap();
-        store.set_tag_icon("VERBS", None).unwrap();
-        assert_eq!(store.tag_icons().unwrap(), HashMap::from([("korean".into(), "🐯".into())]));
-    }
 
     #[test]
     fn record_and_reload() {

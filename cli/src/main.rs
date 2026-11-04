@@ -60,9 +60,6 @@ enum Command {
     Search {
         /// Search words and filters; all must match. Empty lists every card.
         query: Vec<String>,
-        /// Run a saved view, such as `Leeches`, combined with any query given.
-        #[arg(long, short)]
-        view: Option<String>,
         /// Print only card ids, one per line.
         #[arg(long, conflicts_with = "json")]
         ids: bool,
@@ -115,6 +112,10 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // Stop quietly when the reader goes away, as in `amgi search | head`, like other
+    // Unix tools, rather than panicking on the broken pipe.
+    // SAFETY: called before any other thread starts.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     let cli = Cli::parse();
     style::init(cli.color);
     let collection = match locate::open(cli.dir.as_deref()) {
@@ -130,7 +131,7 @@ fn main() -> ExitCode {
         Command::Check => commands::check(&collection, out),
         Command::Lint { fix } => commands::lint(&collection, out, fix),
         Command::Fmt { check } => commands::fmt(&collection, out, check),
-        Command::Search { query, view, ids } => commands::search(&collection, out, &query.join(" "), view.as_deref(), ids),
+        Command::Search { query, ids } => commands::search(&collection, out, &query.join(" "), ids),
         Command::Decks => commands::decks(&collection, out),
         Command::Tags => commands::tags(&collection, out),
         Command::Info { card } => commands::info(&collection, out, &card.join(" ")),

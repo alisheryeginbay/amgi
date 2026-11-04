@@ -87,7 +87,7 @@ The full docs are at [docs.amgi.study](https://docs.amgi.study).
 - [Studying](https://docs.amgi.study/studying): shortcuts, scheduling, adding cards and the menu bar
 - [Importing from Anki](https://docs.amgi.study/anki-import)
 - [Adding cards from Yomitan](https://docs.amgi.study/yomitan): AnkiConnect for Yomitan and other tools made for Anki
-- [Command line](https://docs.amgi.study/cli): search, saved views, stats and linting
+- [Command line](https://docs.amgi.study/cli): search, stats and linting
 
 ## License
 

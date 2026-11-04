@@ -171,9 +171,9 @@ pub enum StudyStage {
     Due,
 }
 
-/// A card as listed when browsing a deck.
+/// A card with its schedule, as `amgi search` and AnkiConnect list it.
 #[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
-pub struct BrowseCard {
+pub struct CardSummary {
     pub id: String,
     pub deck: String,
     /// Without `#`.
@@ -348,8 +348,9 @@ pub struct Imported {
     pub new_cards: u32,
 }
 
+/// Statistics for a deck or the whole collection, as `amgi stats` shows them.
 #[derive(Debug, Clone, PartialEq, uniffi::Record, serde::Serialize)]
-pub struct Dashboard {
+pub struct Stats {
     /// Reviews per study day, oldest first, ending today.
     pub activity: Vec<u32>,
     /// Seconds spent on each day of `activity`, counting only timed reviews.
@@ -429,17 +430,6 @@ impl StudyScope {
             StudyScope::Deck { name } => contains(name, &card.deck),
         }
     }
-}
-
-/// A named browse search, listed under Saved Views.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record, serde::Serialize)]
-pub struct SavedView {
-    pub id: i64,
-    pub name: String,
-    /// In the browse search syntax, such as `is:leech`.
-    pub query: String,
-    /// Such as an emoji.
-    pub icon: Option<String>,
 }
 
 struct Card {
@@ -671,49 +661,13 @@ impl CardCollection {
     }
 
     /// Every card in `scope`, in file order.
-    pub fn cards(&self, scope: StudyScope) -> Vec<BrowseCard> {
-        self.lock().browse(&scope)
+    pub fn cards(&self, scope: StudyScope) -> Vec<CardSummary> {
+        self.lock().cards(&scope)
     }
 
     /// Every tag in the collection, sorted, in the spelling first seen.
     pub fn tags(&self) -> Vec<TagInfo> {
         self.lock().tags()
-    }
-
-    /// Icons chosen for tags, such as an emoji, keyed by lowercased tag.
-    pub fn tag_icons(&self) -> Result<HashMap<String, String>> {
-        Ok(self.lock().store.tag_icons()?)
-    }
-
-    /// Set or, with `None` or an empty string, remove a tag's icon. Tags compare case-insensitively.
-    pub fn set_tag_icon(&self, tag: String, icon: Option<String>) -> Result<()> {
-        let icon = icon.as_deref().map(str::trim).filter(|i| !i.is_empty());
-        Ok(self.lock().store.set_tag_icon(&tag, icon)?)
-    }
-
-    /// Saved views in the order they were added.
-    pub fn saved_views(&self) -> Result<Vec<SavedView>> {
-        Ok(self.lock().store.saved_views()?)
-    }
-
-    /// Adds a view and returns its id.
-    pub fn add_saved_view(&self, name: String, query: String) -> Result<i64> {
-        Ok(self.lock().store.add_saved_view(name.trim(), query.trim())?)
-    }
-
-    /// Changes the name, search and icon of the view with `view.id`. An empty icon removes it.
-    pub fn update_saved_view(&self, view: SavedView) -> Result<()> {
-        let view = SavedView {
-            name: view.name.trim().to_string(),
-            query: view.query.trim().to_string(),
-            icon: view.icon.map(|i| i.trim().to_string()).filter(|i| !i.is_empty()),
-            ..view
-        };
-        Ok(self.lock().store.update_saved_view(&view)?)
-    }
-
-    pub fn delete_saved_view(&self, id: i64) -> Result<()> {
-        Ok(self.lock().store.delete_saved_view(id)?)
     }
 
     /// Rate a card. `taken_ms` is the time spent on it, which the review log keeps up
@@ -792,8 +746,8 @@ impl CardCollection {
 
     /// Statistics for a deck or the whole collection, with `activity_days` days of
     /// review history.
-    pub fn dashboard(&self, scope: StudyScope, activity_days: u32) -> Result<Dashboard> {
-        self.lock().dashboard(&scope, activity_days, unix_now())
+    pub fn stats(&self, scope: StudyScope, activity_days: u32) -> Result<Stats> {
+        self.lock().stats(&scope, activity_days, unix_now())
     }
 
     pub fn warnings(&self) -> Vec<CollectionWarning> {
@@ -1249,16 +1203,16 @@ impl Inner {
             .collect())
     }
 
-    fn browse(&self, scope: &StudyScope) -> Vec<BrowseCard> {
-        self.browse_where(scope, |_| true)
+    fn cards(&self, scope: &StudyScope) -> Vec<CardSummary> {
+        self.cards_where(scope, |_| true)
     }
 
-    fn browse_where(&self, scope: &StudyScope, keep: impl Fn(&Card) -> bool) -> Vec<BrowseCard> {
+    fn cards_where(&self, scope: &StudyScope, keep: impl Fn(&Card) -> bool) -> Vec<CardSummary> {
         self.in_scope(scope)
             .filter(|card| keep(card))
             .map(|card| {
                 let state = self.states.get(&card.parsed.id);
-                BrowseCard {
+                CardSummary {
                     id: card.parsed.id.clone(),
                     deck: card.deck.clone(),
                     tags: card.parsed.tags.clone(),
@@ -1572,7 +1526,7 @@ impl Inner {
         }
     }
 
-    fn dashboard(&self, scope: &StudyScope, activity_days: u32, now: i64) -> Result<Dashboard> {
+    fn stats(&self, scope: &StudyScope, activity_days: u32, now: i64) -> Result<Stats> {
         let ids = self.scope_ids(scope);
         let ids = ids.as_deref();
         // Day `n` starts at `n * DAY_SECS - shift`, matching `day_start`.
@@ -1633,7 +1587,7 @@ impl Inner {
                 r.add(mature, passed, failed);
             }
         }
-        Ok(Dashboard {
+        Ok(Stats {
             activity,
             activity_secs,
             secs_per_review: time.review_ms.map(|ms| ms / 1000.0),
@@ -2148,19 +2102,19 @@ mod tests {
     }
 
     #[test]
-    fn browse_lists_cards_with_state() {
+    fn lists_cards_with_state() {
         let (dir, c) = collection(&[("a.md", "Q: 1\nA: one\n#x\n\nQ: 2\nA: two\n"), ("b.md", "Q: 3\nA: three\n")]);
         let mut inner = c.lock();
         let first = inner.next_card(&deck("a"), T0).unwrap().unwrap();
         inner.answer(&first.id, Rating::Again, None, T0).unwrap();
 
-        let cards = inner.browse(&deck("a"));
+        let cards = inner.cards(&deck("a"));
         let fronts: Vec<_> = cards.iter().map(|c| c.front.as_str()).collect();
         assert_eq!(fronts, ["1", "2"]);
         assert_eq!(cards[0].tags, ["x"]);
         assert_eq!((cards[0].reps, cards[0].due.is_some()), (1, true));
         assert_eq!((cards[1].reps, cards[1].due), (0, None));
-        assert_eq!(inner.browse(&StudyScope::All).len(), 3);
+        assert_eq!(inner.cards(&StudyScope::All).len(), 3);
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -2249,7 +2203,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_stats() {
+    fn stats_for_the_collection() {
         let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n\nQ: 3\nA: 3\n")]);
         let mut inner = c.lock();
         let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
@@ -2258,7 +2212,7 @@ mod tests {
         inner.answer(&ids[1], Rating::Easy, None, T0 - DAY_SECS).unwrap();
         inner.answer(&ids[0], Rating::Again, None, T0 - DAY_SECS + 60).unwrap();
 
-        let d = inner.dashboard(&StudyScope::All, 5, T0).unwrap();
+        let d = inner.stats(&StudyScope::All, 5, T0).unwrap();
         assert_eq!(d.activity, [0, 0, 1, 2, 0]);
         assert_eq!(inner.day_start(T0) - d.activity_start, 4 * DAY_SECS);
         assert_eq!(d.streak, 2);
@@ -2273,7 +2227,7 @@ mod tests {
         assert_eq!((d.retention.yesterday, d.retention.week, d.retention.year), (failed, failed, failed));
 
         inner.answer(&ids[2], Rating::Good, None, T0).unwrap();
-        let d = inner.dashboard(&StudyScope::All, 5, T0).unwrap();
+        let d = inner.stats(&StudyScope::All, 5, T0).unwrap();
         assert_eq!((d.activity[4], d.streak), (1, 3));
         drop(inner);
         fs::remove_dir_all(dir).unwrap();
@@ -2303,7 +2257,7 @@ mod tests {
         assert_eq!(today.new_available, 1);
         assert_eq!(today.secs_left, Some(left.round() as u32));
 
-        let d = inner.dashboard(&StudyScope::All, 3, T0 + 200).unwrap();
+        let d = inner.stats(&StudyScope::All, 3, T0 + 200).unwrap();
         assert_eq!(d.activity, [0, 2, 3]);
         assert_eq!(d.activity_secs, [0, 15, 68]);
         assert_eq!((d.secs_per_review, d.secs_per_due_card), (Some(20.75), Some(8.0)));
@@ -2339,7 +2293,7 @@ mod tests {
         inner.answer(&id, Rating::Good, None, T0 - DAY_SECS).unwrap();
         inner.answer(&id, Rating::Good, None, T0).unwrap();
 
-        let r = inner.dashboard(&StudyScope::All, 1, T0).unwrap().retention;
+        let r = inner.stats(&StudyScope::All, 1, T0).unwrap().retention;
         let retention = |young_passed, young_failed, mature_passed, mature_failed| Retention {
             young_passed,
             young_failed,
@@ -2356,7 +2310,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_and_today_for_one_deck() {
+    fn stats_and_today_for_one_deck() {
         let (dir, c) = collection(&[
             ("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n"),
             ("a/sub.md", "Q: 3\nA: 3\n"),
@@ -2371,13 +2325,13 @@ mod tests {
 
         // A deck takes in its subdecks, and only their reviews.
         let a = StudyScope::Deck { name: "a".into() };
-        let d = inner.dashboard(&a, 2, T0).unwrap();
+        let d = inner.stats(&a, 2, T0).unwrap();
         assert_eq!(d.activity, [1, 0]);
         assert_eq!((d.new_cards, d.young_cards, d.streak), (2, 1, 1));
         let today = inner.today(&a, T0).unwrap();
         assert_eq!((today.reviewed, today.new_studied, today.new_available), (0, 0, 2));
 
-        let d = inner.dashboard(&StudyScope::Deck { name: "b".into() }, 2, T0).unwrap();
+        let d = inner.stats(&StudyScope::Deck { name: "b".into() }, 2, T0).unwrap();
         assert_eq!((d.activity, d.new_cards, d.young_cards), (vec![0, 2], 0, 1));
         assert_eq!(inner.today(&StudyScope::All, T0).unwrap().reviewed, 2);
         drop(inner);
@@ -2498,7 +2452,7 @@ mod tests {
         assert_eq!(inner.answer(&id, Rating::Good, None, T0 + 2 * DAY_SECS).unwrap(), None);
         let leech = inner.answer(&id, Rating::Again, None, T0 + 3 * DAY_SECS).unwrap();
         assert_eq!(leech, Some(Leech { lapses: 2, suspended: false }));
-        assert!(inner.browse(&StudyScope::All)[0].leech);
+        assert!(inner.cards(&StudyScope::All)[0].leech);
         drop(inner);
 
         // Suspending leeches tags the card in its file, and undoing the answer untags it.
@@ -2508,10 +2462,10 @@ mod tests {
         assert_eq!(leech, Some(Leech { lapses: 3, suspended: true }));
         let file = dir.join(CARDS_DIR).join("a.md");
         assert!(fs::read_to_string(&file).unwrap().contains("#suspended"));
-        assert!(inner.browse(&StudyScope::All)[0].suspended);
+        assert!(inner.cards(&StudyScope::All)[0].suspended);
         inner.undo_answer(T0 + 4 * DAY_SECS).unwrap().unwrap();
         assert!(!fs::read_to_string(&file).unwrap().contains("#suspended"));
-        assert_eq!(inner.browse(&StudyScope::All)[0].lapses, 2);
+        assert_eq!(inner.cards(&StudyScope::All)[0].lapses, 2);
 
         // Both settings are kept in the database.
         inner.leech_threshold = DEFAULT_LEECH_THRESHOLD;
@@ -2539,9 +2493,9 @@ mod tests {
         assert_eq!(card.front, "kept");
         inner.answer(&card.id, Rating::Good, None, T0).unwrap();
         assert!(inner.next_card(&StudyScope::All, T0).unwrap().is_none());
-        let browsed = inner.browse(&StudyScope::All);
-        assert_eq!(browsed.iter().map(|c| c.suspended).collect::<Vec<_>>(), [false, true, true]);
-        assert_eq!(inner.dashboard(&StudyScope::All, 1, T0).unwrap().suspended_cards, 2);
+        let cards = inner.cards(&StudyScope::All);
+        assert_eq!(cards.iter().map(|c| c.suspended).collect::<Vec<_>>(), [false, true, true]);
+        assert_eq!(inner.stats(&StudyScope::All, 1, T0).unwrap().suspended_cards, 2);
 
         // Unsuspending edits the file; a front matter tag stays.
         assert_eq!(inner.set_suspended(&ids[1..], false).unwrap(), 1);
@@ -2659,9 +2613,9 @@ mod tests {
                 "cards/bad.md:4: note type `Bad` has errors, see `note-types/Bad.toml`",
             ]
         );
-        // Browsed cards carry their note's fields, and the note types say what they are.
-        let browsed = c.cards(StudyScope::All);
-        let dos = browsed.iter().find(|b| b.front == "dos").unwrap();
+        // Listed cards carry their note's fields, and the note types say what they are.
+        let cards = c.cards(StudyScope::All);
+        let dos = cards.iter().find(|b| b.front == "dos").unwrap();
         assert_eq!((dos.note_type.as_deref(), dos.fields.clone()), (Some("Vocab"), vec!["dos".to_string(), "two".into()]));
 
         let inner = c.lock();

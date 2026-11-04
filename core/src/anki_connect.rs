@@ -28,7 +28,7 @@ use serde_json::{Map, Value, json};
 use crate::anki::text::{self, Media};
 use crate::parser::NoteTypeInfo;
 use crate::search::fold;
-use crate::{BrowseCard, CARDS_DIR, CardCollection, CardKind, MEDIA_DIR, MEDIA_LINK, NewCard, NewNote, StudyScope};
+use crate::{CardSummary, CARDS_DIR, CardCollection, CardKind, MEDIA_DIR, MEDIA_LINK, NewCard, NewNote, StudyScope};
 
 /// The AnkiConnect API version answered, the one current clients expect.
 pub const VERSION: u64 = 6;
@@ -106,7 +106,7 @@ struct Api<'a> {
 
 /// A card with what Anki knows it by.
 struct Entry<'a> {
-    card: &'a BrowseCard,
+    card: &'a CardSummary,
     note_id: i64,
     card_id: i64,
     /// Which of its note's cards it is, from 0.
@@ -122,7 +122,7 @@ struct Entry<'a> {
 
 /// The cards and note types as of one request.
 struct Snapshot {
-    cards: Vec<BrowseCard>,
+    cards: Vec<CardSummary>,
     types: Vec<NoteTypeInfo>,
     day_start: i64,
 }

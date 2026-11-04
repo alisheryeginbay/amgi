@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use amgi_core::lint;
 use amgi_core::search::Query;
-use amgi_core::{BrowseCard, CardCollection, CardInfo, CardKind, Rating, Retention, StudyScope, format_interval};
+use amgi_core::{CardSummary, CardCollection, CardInfo, CardKind, Rating, Retention, StudyScope, format_interval};
 use serde_json::json;
 
 use crate::diff::{self, Source};
@@ -175,7 +175,7 @@ fn paint_label(label: &str, padded: String) -> String {
 }
 
 /// `new`, `suspended`, `due now`, `due today`, `overdue 3d` or `in 2d`.
-fn schedule_label(card: &BrowseCard, now: i64, tomorrow: i64) -> String {
+fn schedule_label(card: &CardSummary, now: i64, tomorrow: i64) -> String {
     match card.due {
         _ if card.suspended => "suspended".into(),
         None => "new".into(),
@@ -187,18 +187,9 @@ fn schedule_label(card: &BrowseCard, now: i64, tomorrow: i64) -> String {
     }
 }
 
-pub fn search(c: &CardCollection, out: Output, query: &str, view: Option<&str>, ids: bool) -> Result {
-    let mut query = query.to_string();
-    if let Some(name) = view {
-        let views = c.saved_views()?;
-        let Some(found) = views.iter().find(|v| v.name.eq_ignore_ascii_case(name.trim())) else {
-            let names: Vec<_> = views.iter().map(|v| v.name.as_str()).collect();
-            return Err(format!("no saved view named {name:?}; there are: {}", names.join(", ")).into());
-        };
-        query = format!("{} {query}", found.query);
-    }
+pub fn search(c: &CardCollection, out: Output, query: &str, ids: bool) -> Result {
     let now = text::now();
-    let matcher = Query::parse_with(&query, c.day_start(), &c.note_types());
+    let matcher = Query::parse_with(query, c.day_start(), &c.note_types());
     let cards: Vec<_> = c.cards(StudyScope::All).into_iter().filter(|card| matcher.matches(card)).collect();
     // Like grep: a search that finds nothing fails, for scripts.
     let code = if cards.is_empty() { ExitCode::FAILURE } else { ExitCode::SUCCESS };
@@ -259,25 +250,22 @@ pub fn decks(c: &CardCollection, out: Output) -> Result {
 }
 
 pub fn tags(c: &CardCollection, out: Output) -> Result {
-    let icons = c.tag_icons()?;
-    let rows: Vec<_> = c.tags().into_iter().map(|t| (icons.get(&t.name.to_lowercase()).cloned(), t)).collect();
+    let tags = c.tags();
     if out.json {
-        let rows: Vec<_> =
-            rows.iter().map(|(icon, t)| json!({ "tag": t.name, "cards": t.cards, "icon": icon })).collect();
+        let rows: Vec<_> = tags.iter().map(|t| json!({ "tag": t.name, "cards": t.cards })).collect();
         return print_json(&rows);
     }
-    let tag_width = rows.iter().map(|(_, t)| width(&t.name) + 1).max().unwrap_or(0);
-    for (icon, t) in &rows {
-        let icon = icon.as_deref().map_or_else(|| "  ".to_string(), |i| pad(i, 2));
+    let tag_width = tags.iter().map(|t| width(&t.name) + 1).max().unwrap_or(0);
+    for t in &tags {
         let gap = " ".repeat(tag_width - width(&t.name) - 1);
-        println!("{icon} {}{}{gap}  {}", dim("#"), t.name, dim(format!("{:>5}", t.cards)));
+        println!("{}{}{gap}  {}", dim("#"), t.name, dim(format!("{:>5}", t.cards)));
     }
     Ok(ExitCode::SUCCESS)
 }
 
 /// The cards `arg` names: an id, `path:line` on any line of a card, or a search. A cloze
 /// makes several cards from one block, so a place or search can name all of them.
-fn resolve<'a>(c: &CardCollection, cards: &'a [BrowseCard], arg: &str) -> Result<Vec<&'a BrowseCard>> {
+fn resolve<'a>(c: &CardCollection, cards: &'a [CardSummary], arg: &str) -> Result<Vec<&'a CardSummary>> {
     let arg = arg.trim();
     if arg.is_empty() {
         return Err("name a card: its id, path:line, or a search".into());
@@ -438,21 +426,21 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
         }
     };
     // At least the 30 days the daily average is taken over.
-    let mut dashboard = c.dashboard(scope.clone(), days.max(30))?;
+    let mut stats = c.stats(scope.clone(), days.max(30))?;
     let today = c.today(scope.clone())?;
-    let recent = &dashboard.activity_secs[dashboard.activity_secs.len().saturating_sub(30)..];
+    let recent = &stats.activity_secs[stats.activity_secs.len().saturating_sub(30)..];
     let studied: Vec<u32> = recent.iter().copied().filter(|&s| s > 0).collect();
     let daily_average = (!studied.is_empty()).then(|| studied.iter().sum::<u32>() / studied.len() as u32);
-    let skip = dashboard.activity.len() - days as usize;
-    dashboard.activity.drain(..skip);
-    dashboard.activity_secs.drain(..skip);
-    dashboard.activity_start += skip as i64 * DAY;
+    let skip = stats.activity.len() - days as usize;
+    stats.activity.drain(..skip);
+    stats.activity_secs.drain(..skip);
+    stats.activity_start += skip as i64 * DAY;
     let deck = match &scope {
         StudyScope::All => None,
         StudyScope::Deck { name } => Some(name.as_str()),
     };
     if out.json {
-        return print_json(&json!({ "deck": deck, "today": today, "daily_average_secs": daily_average, "dashboard": dashboard }));
+        return print_json(&json!({ "deck": deck, "today": today, "daily_average_secs": daily_average, "stats": stats }));
     }
     let field = |name: &str, value: String| println!("{}{value}", dim(pad(name, 11)));
     if let Some(deck) = deck {
@@ -463,9 +451,9 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
         done += &format!(", {}", text::study_time(today.study_secs));
     }
     field("Today", format!("{}{}", bold(count(today.reviewed, "review", "reviews")), dim(done)));
-    field("Streak", bold(count(dashboard.streak, "day", "days")));
+    field("Streak", bold(count(stats.streak, "day", "days")));
     // Only once some reviews were timed.
-    let timed = dashboard.secs_per_review.is_some() || dashboard.activity_secs.iter().any(|&s| s > 0);
+    let timed = stats.secs_per_review.is_some() || stats.activity_secs.iter().any(|&s| s > 0);
     if timed {
         let left = today.due_available + today.learning + today.new_available;
         if let Some(secs) = today.secs_left.filter(|_| left > 0) {
@@ -473,7 +461,7 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
         }
         let pace = [
             daily_average.map(|s| format!("{} a day", text::study_time(s))),
-            dashboard.secs_per_review.map(|s| format!("{} a review", text::review_time(s))),
+            stats.secs_per_review.map(|s| format!("{} a review", text::review_time(s))),
         ];
         let pace: Vec<String> = pace.into_iter().flatten().collect();
         if !pace.is_empty() {
@@ -481,18 +469,18 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
         }
     }
     let cards = [
-        blue(format!("{} new", dashboard.new_cards)),
-        format!("{} young", dashboard.young_cards),
-        green(format!("{} mature", dashboard.mature_cards)),
-        dim(format!("{} suspended", dashboard.suspended_cards)),
+        blue(format!("{} new", stats.new_cards)),
+        format!("{} young", stats.young_cards),
+        green(format!("{} mature", stats.mature_cards)),
+        dim(format!("{} suspended", stats.suspended_cards)),
     ];
     field("Cards", cards.join(&dim(" · ")));
 
     let (shaded, heading, total) = if by_time {
-        let secs = &dashboard.activity_secs;
+        let secs = &stats.activity_secs;
         (secs, "Time", text::study_time(secs.iter().sum()))
     } else {
-        let reviews = &dashboard.activity;
+        let reviews = &stats.activity;
         (reviews, "Reviews", reviews.iter().sum::<u32>().to_string())
     };
     let days_studied = shaded.iter().filter(|&&n| n > 0).count() as u32;
@@ -510,13 +498,13 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
     if days_studied > 0 && days <= SPARKLINE_DAYS {
         println!("  {}", blue(sparkline(shaded)));
         // The first day under the line's start, and today under its end when there's room.
-        let start = text::date(dashboard.activity_start);
+        let start = text::date(stats.activity_start);
         match (days as usize).checked_sub(start.len() + "today".len()) {
             Some(gap) => println!("  {}", dim(format!("{start}{}today", " ".repeat(gap)))),
             None => println!("  {}", dim(start)),
         }
     } else if days_studied > 0 {
-        for line in calendar(shaded, dashboard.activity_start) {
+        for line in calendar(shaded, stats.activity_start) {
             println!("  {line}");
         }
     }
@@ -524,7 +512,7 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
     println!();
     println!("{}", bold("Retention"));
     println!("  {}", dim(format!("{:<10}  {:>6}  {:>6}  {:>6}  {:>7}", "", "Young", "Mature", "Total", "Reviews")));
-    let r = &dashboard.retention;
+    let r = &stats.retention;
     for (label, p) in [("Today", r.today), ("Yesterday", r.yesterday), ("Last week", r.week), ("Last month", r.month), ("Last year", r.year)] {
         let cell = |passed, of| match percent(passed, of) {
             Some(p) => format!("{p:>6}"),
@@ -541,10 +529,10 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
     }
 
     println!();
-    println!("{}", bold(format!("Due in the next {} days", dashboard.forecast.len())));
-    let max = dashboard.forecast.iter().copied().max().unwrap_or(0);
+    println!("{}", bold(format!("Due in the next {} days", stats.forecast.len())));
+    let max = stats.forecast.iter().copied().max().unwrap_or(0);
     let now = text::now();
-    for (i, n) in dashboard.forecast.iter().enumerate() {
+    for (i, n) in stats.forecast.iter().enumerate() {
         let label = match i {
             0 => "Today".to_string(),
             1 => "Tomorrow".to_string(),
@@ -553,7 +541,7 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
         let label = if i == 0 { bold(pad(&label, 9)) } else { dim(pad(&label, 9)) };
         // Lined up after the longest bar.
         let bar = bar(*n, max, 30);
-        let line = match dashboard.secs_per_due_card {
+        let line = match stats.secs_per_due_card {
             Some(secs) if *n > 0 => {
                 let time = text::study_time((secs * f64::from(*n)).round() as u32);
                 format!("{}  {}", blue(pad(&bar, 30)), dim(format!("about {time}")))

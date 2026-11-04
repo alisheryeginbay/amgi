@@ -355,21 +355,6 @@ final class AppModel {
         )
     }
 
-    /// Suspend or unsuspend cards; the next card comes up if the one studied is suspended.
-    func setSuspended(_ ids: [String], _ suspended: Bool) {
-        guard let collection else { return }
-        perform {
-            let changed = try collection.setSuspended(cardIds: ids, suspended: suspended)
-            if !suspended && changed == 0 {
-                errorMessage = "These cards are suspended by their deck: remove `suspended` from the tags in the deck file's front matter."
-            }
-        }
-        if suspended, let current, ids.contains(current.id) {
-            study = .none
-        }
-        refresh()
-    }
-
     /// ⌘S suspends the card being studied, ⌘Z takes back the last answer and ⌘I shows
     /// Card Info for the card. Caught before any view, so they work whether the web view,
     /// the header or nothing has focus.
@@ -399,9 +384,12 @@ final class AppModel {
         }
     }
 
+    /// Tags the card being studied `#suspended` in its file, and brings up the next one.
     func suspendCurrent() {
-        guard let card = current else { return }
-        setSuspended([card.id], true)
+        guard let collection, let card = current else { return }
+        perform { _ = try collection.setSuspended(cardIds: [card.id], suspended: true) }
+        study = .none
+        refresh()
     }
 
     /// The review header's More menu, opened under its button.

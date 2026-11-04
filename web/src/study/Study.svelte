@@ -198,7 +198,7 @@
         <Icon name={stages[card.stage].icon} size={14} />
         {stages[card.stage].label}
         {#if leech}
-          <span class="leech" title="Leeches are cards you keep forgetting, which usually need rewording or splitting. `amgi search --view Leeches` lists them; ⌘Z takes the answer back.">
+          <span class="leech" title="Leeches are cards you keep forgetting, which usually need rewording or splitting. `amgi search is:leech` lists them; ⌘Z takes the answer back.">
             <Icon name="warning" size={14} />
             {leech.suspended ? "Suspended the last card, a leech" : "The last card is a leech"}: forgotten {leech.lapses} times
           </span>
