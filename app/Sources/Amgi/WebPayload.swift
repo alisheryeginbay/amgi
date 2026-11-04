@@ -10,22 +10,12 @@ struct WebState {
     var environment: EnvironmentPayload
     /// Stylesheets of the CJK font packs installed, as `amgi://fonts/` URLs.
     var fonts: [String]
-    var icons: [String: String]
     var study: StudyPayload
     var dashboard: DashboardPayload?
-    /// Every card as JSON, once read.
-    var cards: String?
-    /// The note types as JSON, once read.
-    var noteTypes: String?
-    /// Which cards to show, while browsing.
-    var browse: BrowseSource?
-    var search: String
-    /// Whether browsing shows the selected card beside the table.
-    var preview: Bool
 }
 
 enum WebPane: String, Encodable {
-    case study, dashboard, browse
+    case study, dashboard
 }
 
 struct EnvironmentPayload: Encodable, Equatable {
@@ -36,18 +26,14 @@ struct EnvironmentPayload: Encodable, Equatable {
     /// and Korean share Han characters but draw some differently, and cards don't say
     /// their language, so this picks the forms. Left out of the JSON when there is none.
     let han: String?
-    /// When the current study day started (Unix seconds), for `is:due`; absent with no
-    /// collection open.
-    let dayStart: Int64?
     /// The keys that rate Again, Hard, Good and Easy, lowercase.
     let answerKeys: [String]
 
-    static func current(dayStart: Int64?, answerKeys: AnswerKeys) -> EnvironmentPayload {
+    static func current(answerKeys: AnswerKeys) -> EnvironmentPayload {
         EnvironmentPayload(
             locale: Locale.current.identifier(.bcp47),
             firstWeekday: Calendar.current.firstWeekday - 1,
             han: preferredHan,
-            dayStart: dayStart,
             answerKeys: answerKeys.ordered
         )
     }
@@ -162,16 +148,6 @@ struct RetentionPayload: Encodable, Equatable {
     }
 }
 
-/// Which of the cards the browse pane shows.
-struct BrowseSource: Encodable, Equatable {
-    /// Changes when another deck, tag or saved view is browsed.
-    let scope: String
-    /// Only this deck and its subdecks, if set. Left out of the JSON when `nil`.
-    let deck: String?
-    /// The tag's or saved view's search, run by the page before the one typed.
-    let query: String
-}
-
 /// A card to study.
 struct CardPayload: Encodable {
     let id: String
@@ -226,15 +202,6 @@ enum WebMessage {
     case ready
     case reveal(StudyInput)
     case answer(Rating, StudyInput)
-    /// Open a card's deck file.
-    case open(path: String)
-    case select(ids: [String])
-    /// The cards a right-click acts on.
-    case contextCards(ids: [String])
-    /// How many cards match the browsed tag or saved view.
-    case count(Int)
-    /// Show a card in the Card Info window.
-    case info(id: String)
 
     init?(_ body: Any) {
         guard let body = body as? [String: Any], let type = body["type"] as? String else { return nil }
@@ -245,19 +212,6 @@ enum WebMessage {
         case "answer":
             guard let n = body["rating"] as? Int, Rating.allCases.indices.contains(n - 1) else { return nil }
             self = .answer(Rating.allCases[n - 1], input)
-        case "open":
-            guard let path = body["path"] as? String else { return nil }
-            self = .open(path: path)
-        case "select":
-            self = .select(ids: body["ids"] as? [String] ?? [])
-        case "contextCards":
-            self = .contextCards(ids: body["ids"] as? [String] ?? [])
-        case "info":
-            guard let id = body["id"] as? String else { return nil }
-            self = .info(id: id)
-        case "count":
-            guard let count = body["count"] as? Int else { return nil }
-            self = .count(count)
         default:
             return nil
         }

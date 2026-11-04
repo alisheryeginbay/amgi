@@ -46,10 +46,6 @@ struct ContentView: View {
         } message: { summary in
             Text(summary.message)
         }
-        .sheet(item: Binding(get: { model.editingView }, set: { model.editingView = $0 })) { draft in
-            SavedViewEditor(draft: draft)
-                .environment(model)
-        }
     }
 }
 
@@ -377,45 +373,4 @@ private struct TitlebarSidebarToggle: NSViewRepresentable {
 /// Only for show: clicks, selection and its context menu pass through to the window.
 private final class PassiveWebView: WKWebView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-/// Names a saved view and its search.
-private struct SavedViewEditor: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    @State var draft: SavedViewDraft
-
-    private var complete: Bool {
-        !draft.name.trimmingCharacters(in: .whitespaces).isEmpty
-            && !draft.query.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(draft.id == nil ? "New Saved View" : "Edit Saved View")
-                .font(.headline)
-            Form {
-                TextField("Name:", text: $draft.name, prompt: Text("Due this week"))
-                TextField("Search:", text: $draft.query, prompt: Text("due<7 -is:suspended"))
-                    .font(.body.monospaced())
-            }
-            Text("Searches work as in the browse search field, such as `#verbs`, `deck:french`, `is:due` or `lapses>3`.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button(draft.id == nil ? "Add" : "Save") {
-                    model.commit(draft)
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!complete)
-            }
-        }
-        .padding(20)
-        .frame(width: 400)
-    }
 }

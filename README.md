@@ -58,22 +58,18 @@ note-types/
     <td width="50%"><img src="media/screenshots/math.webp" alt="A card with the chain rule typeset as math" /></td>
     <td width="50%"><img src="media/screenshots/dashboard.webp" alt="The dashboard: due and reviewed counts, a streak, a year of activity, cards due over the next two weeks and retention" /></td>
   </tr>
-  <tr>
-    <td colspan="2"><img src="media/screenshots/browse.webp" alt="Browsing a deck: a searchable table of cards with their deck, tags and due dates, and the selected card shown beside it" /></td>
-  </tr>
 </table>
 
 - **Rich cards:** images, sounds, TeX math, code highlighted in 200+ languages, and
   [notes with fields](https://docs.amgi.study/card-format#notes-with-fields) that make
   several cards from one entry, such as word → meaning and meaning → word.
-- **Browse and search** every card in a table: `deck:french #verbs is:due`,
-  `lapses>3`, `is:leech`, and saved views for the searches you come back to.
 - **Add a card from any app** with <kbd>⌥⌘N</kbd>, and see what's due from the menu bar.
 - **Bring your Anki decks:** `.apkg` and `.colpkg` files become Markdown with their media
   and review history, and an [AnkiConnect](https://docs.amgi.study/yomitan) server lets
   Yomitan and other Anki tools add cards.
-- **A command line:** `amgi status`, `check`, `search`, `stats`, and `diff` to list the
-  cards added, changed and removed since a git commit.
+- **A command line:** `amgi status`, `check`, `stats`, `search` with
+  `deck:french #verbs is:due` or `lapses>3`, and `diff` to list the cards added, changed
+  and removed since a git commit.
 
 ## Install
 
@@ -93,10 +89,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and tests.
 The full docs are at [docs.amgi.study](https://docs.amgi.study).
 
 - [Card format](https://docs.amgi.study/card-format): cards, clozes, media, math, code, tags and suspending
-- [Studying](https://docs.amgi.study/studying): shortcuts, browsing, adding cards, saved views and search
+- [Studying](https://docs.amgi.study/studying): shortcuts, scheduling, adding cards and the menu bar
 - [Importing from Anki](https://docs.amgi.study/anki-import)
 - [Adding cards from Yomitan](https://docs.amgi.study/yomitan): AnkiConnect for Yomitan and other tools made for Anki
-- [Command line](https://docs.amgi.study/cli)
+- [Command line](https://docs.amgi.study/cli): search, saved views, stats and linting
 
 ## License
 

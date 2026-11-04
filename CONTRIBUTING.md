@@ -6,7 +6,7 @@
   `CardCollection` API, exported through [UniFFI](https://mozilla.github.io/uniffi-rs/)
 - `cli/`: the `amgi` command, built on the core
 - `app/`: SwiftUI macOS app (Swift package): the window, sidebar, toolbar and settings
-- `web/`: the study, dashboard and browse panes in [Svelte](https://svelte.dev), shown in
+- `web/`: the study and dashboard panes in [Svelte](https://svelte.dev), shown in
   one web view. The app sends each pane its data and the page sends back what you do;
   cards' images and sounds are served from the collection at `amgi://collection/`.
 - `examples/`: a sample collection, its decks in `examples/cards/`

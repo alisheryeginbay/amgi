@@ -19,7 +19,7 @@ amgi prune                   # files in media that no card links to; --trash mov
 amgi diff                    # cards added, changed and removed since the last commit
 ```
 
-`search` takes the same syntax as the app; see [Searching](/studying#searching).
+`search` takes the [search syntax](#searching) below.
 
 `stats --deck lang/french` counts only that deck and its subdecks: its cards, its
 reviews, and its streak, which is the days you reviewed any card in it. Today's new cards
@@ -37,6 +37,33 @@ in the app.
 
 Output is in color on a terminal and plain when piped. `--color always` or `never`
 overrides that, as do the `NO_COLOR` and `CLICOLOR_FORCE` environment variables.
+
+## Searching
+
+Every word in a search must match the card's question, answer, tags or note fields,
+ignoring case and accents. Words can also be filters:
+
+| Search | Finds cards |
+|---|---|
+| `"capital of"` | with that exact phrase |
+| `-paris` | without `paris` (works before any filter, too) |
+| `#verbs`, `#lang*` | tagged `verbs`; with a tag starting with `lang` |
+| `deck:french` | in a deck named `french` or under one, such as `lang/french/words` |
+| `q:paris`, `a:"to go"` | with that text in the question or answer only |
+| `meaning:apple`, `wordmeaning:go` | from a note whose field of that name has the text; leave out spaces in the name |
+| `is:new` `is:due` `is:suspended` `is:leech` `is:cloze` `is:basic` | in that state or of that kind |
+| `is:mature` | next due 21 or more days after its last review, as in Anki |
+| `lapses>3`, `reviews<=5` | compared by count (`<`, `<=`, `>`, `>=`, `=`) |
+| `due<1`, `due<7`, `due<0` | due today; within 7 days; overdue (before today). New cards have no due date |
+| `interval>=7` | next due at least 7 days after its last review. New cards have no interval |
+
+Anything else, such as `12:30`, is searched as text.
+
+## Saved views
+
+Saved views are searches with a name, kept in `.amgi.sqlite`. `amgi search --view Leeches`
+runs one. Every collection starts with **Leeches** (`is:leech`): cards you have forgotten
+as many times as the [leech threshold](/studying#leeches) or more.
 
 ## Lint
 

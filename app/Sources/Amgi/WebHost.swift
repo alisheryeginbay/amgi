@@ -11,8 +11,6 @@ final class WebHost: NSObject {
     let webView: AmgiWebView
     /// Called for everything the page sends except `ready`.
     var onMessage: (WebMessage) -> Void = { _ in }
-    /// Items for a right-click on browse rows, given the cards it acts on.
-    var contextMenu: ([String]) -> [NSMenuItem] = { _ in [] }
 
     /// The open collection, served at `amgi://collection/`.
     var collectionRoot: URL? {
@@ -27,14 +25,8 @@ final class WebHost: NSObject {
     private var sentPane: WebPane?
     private var sentEnvironment: EnvironmentPayload?
     private var sentFonts: [String]?
-    private var sentIcons: [String: String]?
     private var sentStudy: StudyPayload?
     private var sentDashboard: DashboardPayload?
-    private var sentCards: String?
-    private var sentBrowse: BrowseSource?
-    private var sentSearch: String?
-    private var sentPreview: Bool?
-    private var sentNoteTypes: String?
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -55,8 +47,6 @@ final class WebHost: NSObject {
         #if DEBUG
         webView.isInspectable = true
         #endif
-        webView.contextMenu = { [weak self] ids in self?.contextMenu(ids) ?? [] }
-        webView.onMenuClosed = { [weak self] in self?.command("contextMenuClosed") }
         monitorStudyKeys()
         load()
     }
@@ -78,13 +68,6 @@ final class WebHost: NSObject {
         guard ready else { return }
         send("environment", state.environment, &sentEnvironment)
         send("fonts", state.fonts, &sentFonts)
-        send("icons", state.icons, &sentIcons)
-        send("search", state.search, &sentSearch)
-        send("preview", state.preview, &sentPreview)
-        if let noteTypes = state.noteTypes, noteTypes != sentNoteTypes {
-            sentNoteTypes = noteTypes
-            post("noteTypes", json: noteTypes)
-        }
         send("study", state.study, &sentStudy)
         // A card that asks for its answer takes the keyboard, for its typing box.
         if state.pane == .study, state.study.card?.typed != nil, !state.study.revealed,
@@ -93,14 +76,6 @@ final class WebHost: NSObject {
         }
         if let dashboard = state.dashboard {
             send("dashboard", dashboard, &sentDashboard)
-        }
-        // Cards first, so the page never narrows the old list to a new deck.
-        if let cards = state.cards, cards != sentCards {
-            sentCards = cards
-            post("cards", json: cards)
-        }
-        if let browse = state.browse {
-            send("browse", browse, &sentBrowse)
         }
         send("pane", state.pane, &sentPane)
     }
@@ -151,10 +126,6 @@ final class WebHost: NSObject {
 
     private func post(_ part: String, _ value: some Encodable) {
         guard let data = try? JSONEncoder().encode(value), let json = String(data: data, encoding: .utf8) else { return }
-        post(part, json: json)
-    }
-
-    private func post(_ part: String, json: String) {
         webView.callAsyncJavaScript(
             "window.amgi.receive(part, json)",
             arguments: ["part": part, "json": json],
@@ -172,20 +143,12 @@ final class WebHost: NSObject {
             sentPane = nil
             sentEnvironment = nil
             sentFonts = nil
-            sentIcons = nil
             sentStudy = nil
             sentDashboard = nil
-            sentCards = nil
-            sentBrowse = nil
-            sentSearch = nil
-            sentPreview = nil
-            sentNoteTypes = nil
             if let state {
                 self.state = nil
                 apply(state)
             }
-        case .contextCards(let ids):
-            webView.contextCardIDs = ids
         default:
             onMessage(message)
         }
@@ -247,14 +210,8 @@ private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-/// The web view, with a context menu that keeps only text actions and adds the app's
-/// own items for the browse rows clicked.
+/// The web view, with a context menu that keeps only text actions.
 final class AmgiWebView: WKWebView {
-    /// Set by the page while handling the right-click, just before the menu opens.
-    var contextCardIDs: [String] = []
-    var contextMenu: ([String]) -> [NSMenuItem] = { _ in [] }
-    var onMenuClosed: () -> Void = {}
-
     private static let kept: Set<String> = {
         var kept: Set<String> = [
             "WKMenuItemIdentifierCopy", "WKMenuItemIdentifierCopyImage", "WKMenuItemIdentifierCopyLink",
@@ -278,19 +235,8 @@ final class AmgiWebView: WKWebView {
             previousWasSeparator = item.isSeparatorItem
         }
         if menu.items.last?.isSeparatorItem == true { menu.removeItem(at: menu.items.count - 1) }
-
-        let items = contextCardIDs.isEmpty ? [] : contextMenu(contextCardIDs)
-        if !items.isEmpty && !menu.items.isEmpty { menu.insertItem(.separator(), at: 0) }
-        for item in items.reversed() { menu.insertItem(item, at: 0) }
-        contextCardIDs = []
         super.willOpenMenu(menu, with: event)
     }
-
-    override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
-        super.didCloseMenu(menu, with: event)
-        onMenuClosed()
-    }
-
 }
 
 /// A menu item that runs a closure.

@@ -1,6 +1,5 @@
-//! The browse search, as typed in the app's search field. Words must all match; see
-//! the README for the syntax. The app's browse pane runs the same search in
-//! `web/src/browse/query.ts`; keep the two in step.
+//! The card search, as `amgi search` and saved views take it. Words must all match;
+//! see `docs/cli.mdx` for the syntax.
 
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;

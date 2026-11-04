@@ -2,52 +2,33 @@ import AmgiCore
 import AppKit
 import SwiftUI
 
-/// Whether browsing shows the selected card beside the table.
-private let browsePreviewKey = "browsePreview"
-
 /// The detail panel: a header with the title and buttons, over the shared web view for
 /// every pane, with the glass answer buttons floating over study cards.
 struct DetailView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(autoplaySoundsKey) private var autoplay = true
     @AppStorage(studyProgressKey) private var progress = true
-    @AppStorage(browsePreviewKey) private var preview = true
 
     var body: some View {
         ZStack(alignment: .top) {
-            Group {
-                switch model.selection {
-                case .tags: TagList()
-                case .views: SavedViewList()
-                default: web
+            web
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Content scrolled up fades out under the header rather than being cut off,
+                // over the same band as the sidebar's rows, just under the traffic lights.
+                .mask {
+                    VStack(spacing: 0) {
+                        LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 10)
+                        Color.black
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Content scrolled up fades out under the header rather than being cut off,
-            // over the same band as the sidebar's rows, just under the traffic lights.
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: fades ? 10 : 0)
-                    Color.black
-                }
-            }
-            .padding(.top, fades ? titlebarDepth - panelInset : headerHeight)
+                .padding(.top, titlebarDepth - panelInset)
             DetailHeader(title: title, subtitle: subtitle)
         }
     }
 
-    /// Browsing doesn't fade: rows scroll under the table's own column headers, which
-    /// would fade too, so the table starts below the header.
-    private var fades: Bool {
-        switch model.selection {
-        case .cards, .deck, .tag, .view: false
-        case .dashboard, .review, .tags, .views: true
-        }
-    }
-
     private var web: some View {
-        WebContent(host: model.web, state: model.webState(autoplay: autoplay, progress: progress, preview: preview))
+        WebContent(host: model.web, state: model.webState(autoplay: autoplay, progress: progress))
             // Glass lives only on the floating controls, over the content, which scrolls
             // beneath them. The page leaves room below for them.
             .overlay(alignment: .bottom) {
@@ -71,12 +52,6 @@ struct DetailView: View {
         switch model.selection {
         case .dashboard: "Dashboard"
         case .review: model.folder?.lastPathComponent ?? "All Cards"
-        case .cards: "All Cards"
-        case .tags: "Tags"
-        case .views: "Saved Views"
-        case .tag(let tag): model.icon(forTag: tag).map { "\($0) \(tag)" } ?? "#\(tag)"
-        case .deck(let name): model.deckNames.first { $0.name == name }?.title ?? deckTitle(name)
-        case .view(let id): model.savedView(id).map { view in view.icon.map { "\($0) \(view.name)" } ?? view.name } ?? ""
         }
     }
 
@@ -84,9 +59,6 @@ struct DetailView: View {
         switch model.selection {
         case .dashboard: model.folder?.lastPathComponent ?? ""
         case .review: model.studyCounts
-        case .tags: model.tags.count == 1 ? "1 tag" : "\(model.tags.count) tags"
-        case .views: model.savedViews.count == 1 ? "1 view" : "\(model.savedViews.count) views"
-        case .cards, .deck, .tag, .view: model.browsedCount.map { $0 == 1 ? "1 card" : "\($0) cards" } ?? ""
         }
     }
 }
@@ -100,7 +72,6 @@ private let headerHeight = (titlebarHeight / 2 - panelInset) * 2
 /// The title and subtitle on one line, then the pane's buttons, level with the traffic lights.
 private struct DetailHeader: View {
     @Environment(AppModel.self) private var model
-    @AppStorage(browsePreviewKey) private var preview = true
     let title: String
     let subtitle: String
 
@@ -151,27 +122,7 @@ private struct DetailHeader: View {
                     model.revealInEditor(path: card.path)
                 }
             }
-        case .cards, .deck, .tag, .view:
-            @Bindable var model = model
-            SearchField(text: $model.search, prompt: "Search Cards") { model.searchField = $0 }
-                .frame(width: 200)
-            HeaderButton("Save Search", systemImage: "plus.magnifyingglass", help: "Save Search: add it to Saved Views in the sidebar") {
-                model.saveCurrentSearch()
-            }
-            .disabled(model.search.trimmingCharacters(in: .whitespaces).isEmpty)
-            let card = model.selectedBrowseCard
-            HeaderButton("Edit Card", systemImage: "pencil", help: card.map { "Open \($0.path), line \($0.line)" } ?? "Edit Card") {
-                if let card { model.revealInEditor(path: card.path) }
-            }
-            .disabled(card == nil)
-            HeaderButton(
-                preview ? "Hide Card" : "Show Card",
-                systemImage: "rectangle.righthalf.inset.filled",
-                help: preview ? "Hide the selected card" : "Show the selected card beside the table"
-            ) {
-                preview.toggle()
-            }
-        case .dashboard, .tags, .views:
+        case .dashboard:
             EmptyView()
         }
     }
@@ -221,44 +172,6 @@ private struct MenuAnchorView: NSViewRepresentable {
 
     func updateNSView(_ view: NSView, context: Context) {
         onView(view)
-    }
-}
-
-/// The header's search field. A native one, because `searchable` would show on every pane.
-private struct SearchField: NSViewRepresentable {
-    @Binding var text: String
-    let prompt: String
-    /// Hands over the field, for ⌘F to focus.
-    let onField: (NSSearchField) -> Void
-
-    func makeNSView(context: Context) -> NSSearchField {
-        let field = NSSearchField()
-        field.placeholderString = prompt
-        field.sendsSearchStringImmediately = true
-        field.delegate = context.coordinator
-        onField(field)
-        return field
-    }
-
-    func updateNSView(_ field: NSSearchField, context: Context) {
-        context.coordinator.text = $text
-        if field.stringValue != text { field.stringValue = text }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
-
-    @MainActor
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
-        var text: Binding<String>
-
-        init(text: Binding<String>) {
-            self.text = text
-        }
-
-        func controlTextDidChange(_ notification: Notification) {
-            guard let field = notification.object as? NSSearchField else { return }
-            text.wrappedValue = field.stringValue
-        }
     }
 }
 

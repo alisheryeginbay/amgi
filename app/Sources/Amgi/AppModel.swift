@@ -10,26 +10,6 @@ enum SidebarItem: Hashable {
     case dashboard
     /// Study the whole collection.
     case review
-    /// Browse every card in the collection.
-    case cards
-    /// Browse a deck and its subdecks.
-    case deck(String)
-    /// List every tag.
-    case tags
-    /// Browse cards with this tag, across all decks.
-    case tag(String)
-    /// List every saved view.
-    case views
-    /// Browse a saved view's search, by its id.
-    case view(Int64)
-}
-
-/// A saved view being added (no `id`) or edited.
-struct SavedViewDraft: Identifiable {
-    var id: Int64?
-    var name: String
-    var query: String
-    var icon: String?
 }
 
 struct DeckName: Equatable {
@@ -55,22 +35,12 @@ final class AppModel {
     static let retentionRange = 0.7...0.99
 
     private(set) var folder: URL?
-    private(set) var decks: [DeckInfo] = []
-    /// Deck names and titles without counts, for views that only show the decks:
-    /// counts change with every answer, these only when files do.
+    /// Deck names and titles, for adding cards to them.
     private(set) var deckNames: [DeckName] = []
     /// The note types in the collection's `note-types` folder, by name.
     private(set) var noteTypes: [NoteTypeInfo] = []
-    private(set) var tags: [TagInfo] = []
-    /// Lowercased tag → icon, such as an emoji.
-    private(set) var tagIcons: [String: String] = [:]
-    private(set) var savedViews: [SavedView] = []
-    /// The saved view shown in the add or edit sheet.
-    var editingView: SavedViewDraft?
     private(set) var warnings: [CollectionWarning] = []
     private(set) var today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0, learning: 0, studySecs: 0, secsLeft: nil)
-    /// When the current study day started (Unix seconds), for the browse search's `is:due`.
-    private(set) var dayStart: Int64?
     /// The card being studied, and whether its answer shows.
     private(set) var study: StudyState = .none {
         didSet { timer.show(study.card?.id) }
@@ -85,16 +55,6 @@ final class AppModel {
     private(set) var leechNotice: LeechNotice?
     private(set) var importing = false
     private(set) var dashboard: Dashboard?
-    /// Every card, as JSON for the browse pane, which narrows it to the deck, tag or
-    /// saved view browsed. Sent once and again only when cards change, so moving
-    /// between them sends almost nothing.
-    private(set) var cardsJSON: String?
-    /// The note types, as JSON for the browse pane, which names a note's fields with them.
-    private(set) var noteTypesJSON: String?
-    /// Cards changed while nothing was browsed; they're read again when browsing starts.
-    @ObservationIgnored private var cardsStale = true
-    /// How many browsed cards match the tag or saved view, as counted by the browse pane.
-    private(set) var browsedCount: Int?
     /// The card the Card Info window shows, kept current as cards are studied or edited.
     private(set) var infoCard: CardInfo?
     @ObservationIgnored private var infoCardID: String?
@@ -103,14 +63,6 @@ final class AppModel {
     /// Set by the main window, which can open SwiftUI's windows; the command palette uses them.
     @ObservationIgnored var openSettingsWindow: () -> Void = {}
     @ObservationIgnored var openShortcutsWindow: () -> Void = {}
-    /// Cards selected in the browse table.
-    var browseSelection: Set<String> = [] {
-        didSet { loadSelectedCards() }
-    }
-    /// The cards in `browseSelection`, for the header buttons and context menu.
-    private(set) var selectedCards: [BrowseCard] = []
-    /// The browse search, as typed.
-    var search = ""
     var errorMessage: String?
     var importSummary: ImportSummary?
     /// The keys that rate a shown answer, from `~/.config/amgi/config.toml`.
@@ -211,38 +163,12 @@ final class AppModel {
         didSet {
             guard oldValue != selection else { return }
             timer.reviewing = selection == .review
-            search = ""
-            browseSelection = []
-            browsedCount = nil
             switch selection {
             case .dashboard: loadDashboard()
             // A card showing its answer stays up until it's rated.
             case .review: if current == nil || !revealed { loadNext() }
-            case .cards, .deck, .tag, .view: if cardsStale { loadBrowsed() }
-            case .tags, .views: break
             }
         }
-    }
-
-    /// Whether a deck, tag or saved view's cards are showing.
-    var isBrowsing: Bool {
-        switch selection {
-        case .dashboard, .review, .tags, .views: false
-        case .cards, .deck, .tag, .view: true
-        }
-    }
-
-    /// The search a tag or saved view stands for, applied before the one typed.
-    var browseQuery: String {
-        switch selection {
-        case .dashboard, .review, .cards, .deck, .tags, .views: ""
-        case .tag(let tag): "#\(tag)"
-        case .view(let id): savedView(id)?.query ?? ""
-        }
-    }
-
-    func savedView(_ id: Int64) -> SavedView? {
-        savedViews.first { $0.id == id }
     }
 
     private var collection: CardCollection?
@@ -252,8 +178,6 @@ final class AppModel {
     let fonts = FontPacks()
     /// The header's More button, which its menu opens under.
     @ObservationIgnored weak var moreMenuAnchor: NSView?
-    /// The browse header's search field, which ⌘F focuses.
-    @ObservationIgnored weak var searchField: NSSearchField?
     /// Times the card being studied.
     @ObservationIgnored private let timer = StudyTimer()
     @ObservationIgnored private var keyMonitor: Any?
@@ -267,7 +191,6 @@ final class AppModel {
         timer.view = web.webView
         timer.reviewing = selection == .review
         web.onMessage = { [weak self] in self?.handle($0) }
-        web.contextMenu = { [weak self] ids in self?.menuItems(for: ids) ?? [] }
         loadConfig()
         monitorReviewShortcuts()
         refreshCountsPeriodically()
@@ -347,25 +270,14 @@ final class AppModel {
         web.collectionRoot = nil
         UserDefaults.standard.removeObject(forKey: Self.folderKey)
         selection = .review
-        decks = []
         deckNames = []
         noteTypes = []
-        tags = []
-        tagIcons = [:]
-        savedViews = []
-        editingView = nil
         warnings = []
         today = TodayStats(reviewed: 0, newStudied: 0, newAvailable: 0, dueAvailable: 0, learning: 0, studySecs: 0, secsLeft: nil)
         study = .none
         timer.reset()
         canUndoAnswer = false
         dashboard = nil
-        cardsJSON = nil
-        noteTypesJSON = nil
-        cardsStale = true
-        browsedCount = nil
-        browseSelection = []
-        search = ""
         infoCard = nil
         infoCardID = nil
     }
@@ -396,10 +308,8 @@ final class AppModel {
     /// Re-read the Markdown files and update counts. Keeps the current card if it still exists.
     func reload() {
         loadConfig()
-        // A failed reload refreshes everything, as the cards may be half read.
-        var changed = true
-        perform { changed = try collection?.reload() ?? false }
-        refresh(cardsChanged: changed)
+        perform { _ = try collection?.reload() }
+        refresh()
     }
 
     /// Read the config file again. A broken file keeps the keys already in use.
@@ -415,33 +325,19 @@ final class AppModel {
         }
     }
 
-    /// `cardsChanged` false skips sending the card list again, after a reload found no
-    /// file changed.
-    func refresh(cardsChanged: Bool = true) {
+    func refresh() {
         guard let collection else { return }
         // Only changed values are assigned, so views that read the rest are left alone:
         // a reload when the app comes to the front usually changes nothing.
         perform {
-            let decks = try collection.decks()
-            update(\.decks, decks)
-            update(\.deckNames, decks.map { DeckName(name: $0.name, title: $0.title, noteType: $0.noteType) })
+            update(\.deckNames, try collection.decks().map { DeckName(name: $0.name, title: $0.title, noteType: $0.noteType) })
             update(\.noteTypes, collection.noteTypes())
-            update(\.tags, collection.tags())
-            update(\.tagIcons, try collection.tagIcons())
-            update(\.savedViews, try collection.savedViews())
             update(\.today, try collection.today(scope: .all))
-            update(\.dayStart, collection.dayStart())
             update(\.warnings, collection.warnings())
         }
         fonts.fetch(for: collection.scripts(), han: EnvironmentPayload.preferredHan)
         loadCardInfo()
         if selection == .dashboard { loadDashboard() }
-        // Studying changes cards on every answer; the list waits until it's browsed.
-        if isBrowsing {
-            if cardsChanged || cardsStale { loadBrowsed() }
-        } else if cardsChanged {
-            cardsStale = true
-        }
         if current == nil || !revealed { loadNext() }
     }
 
@@ -456,17 +352,7 @@ final class AppModel {
 
     private func refreshCounts() {
         guard let collection else { return }
-        perform {
-            let decks = try collection.decks()
-            update(\.decks, decks)
-            update(\.today, try collection.today(scope: .all))
-            update(\.dayStart, collection.dayStart())
-        }
-    }
-
-    /// The card Card Info is for here: the one studied, or the one selected in browse.
-    var infoTarget: String? {
-        selection == .review ? current?.id : selectedBrowseCard?.id
+        perform { update(\.today, try collection.today(scope: .all)) }
     }
 
     func showCardInfo(id: String) {
@@ -505,25 +391,15 @@ final class AppModel {
 
     /// What the web panes show. Read while rendering the detail column, so any change
     /// here updates the page.
-    func webState(autoplay: Bool, progress: Bool, preview: Bool) -> WebState {
+    func webState(autoplay: Bool, progress: Bool) -> WebState {
         let pane: WebPane = switch selection {
-        // The tag and view lists are native, so the web view is hidden for them.
-        case .dashboard, .tags, .views: .dashboard
+        case .dashboard: .dashboard
         case .review: .study
-        case .cards, .deck, .tag, .view: .browse
-        }
-        let browse: BrowseSource? = switch selection {
-        case .dashboard, .review, .tags, .views: nil
-        case .cards: BrowseSource(scope: "cards", deck: nil, query: "")
-        case .deck(let name): BrowseSource(scope: "deck:\(name)", deck: name, query: "")
-        case .tag(let tag): BrowseSource(scope: "tag:\(tag)", deck: nil, query: browseQuery)
-        case .view(let id): BrowseSource(scope: "view:\(id)", deck: nil, query: browseQuery)
         }
         return WebState(
             pane: pane,
-            environment: .current(dayStart: dayStart, answerKeys: answerKeys),
+            environment: .current(answerKeys: answerKeys),
             fonts: fonts.stylesheets,
-            icons: tagIcons,
             study: StudyPayload(
                 card: current,
                 revealed: revealed,
@@ -534,18 +410,8 @@ final class AppModel {
                 remaining: totalLeft,
                 leech: leechNotice
             ),
-            dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDueAndLearning, today: today) } : nil,
-            cards: cardsJSON,
-            noteTypes: noteTypesJSON,
-            browse: browse,
-            search: search,
-            preview: preview
+            dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDueAndLearning, today: today) } : nil
         )
-    }
-
-    /// The one browsed card selected, if exactly one is.
-    var selectedBrowseCard: BrowseCard? {
-        selectedCards.count == 1 ? selectedCards.first : nil
     }
 
     /// Suspend or unsuspend cards; the next card comes up if the one studied is suspended.
@@ -563,9 +429,9 @@ final class AppModel {
         refresh()
     }
 
-    /// ⌘S suspends the card being studied and ⌘Z takes back the last answer; ⌘I shows
-    /// Card Info for that card or the one selected in browse. Caught before any view, so
-    /// they work whether the web view, sidebar or nothing has focus.
+    /// ⌘S suspends the card being studied, ⌘Z takes back the last answer and ⌘I shows
+    /// Card Info for the card. Caught before any view, so they work whether the web view,
+    /// sidebar or nothing has focus.
     private func monitorReviewShortcuts() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
@@ -575,13 +441,8 @@ final class AppModel {
                 guard let self, flags == .command, let window, window.attachedSheet == nil,
                       window === self.web.webView.window
                 else { return false }
-                if key == "i", let id = self.infoTarget {
+                if key == "i", self.selection == .review, let id = self.current?.id {
                     self.showCardInfo(id: id)
-                    return true
-                }
-                // Here rather than in the menus, where Edit ▸ Find already has ⌘F.
-                if key == "f", self.isBrowsing, let field = self.searchField, field.window === window {
-                    window.makeFirstResponder(field)
                     return true
                 }
                 // A text field keeps ⌘Z for its own undo.
@@ -635,24 +496,6 @@ final class AppModel {
         }
     }
 
-    /// Right-click items for browse rows.
-    private func menuItems(for ids: [String]) -> [NSMenuItem] {
-        let cards = collection?.cardsWithIds(ids: ids) ?? []
-        guard !cards.isEmpty else { return [] }
-        var items: [NSMenuItem] = []
-        if cards.count == 1, let card = cards.first {
-            items.append(ActionMenuItem("Edit Card") { [weak self] in self?.revealInEditor(path: card.path) })
-            items.append(ActionMenuItem("Card Info") { [weak self] in self?.showCardInfo(id: card.id) })
-        }
-        let suspend = cards.contains { !$0.suspended }
-        let noun = cards.count == 1 ? "Card" : "\(cards.count) Cards"
-        let ids = cards.map(\.id)
-        items.append(ActionMenuItem(suspend ? "Suspend \(noun)" : "Unsuspend \(noun)") { [weak self] in
-            self?.setSuspended(ids, suspend)
-        })
-        return items
-    }
-
     func reveal(via input: StudyInput) {
         guard case .question(let card) = study else { return }
         studyInput = input
@@ -696,27 +539,8 @@ final class AppModel {
         switch message {
         case .reveal(let input): reveal(via: input)
         case .answer(let rating, let input): answer(rating, via: input)
-        case .open(let path): revealInEditor(path: path)
-        case .select(let ids): update(\.browseSelection, Set(ids))
-        case .count(let count): update(\.browsedCount, count)
-        case .info(let id): showCardInfo(id: id)
-        case .ready, .contextCards: break
+        case .ready: break
         }
-    }
-
-    /// Card lists are only read while a deck, tag or saved view is showing.
-    func loadBrowsed() {
-        guard let collection, isBrowsing else { return }
-        update(\.noteTypesJSON, collection.noteTypesJson())
-        update(\.cardsJSON, collection.cardsJson(scope: .all))
-        cardsStale = false
-        // Suspending or editing cards changes them under the selection.
-        loadSelectedCards()
-    }
-
-    private func loadSelectedCards() {
-        let cards = browseSelection.isEmpty ? [] : collection?.cardsWithIds(ids: Array(browseSelection)) ?? []
-        update(\.selectedCards, cards)
     }
 
     func loadNext() {
@@ -739,72 +563,6 @@ final class AppModel {
     /// The desired retention the app kept for every collection, if it was ever changed.
     private static func savedRetention() -> Float? {
         (UserDefaults.standard.object(forKey: retentionKey) as? Double).map(Float.init)
-    }
-
-    func icon(forTag tag: String) -> String? {
-        tagIcons[tag.lowercased()]
-    }
-
-    /// `nil` removes the icon.
-    func setIcon(_ icon: String?, forTag tag: String) {
-        guard let collection else { return }
-        perform {
-            try collection.setTagIcon(tag: tag, icon: icon)
-            update(\.tagIcons, try collection.tagIcons())
-        }
-    }
-
-    // MARK: Saved views
-
-    /// What's browsed and searched now, as one search to save.
-    var currentQuery: String {
-        let base = switch selection {
-        case .deck(let name): "deck:\"\(name)\""
-        default: browseQuery
-        }
-        return [base, search.trimmingCharacters(in: .whitespaces)].filter { !$0.isEmpty }.joined(separator: " ")
-    }
-
-    /// Opens the sheet to save the current search as a view.
-    func saveCurrentSearch() {
-        editingView = SavedViewDraft(name: search.trimmingCharacters(in: .whitespaces), query: currentQuery)
-    }
-
-    func editSavedView(_ view: SavedView) {
-        editingView = SavedViewDraft(id: view.id, name: view.name, query: view.query, icon: view.icon)
-    }
-
-    /// Adds or updates a view; a new one is then shown, with the search it came from cleared.
-    func commit(_ draft: SavedViewDraft) {
-        guard let collection else { return }
-        perform {
-            if let id = draft.id {
-                try collection.updateSavedView(view: SavedView(id: id, name: draft.name, query: draft.query, icon: draft.icon))
-                update(\.savedViews, try collection.savedViews())
-            } else {
-                let id = try collection.addSavedView(name: draft.name, query: draft.query)
-                update(\.savedViews, try collection.savedViews())
-                selection = .view(id)
-            }
-        }
-    }
-
-    /// `nil` removes the icon.
-    func setIcon(_ icon: String?, for view: SavedView) {
-        guard let collection else { return }
-        perform {
-            try collection.updateSavedView(view: SavedView(id: view.id, name: view.name, query: view.query, icon: icon))
-            update(\.savedViews, try collection.savedViews())
-        }
-    }
-
-    func deleteSavedView(_ view: SavedView) {
-        guard let collection else { return }
-        perform {
-            try collection.deleteSavedView(id: view.id)
-            update(\.savedViews, try collection.savedViews())
-        }
-        if selection == .view(view.id) { selection = .review }
     }
 
     // MARK: Adding cards

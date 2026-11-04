@@ -37,7 +37,7 @@ struct AmgiApp: App {
                     .keyboardShortcut("i", modifiers: [.command, .shift])
                     .disabled(model.folder == nil || model.importing)
             }
-            // The sidebar's first three items, as in Mail and Finder.
+            // The sidebar's items, as in Mail and Finder.
             CommandGroup(before: .sidebar) {
                 Button("Command Palette…") { model.toggleCommandPalette() }
                     .keyboardShortcut("k")
@@ -47,9 +47,6 @@ struct AmgiApp: App {
                     .disabled(model.folder == nil)
                 Button("Review") { model.selection = .review }
                     .keyboardShortcut("2")
-                    .disabled(model.folder == nil)
-                Button("Decks") { model.selection = .cards }
-                    .keyboardShortcut("3")
                     .disabled(model.folder == nil)
                 Divider()
                 // ⌃⌘S as in Finder and Mail.

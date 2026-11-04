@@ -1,17 +1,17 @@
 ---
 title: "Studying"
-description: "Keyboard shortcuts, browsing, adding cards, saved views and search."
+description: "Keyboard shortcuts, scheduling, adding cards and the menu bar."
 ---
 
 Keys while studying: <kbd>Space</kbd> shows the answer, <kbd>1</kbd>–<kbd>4</kbd> rate
 Again/Hard/Good/Easy ([or keys you choose](#changing-the-answer-keys)), <kbd>⌘Z</kbd> takes back the last rating and shows that card again,
 <kbd>R</kbd> replays the card's sounds, <kbd>⌘O</kbd> opens a folder, <kbd>⌘R</kbd> reloads,
-<kbd>⌘1</kbd>–<kbd>⌘3</kbd> go to Dashboard, Review and Decks, and <kbd>⌃⌘S</kbd> shows
+<kbd>⌘1</kbd> and <kbd>⌘2</kbd> go to Dashboard and Review, and <kbd>⌃⌘S</kbd> shows
 or hides the sidebar. Files also reload
 whenever the app comes to the front.
 
-**View ▸ Command Palette** (<kbd>⌘K</kbd>) finds any command, deck, tag or saved view
-as you type: <kbd>↑</kbd> and <kbd>↓</kbd> pick one, <kbd>Return</kbd> runs or opens it
+**View ▸ Command Palette** (<kbd>⌘K</kbd>) finds any command as you type: <kbd>↑</kbd>
+and <kbd>↓</kbd> pick one, <kbd>Return</kbd> runs it
 and <kbd>Esc</kbd> puts the palette away. What you can do with the card on screen comes
 first, with each command's shortcut beside it.
 
@@ -25,13 +25,8 @@ haven't passed since, and **new** cards you haven't studied. Once some reviews a
 [timed](#time-spent-studying), it also says about how long they'll take. Which of these
 the card on screen is shows just above it.
 
-**Review** in the sidebar studies the whole collection. Pick a deck or tag to browse its
-cards in a table: search (<kbd>⌘F</kbd>), sort by any column, and double-click a card to open its file.
-The selected card shows beside the table as it looks when studied; drag the divider to
-resize it, or hide it with **Hide Card** in the toolbar.
-
-For a card from a [note](/card-format#notes-with-fields), the note's fields are listed
-under it, by name, with the empty ones left out.
+**Review** in the sidebar studies the whole collection. To find cards, list them or see
+their history, use the [command line](/cli): `amgi search`, `amgi info` and `amgi stats`.
 
 ## Changing the answer keys
 
@@ -131,36 +126,7 @@ field to copy it into the collection's `media` folder and link it there.
 ## Menu bar
 
 The menu bar shows how many cards are due or being learned. Its menu lists what's left today
-and about how long it will take, the reviews and [time](#time-spent-studying) so far, and each deck with cards to study; pick one to open it, or **Study
-Now** to start reviewing. While it's shown, Amgi keeps running when its window is closed.
+and about how long it will take, and the reviews and [time](#time-spent-studying) so far;
+pick **Study Now** to start reviewing. While it's shown, Amgi keeps running when its window is closed.
 Hide it in **Settings** (<kbd>⌘,</kbd>).
 
-## Saved views
-
-**Saved Views** are searches with a name. Type a search and click **Save Search**
-(the magnifier with a plus, next to the search field) to add one; the deck, tag or view
-you're browsing is part of it. Right-click a view to edit its search, give it an icon or
-delete it. Views are kept in `.amgi.sqlite`. Every collection starts with **Leeches**
-(`is:leech`): cards you have forgotten as many times as the [leech threshold](#leeches)
-or more.
-
-## Searching
-
-Every word in a search must match the card's question, answer, tags or note fields,
-ignoring case and accents. Words can also be filters:
-
-| Search | Finds cards |
-|---|---|
-| `"capital of"` | with that exact phrase |
-| `-paris` | without `paris` (works before any filter, too) |
-| `#verbs`, `#lang*` | tagged `verbs`; with a tag starting with `lang` |
-| `deck:french` | in a deck named `french` or under one, such as `lang/french/words` |
-| `q:paris`, `a:"to go"` | with that text in the question or answer only |
-| `meaning:apple`, `wordmeaning:go` | from a note whose field of that name has the text; leave out spaces in the name |
-| `is:new` `is:due` `is:suspended` `is:leech` `is:cloze` `is:basic` | in that state or of that kind |
-| `is:mature` | next due 21 or more days after its last review, as in Anki |
-| `lapses>3`, `reviews<=5` | compared by count (`<`, `<=`, `>`, `>=`, `=`) |
-| `due<1`, `due<7`, `due<0` | due today; within 7 days; overdue (before today). New cards have no due date |
-| `interval>=7` | next due at least 7 days after its last review. New cards have no interval |
-
-Anything else, such as `12:30`, is searched as text.

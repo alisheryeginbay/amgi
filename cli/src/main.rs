@@ -56,7 +56,7 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
-    /// Find cards with the app's search syntax, such as `deck:french is:due`.
+    /// Find cards, with searches such as `deck:french is:due` or `#verbs lapses>3`.
     Search {
         /// Search words and filters; all must match. Empty lists every card.
         query: Vec<String>,

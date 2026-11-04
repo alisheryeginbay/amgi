@@ -43,18 +43,6 @@ struct MenuBarMenu: View {
                 }
                 .disabled(model.totalLeft == 0)
             }
-            let decks = model.decks.filter { !$0.name.contains("/") && $0.due + $0.learning + $0.new > 0 }
-            if !decks.isEmpty {
-                Section("Decks") {
-                    ForEach(decks, id: \.name) { deck in
-                        Button(deck.title) {
-                            model.selection = .deck(deck.name)
-                            showMainWindow()
-                        }
-                        .badge(Text(counts(due: deck.due, learning: deck.learning, new: deck.new)))
-                    }
-                }
-            }
             if !model.warnings.isEmpty {
                 Section {
                     Text(model.warnings.count == 1 ? "1 problem in the deck files" : "\(model.warnings.count) problems in the deck files")
@@ -82,10 +70,6 @@ struct MenuBarMenu: View {
         let count = reviewed == 1 ? "1 review today" : "\(reviewed) reviews today"
         let secs = model.today.studySecs
         return secs > 0 ? "\(count) · \(formatStudyTime(seconds: secs))" : count
-    }
-
-    private func counts(due: UInt32, learning: UInt32, new: UInt32) -> String {
-        parts(due: due, learning: learning, new: new).joined(separator: ", ")
     }
 
     private func parts(due: UInt32, learning: UInt32, new: UInt32) -> [String] {

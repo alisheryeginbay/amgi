@@ -1,32 +1,23 @@
 import AmgiCore
 import AppKit
 
-/// Something the command palette can do: run an action, or go to a deck, tag or view.
+/// Something the command palette can do.
 struct PaletteCommand {
     let title: String
-    /// What kind of thing it is, shown at the right: "Deck", "Tag", "Study"…
+    /// What kind of thing it is, shown at the right: "Study", "Go To", "Command"…
     let kind: String
-    /// An SF Symbol, or an emoji when the tag or view has one.
-    let icon: Icon
+    /// An SF Symbol.
+    let symbol: String
     /// The keys that do the same, shown as a hint.
     let shortcut: String?
     let action: @MainActor () -> Void
 
-    enum Icon {
-        case symbol(String)
-        case emoji(String)
-    }
-
-    init(_ title: String, kind: String, icon: Icon, shortcut: String? = nil, action: @escaping @MainActor () -> Void) {
+    init(_ title: String, kind: String, symbol: String, shortcut: String? = nil, action: @escaping @MainActor () -> Void) {
         self.title = title
         self.kind = kind
-        self.icon = icon
+        self.symbol = symbol
         self.shortcut = shortcut
         self.action = action
-    }
-
-    init(_ title: String, kind: String, symbol: String, shortcut: String? = nil, action: @escaping @MainActor () -> Void) {
-        self.init(title, kind: kind, icon: .symbol(symbol), shortcut: shortcut, action: action)
     }
 
     /// How well `query` matches, higher being better; nil if it doesn't. Every word of
@@ -75,8 +66,8 @@ struct PaletteCommand {
     }
 }
 
-/// The command palette, opened with ⌘K: type to find any command, deck, tag or saved
-/// view and press Return to run or open it. A floating sheet of Liquid Glass over the
+/// The command palette, opened with ⌘K: type to find any command and press Return to
+/// run it. A floating sheet of Liquid Glass over the
 /// window it was opened from.
 @MainActor
 final class CommandPalette: NSObject, NSWindowDelegate, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
@@ -151,7 +142,7 @@ final class CommandPalette: NSObject, NSWindowDelegate, NSTextFieldDelegate, NST
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 20)
-        field.placeholderString = "Search commands, decks, tags and views"
+        field.placeholderString = "Search commands"
         field.cell?.isScrollable = true
         field.cell?.lineBreakMode = .byTruncatingTail
         field.delegate = self
@@ -363,7 +354,6 @@ private final class PaletteCell: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("PaletteCell")
 
     private let icon = NSImageView()
-    private let emoji = NSTextField(labelWithString: "")
     private let title = NSTextField(labelWithString: "")
     private let kind = NSTextField(labelWithString: "")
     private let shortcut = NSTextField(labelWithString: "")
@@ -372,8 +362,6 @@ private final class PaletteCell: NSTableCellView {
         super.init(frame: .zero)
         identifier = Self.identifier
         icon.symbolConfiguration = .init(pointSize: 14, weight: .regular)
-        emoji.font = .systemFont(ofSize: 14)
-        emoji.alignment = .center
         title.font = .systemFont(ofSize: 14)
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -383,7 +371,7 @@ private final class PaletteCell: NSTableCellView {
             label.setContentCompressionResistancePriority(.required, for: .horizontal)
             label.setContentHuggingPriority(.required, for: .horizontal)
         }
-        for view in [icon, emoji, title, kind, shortcut] as [NSView] {
+        for view in [icon, title, kind, shortcut] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -391,8 +379,6 @@ private final class PaletteCell: NSTableCellView {
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 20),
-            emoji.centerXAnchor.constraint(equalTo: icon.centerXAnchor),
-            emoji.centerYAnchor.constraint(equalTo: centerYAnchor),
             title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
             title.centerYAnchor.constraint(equalTo: centerYAnchor),
             kind.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: 12),
@@ -407,16 +393,7 @@ private final class PaletteCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func show(_ command: PaletteCommand) {
-        switch command.icon {
-        case .symbol(let name):
-            icon.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
-            icon.isHidden = false
-            emoji.isHidden = true
-        case .emoji(let text):
-            emoji.stringValue = text
-            icon.isHidden = true
-            emoji.isHidden = false
-        }
+        icon.image = NSImage(systemSymbolName: command.symbol, accessibilityDescription: nil)
         title.stringValue = command.title
         kind.stringValue = command.kind
         shortcut.stringValue = command.shortcut ?? ""
@@ -444,7 +421,7 @@ private final class PaletteCell: NSTableCellView {
 
 extension AppModel {
     /// What the palette offers now: what can be done where you are first, then going
-    /// elsewhere, then every deck, tag and saved view.
+    /// elsewhere and the app's commands.
     func paletteCommands() -> [PaletteCommand] {
         var commands: [PaletteCommand] = []
         let open = folder != nil
@@ -474,22 +451,6 @@ extension AppModel {
                 self?.undoAnswer()
             })
         }
-        if open, isBrowsing {
-            if let card = selectedBrowseCard {
-                commands.append(PaletteCommand("Edit Card", kind: "Browse", symbol: "square.and.pencil", shortcut: "↩") { [weak self] in
-                    self?.revealInEditor(path: card.path)
-                })
-                commands.append(PaletteCommand("Card Info", kind: "Browse", symbol: "info.circle", shortcut: "⌘I") { [weak self] in
-                    self?.showCardInfo(id: card.id)
-                })
-            }
-            if !currentQuery.isEmpty {
-                commands.append(PaletteCommand("Save Search as View…", kind: "Browse", symbol: "line.3.horizontal.decrease.circle") { [weak self] in
-                    self?.saveCurrentSearch()
-                })
-            }
-        }
-
         if open {
             commands.append(PaletteCommand("Add Card…", kind: "Command", symbol: "plus.rectangle.portrait", shortcut: "⌘N") { [weak self] in
                 self?.toggleQuickAdd()
@@ -500,19 +461,6 @@ extension AppModel {
             commands.append(PaletteCommand("Review", kind: "Go To", symbol: "rectangle.stack", shortcut: "⌘2") { [weak self] in
                 self?.selection = .review
             })
-            commands.append(PaletteCommand("Decks", kind: "Go To", symbol: "rectangle.portrait.on.rectangle.portrait", shortcut: "⌘3") { [weak self] in
-                self?.selection = .cards
-            })
-            if !tags.isEmpty {
-                commands.append(PaletteCommand("Tags", kind: "Go To", symbol: "number") { [weak self] in
-                    self?.selection = .tags
-                })
-            }
-            if !savedViews.isEmpty {
-                commands.append(PaletteCommand("Saved Views", kind: "Go To", symbol: "line.3.horizontal.decrease.circle") { [weak self] in
-                    self?.selection = .views
-                })
-            }
             commands.append(PaletteCommand("Show or Hide Sidebar", kind: "View", symbol: "sidebar.left", shortcut: "⌃⌘S") { [weak self] in
                 self?.toggleSidebar()
             })
@@ -537,26 +485,6 @@ extension AppModel {
         commands.append(PaletteCommand("Keyboard Shortcuts", kind: "Help", symbol: "keyboard", shortcut: "⌘/") { [weak self] in
             self?.openShortcutsWindow()
         })
-
-        guard open else { return commands }
-        for deck in deckNames {
-            let title = deck.title == deckTitle(deck.name) ? deck.name : "\(deck.title) (\(deck.name))"
-            commands.append(PaletteCommand(title, kind: "Deck", symbol: "rectangle.portrait.on.rectangle.portrait") { [weak self] in
-                self?.selection = .deck(deck.name)
-            })
-        }
-        for tag in tags {
-            let icon: PaletteCommand.Icon = icon(forTag: tag.name).map { .emoji($0) } ?? .symbol("number")
-            commands.append(PaletteCommand("#\(tag.name)", kind: "Tag", icon: icon) { [weak self] in
-                self?.selection = .tag(tag.name)
-            })
-        }
-        for view in savedViews {
-            let icon: PaletteCommand.Icon = view.icon.map { .emoji($0) } ?? .symbol("line.3.horizontal.decrease.circle")
-            commands.append(PaletteCommand(view.name, kind: "Saved View", icon: icon) { [weak self] in
-                self?.selection = .view(view.id)
-            })
-        }
         return commands
     }
 }

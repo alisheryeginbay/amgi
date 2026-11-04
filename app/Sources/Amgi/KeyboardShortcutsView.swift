@@ -21,7 +21,7 @@ struct ShortcutGroup: Identifiable {
 
     /// Every shortcut in the app, with the answer keys set in the config file. Keep in
     /// step with the menus, `AppModel`'s key monitor and the page's key handlers in
-    /// `Study.svelte` and `Browse.svelte`.
+    /// `Study.svelte`.
     static func all(answerKeys: AnswerKeys) -> [ShortcutGroup] { [
         ShortcutGroup(title: "General", shortcuts: [
             Shortcut("Command Palette", "⌘", "K"),
@@ -30,7 +30,6 @@ struct ShortcutGroup: Identifiable {
             Shortcut("Import Anki Deck", "⇧", "⌘", "I"),
             Shortcut("Dashboard", "⌘", "1"),
             Shortcut("Review", "⌘", "2"),
-            Shortcut("Decks", "⌘", "3"),
             Shortcut("Show or Hide Sidebar", "⌃", "⌘", "S"),
             Shortcut("Settings", "⌘", ","),
             Shortcut("Keyboard Shortcuts", "⌘", "/"),
@@ -44,14 +43,6 @@ struct ShortcutGroup: Identifiable {
             Shortcut("Undo Answer", "⌘", "Z"),
             Shortcut("Replay Audio", "R"),
             Shortcut("Suspend Card", "⌘", "S"),
-            Shortcut("Card Info", "⌘", "I"),
-        ]),
-        ShortcutGroup(title: "Browse", shortcuts: [
-            Shortcut("Select Next or Previous Card", "↓", "↑"),
-            Shortcut("Extend Selection", "⇧", "↓"),
-            Shortcut("Search Cards", "⌘", "F"),
-            Shortcut("Select All", "⌘", "A"),
-            Shortcut("Edit Card", "Return"),
             Shortcut("Card Info", "⌘", "I"),
         ]),
     ] }
