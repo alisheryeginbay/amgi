@@ -57,6 +57,7 @@ enum Command {
         check: bool,
     },
     /// Find cards, with searches such as `deck:french is:due` or `#verbs lapses>3`.
+    #[command(after_long_help = SEARCH_SYNTAX)]
     Search {
         /// Search words and filters; all must match. Empty lists every card.
         query: Vec<String>,
@@ -110,6 +111,25 @@ enum Command {
         time: bool,
     },
 }
+
+/// `amgi search --help`, after the options.
+const SEARCH_SYNTAX: &str = "\
+Every word must match the card's question, answer, tags or note fields, ignoring case
+and accents. Words can also be filters:
+
+  \"capital of\"              that exact phrase
+  -paris                    without `paris`; works before any filter, too
+  #verbs  #lang*            tagged `verbs`; with a tag starting with `lang`
+  deck:french               in the deck `french` or under it, such as `lang/french/words`
+  q:paris  a:\"to go\"        that text in the question or answer only
+  meaning:apple             a note field of that name has the text; leave out spaces
+  is:new  is:due  is:suspended  is:leech  is:cloze  is:basic  is:mature
+                            in that state or of that kind; mature is 21+ days apart
+  lapses>3  reviews<=5      compared by count: <, <=, >, >=, =
+  due<1  due<7  due<0       due today; within 7 days; overdue. New cards have no due date
+  interval>=7               next due 7+ days after its last review
+
+Anything else, such as 12:30, is searched as text.";
 
 fn main() -> ExitCode {
     // Stop quietly when the reader goes away, as in `amgi search | head`, like other

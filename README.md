@@ -22,9 +22,9 @@ C: The capital of [France] is [Paris|city].
 A collection is a folder of Markdown files, one deck each. Edit them in any editor and
 keep them in git; review history lives beside them in `.amgi.sqlite`.
 
-- Images, sounds, math, code and [notes with fields](https://docs.amgi.study/card-format#notes-with-fields)
-- `amgi` to search, check and see your stats
-- [Import from Anki](https://docs.amgi.study/anki-import), review history included
+- Images, sounds, math, code, and notes with fields that make several cards each
+- `amgi` to search, check and see your stats; `amgi --help` for more
+- Anki decks import with their review history
 
 ## Install
 
@@ -35,8 +35,8 @@ make install                 # Amgi.app in /Applications
 cargo install --path cli     # the amgi command
 ```
 
-Docs are at [docs.amgi.study](https://docs.amgi.study), and the code layout is in
-[CONTRIBUTING.md](CONTRIBUTING.md).
+`examples/` is a sample collection, and [CONTRIBUTING.md](CONTRIBUTING.md) describes the
+code.
 
 ## License
 

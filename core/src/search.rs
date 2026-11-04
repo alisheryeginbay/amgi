@@ -1,5 +1,5 @@
 //! The card search, as `amgi search` and saved views take it. Words must all match;
-//! see `docs/cli.mdx` for the syntax.
+//! `amgi search --help` lists the syntax (`cli/src/main.rs`).
 
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
