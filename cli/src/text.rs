@@ -39,6 +39,38 @@ pub fn weekday(t: i64) -> &'static str {
     ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][local(t).tm_wday.rem_euclid(7) as usize]
 }
 
+/// The day of the week at `t`, local time, Monday being 0.
+pub fn weekday_index(t: i64) -> usize {
+    (local(t).tm_wday + 6).rem_euclid(7) as usize
+}
+
+/// `Jan`, local time.
+pub fn month(t: i64) -> &'static str {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    MONTHS[local(t).tm_mon.rem_euclid(12) as usize]
+}
+
+/// Time spent studying, rounded to what matters at its size: `45 s`, `23 min`,
+/// `1 h 5 min`. The app writes it the same way.
+pub fn study_time(secs: u32) -> String {
+    if secs < 60 {
+        return format!("{secs} s");
+    }
+    let minutes = (secs + 30) / 60;
+    if minutes < 60 {
+        return format!("{minutes} min");
+    }
+    match (minutes / 60, minutes % 60) {
+        (hours, 0) => format!("{hours} h"),
+        (hours, rest) => format!("{hours} h {rest} min"),
+    }
+}
+
+/// Seconds per review: a decimal under ten, `8.4 s`, where whole seconds are too coarse.
+pub fn review_time(secs: f64) -> String {
+    if secs < 9.95 { format!("{secs:.1} s") } else { study_time(secs.round() as u32) }
+}
+
 /// Columns of the terminal on stdout, or `None` when piped.
 pub fn terminal_width() -> Option<usize> {
     // SAFETY: TIOCGWINSZ only writes the `winsize` it's given.
@@ -100,6 +132,19 @@ pub fn sparkline(values: &[u32]) -> String {
         .collect()
 }
 
+/// How dark a day is in the calendar, 0 for none and 1–4 by its quartile among the
+/// days that have any, so one long day doesn't wash out the rest.
+pub fn levels(values: &[u32]) -> Vec<usize> {
+    let mut active: Vec<u32> = values.iter().copied().filter(|&v| v > 0).collect();
+    active.sort_unstable();
+    let bounds: Vec<u32> = if active.is_empty() {
+        vec![]
+    } else {
+        [0.25, 0.5, 0.75].iter().map(|q| active[((active.len() - 1) as f64 * q) as usize]).collect()
+    };
+    values.iter().map(|&v| if v == 0 { 0 } else { 1 + bounds.iter().filter(|&&b| v > b).count() }).collect()
+}
+
 /// A bar `width` columns long when `value` is `max`.
 pub fn bar(value: u32, max: u32, width: usize) -> String {
     let len = (value as usize * width).div_ceil(max.max(1) as usize);
@@ -125,4 +170,25 @@ pub fn size(bytes: u64) -> String {
         }
     }
     unreachable!()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn study_and_review_times() {
+        assert_eq!(study_time(45), "45 s");
+        assert_eq!(study_time(23 * 60 + 10), "23 min");
+        assert_eq!(study_time(3600), "1 h");
+        assert_eq!(study_time(3900), "1 h 5 min");
+        assert_eq!(review_time(8.44), "8.4 s");
+        assert_eq!(review_time(12.4), "12 s");
+    }
+
+    #[test]
+    fn levels_by_quartile() {
+        assert_eq!(levels(&[0, 1, 2, 3, 4, 100]), [0, 1, 1, 2, 3, 4]);
+        assert_eq!(levels(&[0, 0]), [0, 0]);
+    }
 }

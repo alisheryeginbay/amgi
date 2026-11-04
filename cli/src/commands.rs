@@ -53,6 +53,8 @@ pub fn status(c: &CardCollection, out: Output, short: bool) -> Result {
             "new": new,
             "reviewed": today.reviewed,
             "new_studied": today.new_studied,
+            "study_secs": today.study_secs,
+            "secs_left": today.secs_left,
             "decks": decks,
         }));
     }
@@ -63,8 +65,16 @@ pub fn status(c: &CardCollection, out: Output, short: bool) -> Result {
         }
         return Ok(ExitCode::SUCCESS);
     }
+    let about = match today.secs_left {
+        Some(secs) if !left.is_empty() => dim(format!(" · about {}", text::study_time(secs.max(60)))),
+        _ => String::new(),
+    };
     let left = if left.is_empty() { green("All caught up") } else { bold(left) };
-    println!("{left}{}", dim(format!(" · {} today", count(today.reviewed, "review", "reviews"))));
+    let mut done = format!(" · {} today", count(today.reviewed, "review", "reviews"));
+    if today.study_secs > 0 {
+        done += &format!(", {}", text::study_time(today.study_secs));
+    }
+    println!("{left}{about}{}", dim(done));
     let rows: Vec<_> = decks.iter().filter(|d| d.due + d.learning + d.new > 0).collect();
     let name_width = rows.iter().map(|d| width(&d.title)).max().unwrap_or(0);
     for d in rows {
@@ -414,7 +424,7 @@ fn print_info(info: &CardInfo) {
     }
 }
 
-pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>) -> Result {
+pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_time: bool) -> Result {
     let days = days.max(1);
     let scope = match deck.map(|d| d.trim_matches('/')) {
         None => StudyScope::All,
@@ -427,21 +437,49 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>) -> 
             StudyScope::Deck { name: name.to_string() }
         }
     };
-    let dashboard = c.dashboard(scope.clone(), days)?;
+    // At least the 30 days the daily average is taken over.
+    let mut dashboard = c.dashboard(scope.clone(), days.max(30))?;
     let today = c.today(scope.clone())?;
+    let recent = &dashboard.activity_secs[dashboard.activity_secs.len().saturating_sub(30)..];
+    let studied: Vec<u32> = recent.iter().copied().filter(|&s| s > 0).collect();
+    let daily_average = (!studied.is_empty()).then(|| studied.iter().sum::<u32>() / studied.len() as u32);
+    let skip = dashboard.activity.len() - days as usize;
+    dashboard.activity.drain(..skip);
+    dashboard.activity_secs.drain(..skip);
+    dashboard.activity_start += skip as i64 * DAY;
     let deck = match &scope {
         StudyScope::All => None,
         StudyScope::Deck { name } => Some(name.as_str()),
     };
     if out.json {
-        return print_json(&json!({ "deck": deck, "today": today, "dashboard": dashboard }));
+        return print_json(&json!({ "deck": deck, "today": today, "daily_average_secs": daily_average, "dashboard": dashboard }));
     }
     let field = |name: &str, value: String| println!("{}{value}", dim(pad(name, 11)));
     if let Some(deck) = deck {
         field("Deck", bold(deck));
     }
-    field("Today", format!("{}{}", bold(count(today.reviewed, "review", "reviews")), dim(format!(", {} new", today.new_studied))));
+    let mut done = format!(", {} new", today.new_studied);
+    if today.study_secs > 0 {
+        done += &format!(", {}", text::study_time(today.study_secs));
+    }
+    field("Today", format!("{}{}", bold(count(today.reviewed, "review", "reviews")), dim(done)));
     field("Streak", bold(count(dashboard.streak, "day", "days")));
+    // Only once some reviews were timed.
+    let timed = dashboard.secs_per_review.is_some() || dashboard.activity_secs.iter().any(|&s| s > 0);
+    if timed {
+        let left = today.due_available + today.learning + today.new_available;
+        if let Some(secs) = today.secs_left.filter(|_| left > 0) {
+            field("Left", format!("about {}", bold(text::study_time(secs.max(60)))));
+        }
+        let pace = [
+            daily_average.map(|s| format!("{} a day", text::study_time(s))),
+            dashboard.secs_per_review.map(|s| format!("{} a review", text::review_time(s))),
+        ];
+        let pace: Vec<String> = pace.into_iter().flatten().collect();
+        if !pace.is_empty() {
+            field("Pace", format!("{}{}", pace.join(&dim(" · ")), dim(", over the last 30 days")));
+        }
+    }
     let cards = [
         blue(format!("{} new", dashboard.new_cards)),
         format!("{} young", dashboard.young_cards),
@@ -450,20 +488,37 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>) -> 
     ];
     field("Cards", cards.join(&dim(" · ")));
 
-    let total: u32 = dashboard.activity.iter().sum();
-    let studied = dashboard.activity.iter().filter(|&&n| n > 0).count();
+    let (shaded, heading, total) = if by_time {
+        let secs = &dashboard.activity_secs;
+        (secs, "Time", text::study_time(secs.iter().sum()))
+    } else {
+        let reviews = &dashboard.activity;
+        (reviews, "Reviews", reviews.iter().sum::<u32>().to_string())
+    };
+    let days_studied = shaded.iter().filter(|&&n| n > 0).count() as u32;
     println!();
-    println!(
-        "{}{}",
-        bold(format!("Reviews in the last {}", count(days, "day", "days"))),
-        dim(format!(": {total}, on {}", count(studied as u32, "day", "days")))
-    );
-    println!("  {}", blue(sparkline(&dashboard.activity)));
-    // The first day under the line's start, and today under its end when there's room.
-    let start = text::date(dashboard.activity_start);
-    match (days as usize).checked_sub(start.len() + "today".len()) {
-        Some(gap) => println!("  {}", dim(format!("{start}{}today", " ".repeat(gap)))),
-        None => println!("  {}", dim(start)),
+    if days_studied == 0 {
+        let none = if by_time { "No timed reviews" } else { "No reviews" };
+        println!("{}", bold(format!("{none} in the last {}", count(days, "day", "days"))));
+    } else {
+        println!(
+            "{}{}",
+            bold(format!("{heading} in the last {}", count(days, "day", "days"))),
+            dim(format!(": {total}, on {}", count(days_studied, "day", "days")))
+        );
+    }
+    if days_studied > 0 && days <= SPARKLINE_DAYS {
+        println!("  {}", blue(sparkline(shaded)));
+        // The first day under the line's start, and today under its end when there's room.
+        let start = text::date(dashboard.activity_start);
+        match (days as usize).checked_sub(start.len() + "today".len()) {
+            Some(gap) => println!("  {}", dim(format!("{start}{}today", " ".repeat(gap)))),
+            None => println!("  {}", dim(start)),
+        }
+    } else if days_studied > 0 {
+        for line in calendar(shaded, dashboard.activity_start) {
+            println!("  {line}");
+        }
     }
 
     println!();
@@ -496,9 +551,56 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>) -> 
             i => format!("{} {}", text::weekday(now + i as i64 * DAY), &text::date(now + i as i64 * DAY)[5..]),
         };
         let label = if i == 0 { bold(pad(&label, 9)) } else { dim(pad(&label, 9)) };
-        println!("  {label}  {}  {}", figure(*n, 4, |s| s), blue(bar(*n, max, 30)));
+        // Lined up after the longest bar.
+        let bar = bar(*n, max, 30);
+        let line = match dashboard.secs_per_due_card {
+            Some(secs) if *n > 0 => {
+                let time = text::study_time((secs * f64::from(*n)).round() as u32);
+                format!("{}  {}", blue(pad(&bar, 30)), dim(format!("about {time}")))
+            }
+            _ => blue(bar),
+        };
+        println!("  {label}  {}  {line}", figure(*n, 4, |s| s));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Longer stretches of days show as a calendar rather than one line.
+const SPARKLINE_DAYS: u32 = 60;
+
+/// Days as a grid, a column per week and a row per weekday from Monday, like the
+/// contribution graph on GitHub, with month names above.
+fn calendar(values: &[u32], start: i64) -> Vec<String> {
+    const SHADES: [&str; 5] = ["·", "░", "▒", "▓", "█"];
+    let levels = text::levels(values);
+    let first = text::weekday_index(start);
+    let weeks = (first + values.len()).div_ceil(7);
+    let mut months = String::new();
+    let mut last_month = "";
+    for week in 0..weeks {
+        // The week's first day in range.
+        let day = (week * 7).saturating_sub(first);
+        let month = text::month(start + day as i64 * DAY);
+        if month != last_month && width(&months) <= week {
+            months = pad(&months, week) + month;
+        }
+        last_month = month;
+    }
+    let mut lines = vec![format!("    {}", dim(months))];
+    for row in 0..7 {
+        let name = ["Mon", "", "Wed", "", "Fri", "", ""][row];
+        let mut line = format!("{} ", dim(pad(name, 3)));
+        for week in 0..weeks {
+            let cell = (week * 7 + row).checked_sub(first).and_then(|day| levels.get(day));
+            line += &match cell {
+                None => " ".to_string(),
+                Some(0) => dim(SHADES[0]),
+                Some(&level) => blue(SHADES[level]),
+            };
+        }
+        lines.push(line.trim_end().to_string());
+    }
+    lines
 }
 
 fn total_reviews(r: &Retention) -> u32 {

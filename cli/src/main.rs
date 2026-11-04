@@ -100,7 +100,7 @@ enum Command {
         #[arg(long)]
         reviewed: bool,
     },
-    /// Streak, retention, card counts, recent reviews and the coming days' workload.
+    /// Streak, time, retention, card counts, recent reviews and the coming days' workload.
     Stats {
         /// Days of review history to show.
         #[arg(long, default_value_t = 30)]
@@ -108,6 +108,9 @@ enum Command {
         /// Only this deck and its subdecks, such as `lang/french`.
         #[arg(long, short)]
         deck: Option<String>,
+        /// Show the days by time spent rather than reviews.
+        #[arg(long)]
+        time: bool,
     },
 }
 
@@ -133,7 +136,7 @@ fn main() -> ExitCode {
         Command::Info { card } => commands::info(&collection, out, &card.join(" ")),
         Command::Prune { trash } => commands::prune(&collection, out, trash),
         Command::Diff { revs, staged, check, reviewed } => commands::diff(&collection, out, &revs, staged, check, reviewed),
-        Command::Stats { days, deck } => commands::stats(&collection, out, days, deck.as_deref()),
+        Command::Stats { days, deck, time } => commands::stats(&collection, out, days, deck.as_deref(), time),
     };
     match result {
         Ok(code) => code,
