@@ -513,8 +513,8 @@ extension AppModel {
                     self?.selection = .views
                 })
             }
-            commands.append(PaletteCommand("Show or Hide Sidebar", kind: "View", symbol: "sidebar.left", shortcut: "⌃⌘S") {
-                NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
+            commands.append(PaletteCommand("Show or Hide Sidebar", kind: "View", symbol: "sidebar.left", shortcut: "⌃⌘S") { [weak self] in
+                self?.toggleSidebar()
             })
             commands.append(PaletteCommand("Reload Cards", kind: "Command", symbol: "arrow.clockwise", shortcut: "⌘R") { [weak self] in
                 self?.reload()

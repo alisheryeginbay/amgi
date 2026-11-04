@@ -21,8 +21,6 @@ struct AmgiApp: App {
         .windowResizability(.contentSize)
         .commands {
             HelpCommands()
-            // View ▸ Show/Hide Sidebar, with ⌃⌘S as in Finder and Mail.
-            SidebarCommands()
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") { model.chooseFolder() }
                     .keyboardShortcut("o")
@@ -52,6 +50,11 @@ struct AmgiApp: App {
                     .disabled(model.folder == nil)
                 Button("Decks") { model.selection = .cards }
                     .keyboardShortcut("3")
+                    .disabled(model.folder == nil)
+                Divider()
+                // ⌃⌘S as in Finder and Mail.
+                Button(model.sidebarShown ? "Hide Sidebar" : "Show Sidebar") { model.toggleSidebar() }
+                    .keyboardShortcut("s", modifiers: [.control, .command])
                     .disabled(model.folder == nil)
                 Divider()
             }

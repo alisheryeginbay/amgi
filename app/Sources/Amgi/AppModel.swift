@@ -48,6 +48,7 @@ final class AppModel {
     private static let retentionKey = "desiredRetention"
     private static let quickAddShortcutKey = "quickAddShortcut"
     private static let ankiConnectKey = "ankiConnect"
+    private static let sidebarShownKey = "sidebarShown"
     /// The port AnkiConnect listens on, which Yomitan and other tools try by default.
     static let ankiConnectPort: UInt16 = 8765
     /// The range the core accepts.
@@ -106,7 +107,7 @@ final class AppModel {
     var browseSelection: Set<String> = [] {
         didSet { loadSelectedCards() }
     }
-    /// The cards in `browseSelection`, for the toolbar and context menu.
+    /// The cards in `browseSelection`, for the header buttons and context menu.
     private(set) var selectedCards: [BrowseCard] = []
     /// The browse search, as typed.
     var search = ""
@@ -177,6 +178,15 @@ final class AppModel {
         }
     }
 
+    /// Whether the sidebar shows, as it was left last time.
+    var sidebarShown: Bool = UserDefaults.standard.object(forKey: AppModel.sidebarShownKey) as? Bool ?? true {
+        didSet { UserDefaults.standard.set(sidebarShown, forKey: Self.sidebarShownKey) }
+    }
+
+    func toggleSidebar() {
+        sidebarShown.toggle()
+    }
+
     /// Whether ⌥⌘N opens Add Card from any app.
     var quickAddShortcut: Bool = UserDefaults.standard.object(forKey: AppModel.quickAddShortcutKey) as? Bool ?? true {
         didSet {
@@ -240,9 +250,9 @@ final class AppModel {
     let web = WebHost()
     /// CJK fonts for card text, downloaded when the collection first uses them.
     let fonts = FontPacks()
-    /// The toolbar's More button, which its menu opens under.
+    /// The header's More button, which its menu opens under.
     @ObservationIgnored weak var moreMenuAnchor: NSView?
-    /// The browse toolbar's search field, which ⌘F focuses.
+    /// The browse header's search field, which ⌘F focuses.
     @ObservationIgnored weak var searchField: NSSearchField?
     /// Times the card being studied.
     @ObservationIgnored private let timer = StudyTimer()
@@ -592,7 +602,7 @@ final class AppModel {
         setSuspended([card.id], true)
     }
 
-    /// The review toolbar's More menu, opened under its button.
+    /// The review header's More menu, opened under its button.
     func showMoreMenu() {
         guard let card = current else { return }
         let menu = NSMenu()
@@ -620,7 +630,7 @@ final class AppModel {
             let below = NSPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 6 : -6)
             menu.popUp(positioning: nil, at: below, in: view)
         } else {
-            // The button is in the toolbar's overflow menu, so open at the pointer instead.
+            // The button isn't showing, so open at the pointer instead.
             menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         }
     }

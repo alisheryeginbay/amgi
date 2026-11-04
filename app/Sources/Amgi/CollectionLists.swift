@@ -73,6 +73,8 @@ private struct LinkList<Data: RandomAccessCollection, ID: Hashable, Row: View>: 
                 ForEach(data, id: id, content: row)
             }
             .padding(10)
+            // Clears the fade under the header.
+            .padding(.top, 8)
         }
     }
 }

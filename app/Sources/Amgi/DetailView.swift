@@ -5,8 +5,8 @@ import SwiftUI
 /// Whether browsing shows the selected card beside the table.
 private let browsePreviewKey = "browsePreview"
 
-/// The detail column: the shared web view for every pane, under native titles and
-/// toolbar items, with the glass answer buttons floating over study cards.
+/// The detail panel: a header with the title and buttons, over the shared web view for
+/// every pane, with the glass answer buttons floating over study cards.
 struct DetailView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(autoplaySoundsKey) private var autoplay = true
@@ -14,16 +14,36 @@ struct DetailView: View {
     @AppStorage(browsePreviewKey) private var preview = true
 
     var body: some View {
-        Group {
-            switch model.selection {
-            case .tags: TagList()
-            case .views: SavedViewList()
-            default: web
+        ZStack(alignment: .top) {
+            Group {
+                switch model.selection {
+                case .tags: TagList()
+                case .views: SavedViewList()
+                default: web
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Content scrolled up fades out under the header rather than being cut off,
+            // over the same band as the sidebar's rows, just under the traffic lights.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: fades ? 10 : 0)
+                    Color.black
+                }
+            }
+            .padding(.top, fades ? titlebarDepth - panelInset : headerHeight)
+            DetailHeader(title: title, subtitle: subtitle)
         }
-        .navigationTitle(title)
-        .navigationSubtitle(subtitle)
-        .toolbar { DetailToolbar() }
+    }
+
+    /// Browsing doesn't fade: rows scroll under the table's own column headers, which
+    /// would fade too, so the table starts below the header.
+    private var fades: Bool {
+        switch model.selection {
+        case .cards, .deck, .tag, .view: false
+        case .dashboard, .review, .tags, .views: true
+        }
     }
 
     private var web: some View {
@@ -71,82 +91,125 @@ struct DetailView: View {
     }
 }
 
-private struct DetailToolbar: ToolbarContent {
+/// How far the panel is inset from the window's edges.
+let panelInset: CGFloat = 8
+
+/// The panel's header, which centers on the traffic lights as the panel starts lower.
+private let headerHeight = (titlebarHeight / 2 - panelInset) * 2
+
+/// The title and subtitle on one line, then the pane's buttons, level with the traffic lights.
+private struct DetailHeader: View {
     @Environment(AppModel.self) private var model
     @AppStorage(browsePreviewKey) private var preview = true
-    var body: some ToolbarContent {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            // One line, as the traffic lights beside it are: the subtitle follows the
+            // title, and gives way first when space runs short.
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.themeText)
+                    .layoutPriority(1)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.themeSecondaryText)
+                }
+            }
+            .lineLimit(1)
+            .padding(.trailing, 12)
+            Spacer(minLength: 0)
+            buttons
+        }
+        // Clears the traffic lights and sidebar button, which sit over the panel when
+        // the sidebar is hidden.
+        .padding(.leading, model.sidebarShown ? 16 : 124)
+        .padding(.trailing, 10)
+        .frame(height: headerHeight)
+        .windowDragArea()
+        .animation(.smooth(duration: 0.25), value: model.sidebarShown)
+    }
+
+    @ViewBuilder private var buttons: some View {
         switch model.selection {
         case .review:
             if let card = model.current {
                 if card.hasSounds {
-                    ToolbarItem {
-                        Button {
-                            model.web.command("replay")
-                        } label: {
-                            Label("Replay Audio", systemImage: "speaker.wave.2")
-                        }
-                        .help("Replay Audio (R)")
+                    HeaderButton("Replay Audio", systemImage: "speaker.wave.2", help: "Replay Audio (R)") {
+                        model.web.command("replay")
                     }
                 }
-                ToolbarItem {
-                    // ⌘S is caught by `AppModel`, so it works from any focus.
-                    Button {
-                        model.showMoreMenu()
-                    } label: {
-                        Label("More", systemImage: "ellipsis")
-                    }
-                    .background(MenuAnchorView { model.moreMenuAnchor = $0 })
-                    .help("More")
+                // ⌘S is caught by `AppModel`, so it works from any focus.
+                HeaderButton("More", systemImage: "ellipsis", help: "More") {
+                    model.showMoreMenu()
                 }
-                ToolbarItem {
-                    Button {
-                        model.revealInEditor(path: card.path)
-                    } label: {
-                        Label("Edit Card", systemImage: "pencil")
-                    }
-                    .help("Open \(card.path), line \(card.line)")
+                .background(MenuAnchorView { model.moreMenuAnchor = $0 })
+                HeaderButton("Edit Card", systemImage: "pencil", help: "Open \(card.path), line \(card.line)") {
+                    model.revealInEditor(path: card.path)
                 }
             }
         case .cards, .deck, .tag, .view:
-            ToolbarItem {
-                let card = model.selectedBrowseCard
-                Button {
-                    if let card { model.revealInEditor(path: card.path) }
-                } label: {
-                    Label("Edit Card", systemImage: "pencil")
-                }
-                .disabled(card == nil)
-                .help(card.map { "Open \($0.path), line \($0.line)" } ?? "Edit Card")
+            @Bindable var model = model
+            SearchField(text: $model.search, prompt: "Search Cards") { model.searchField = $0 }
+                .frame(width: 200)
+            HeaderButton("Save Search", systemImage: "plus.magnifyingglass", help: "Save Search: add it to Saved Views in the sidebar") {
+                model.saveCurrentSearch()
             }
-            ToolbarItem {
-                Button {
-                    preview.toggle()
-                } label: {
-                    Label(preview ? "Hide Card" : "Show Card", systemImage: "rectangle.righthalf.inset.filled")
-                }
-                .help(preview ? "Hide the selected card" : "Show the selected card beside the table")
+            .disabled(model.search.trimmingCharacters(in: .whitespaces).isEmpty)
+            let card = model.selectedBrowseCard
+            HeaderButton("Edit Card", systemImage: "pencil", help: card.map { "Open \($0.path), line \($0.line)" } ?? "Edit Card") {
+                if let card { model.revealInEditor(path: card.path) }
             }
-            ToolbarItem(placement: .navigation) {
-                @Bindable var model = model
-                SearchField(text: $model.search, prompt: "Search Cards") { model.searchField = $0 }
-                    .frame(width: 200)
-            }
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    model.saveCurrentSearch()
-                } label: {
-                    Label("Save Search", systemImage: "plus.magnifyingglass")
-                }
-                .disabled(model.search.trimmingCharacters(in: .whitespaces).isEmpty)
-                .help("Save Search: add it to Saved Views in the sidebar")
+            .disabled(card == nil)
+            HeaderButton(
+                preview ? "Hide Card" : "Show Card",
+                systemImage: "rectangle.righthalf.inset.filled",
+                help: preview ? "Hide the selected card" : "Show the selected card beside the table"
+            ) {
+                preview.toggle()
             }
         case .dashboard, .tags, .views:
-            ToolbarItem { EmptyView() }
+            EmptyView()
         }
     }
 }
 
-/// Hands over a toolbar button's own view, for a popup menu to open under.
+/// A plain icon button for the header, shaded under the pointer.
+private struct HeaderButton: View {
+    let title: String
+    let systemImage: String
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    init(_ title: String, systemImage: String, help: String, action: @escaping () -> Void) {
+        self.title = title
+        self.systemImage = systemImage
+        self.help = help
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14))
+                .foregroundStyle(isEnabled ? (hovering ? .themeText : .themeSecondaryText) : .themeTertiaryText)
+                .frame(width: 28, height: 28)
+                .background(Color(nsColor: Theme.fill).opacity(hovering && isEnabled ? 1 : 0), in: .rect(cornerRadius: 6))
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .help(help)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Hands over a header button's own view, for a popup menu to open under.
 private struct MenuAnchorView: NSViewRepresentable {
     let onView: (NSView) -> Void
 
@@ -161,7 +224,7 @@ private struct MenuAnchorView: NSViewRepresentable {
     }
 }
 
-/// The toolbar search field. A native one, because `searchable` would show on every pane.
+/// The header's search field. A native one, because `searchable` would show on every pane.
 private struct SearchField: NSViewRepresentable {
     @Binding var text: String
     let prompt: String

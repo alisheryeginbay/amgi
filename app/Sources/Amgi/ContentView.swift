@@ -1,4 +1,5 @@
 import AmgiCore
+import AppKit
 import SwiftUI
 import WebKit
 
@@ -16,17 +17,13 @@ struct ContentView: View {
                     // macOS's Move & Resize > Center is off for windows of a fixed size.
                     .background(CenterWindow())
             } else {
-                NavigationSplitView {
-                    Sidebar()
-                        .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
-                } detail: {
-                    DetailView()
-                }
+                CollectionLayout()
                 .frame(minWidth: CollectionWindowFrame.minSize.width, minHeight: CollectionWindowFrame.minSize.height)
                 // The welcome screen's window is small, so take back the size last used here.
                 .background(CollectionWindowFrame())
             }
         }
+        .background(WindowChrome())
         .onAppear {
             model.openCardInfoWindow = { [openWindow] in openWindow(id: "card-info") }
             model.openShortcutsWindow = { [openWindow] in openWindow(id: "keyboard-shortcuts") }
@@ -73,8 +70,6 @@ private struct WelcomeView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .toolbar(removing: .title)
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     }
 }
 
@@ -180,209 +175,208 @@ private struct CollectionWindowFrame: NSViewRepresentable {
     }
 }
 
+/// The sidebar beside the detail panel, which is inset from the window's edges with
+/// rounded corners. Both reach up into the title bar.
+private struct CollectionLayout: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage("sidebarWidth") private var sidebarWidth = 220.0
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if model.sidebarShown {
+                Sidebar()
+                    .frame(width: sidebarWidth)
+                    .overlay(alignment: .trailing) { SidebarResizer(width: $sidebarWidth) }
+                    .transition(.move(edge: .leading))
+            }
+            DetailView()
+                .background(Color(nsColor: Theme.panel))
+                .clipShape(.rect(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color(nsColor: Theme.separator))
+                }
+                .padding(.leading, model.sidebarShown ? 0 : panelInset)
+                .padding([.top, .bottom, .trailing], panelInset)
+        }
+        .animation(.smooth(duration: 0.25), value: model.sidebarShown)
+        .ignoresSafeArea()
+        // The sidebar and the gaps around the panel.
+        .background(Color(nsColor: Theme.sidebar).ignoresSafeArea())
+        .background(TitlebarSidebarToggle(toggle: model.toggleSidebar))
+    }
+}
+
+/// Drags the sidebar's edge to resize it.
+private struct SidebarResizer: View {
+    @Binding var width: Double
+    @State private var start: Double?
+
+    var body: some View {
+        Color.clear
+            .frame(width: 8)
+            .contentShape(.rect)
+            .pointerStyle(.frameResize(position: .trailing))
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { drag in
+                        let start = start ?? width
+                        self.start = start
+                        width = min(max(start + drag.translation.width, 190), 320)
+                    }
+                    .onEnded { _ in start = nil }
+            )
+    }
+}
+
+/// Lets the content fill the whole window under a clear title bar, and moves the
+/// traffic lights down level with the panel's header. An empty toolbar would lower them
+/// too, but its edge shows as a line across the window while it's inactive.
+private struct WindowChrome: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { ChromeView() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class ChromeView: NSView {
+        private var observers: [NSObjectProtocol] = []
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, let close = window.standardWindowButton(.closeButton),
+                  let titlebar = close.superview, let container = titlebar.superview
+            else { return }
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.titlebarSeparatorStyle = .none
+            // AppKit puts the buttons back whenever it lays out the title bar.
+            let center = NotificationCenter.default
+            observers = [close, titlebar, container].map { view in
+                view.postsFrameChangedNotifications = true
+                return center.addObserver(forName: NSView.frameDidChangeNotification, object: view, queue: .main) { [weak window] _ in
+                    MainActor.assumeIsolated { window?.placeTitlebarButtons() }
+                }
+            }
+            observers += [NSWindow.didResizeNotification, NSWindow.didExitFullScreenNotification].map { name in
+                center.addObserver(forName: name, object: window, queue: .main) { [weak window] _ in
+                    MainActor.assumeIsolated { window?.placeTitlebarButtons() }
+                }
+            }
+            window.placeTitlebarButtons()
+        }
+    }
+}
+
+extension NSWindow {
+    /// The sidebar button placed after the traffic lights, if any.
+    static let sidebarToggleIdentifier = NSUserInterfaceItemIdentifier("sidebarToggle")
+
+    /// Centers the traffic lights on the sidebar's top row, as with a toolbar, with the
+    /// sidebar button after them. Again once AppKit
+    /// is done laying out, as some changes, such as the title, move them after this.
+    func placeTitlebarButtons() {
+        placeTitlebarButtonsNow()
+        DispatchQueue.main.async { [weak self] in self?.placeTitlebarButtonsNow() }
+    }
+
+    private func placeTitlebarButtonsNow() {
+        guard !styleMask.contains(.fullScreen),
+              let close = standardWindowButton(.closeButton), let titlebar = close.superview,
+              let container = titlebar.superview
+        else { return }
+        // Only as tall as its buttons need, centered on the header row: scroll views
+        // reaching under the title bar get a hard edge from AppKit.
+        let height = titlebarDepth
+        let frame = NSRect(x: 0, y: self.frame.height - height, width: self.frame.width, height: height)
+        if container.frame != frame { container.frame = frame }
+        if titlebar.frame != container.bounds { titlebar.frame = container.bounds }
+        /// The origin that centers a view of this height on the header row.
+        func y(_ viewHeight: CGFloat) -> CGFloat {
+            let top = (titlebarHeight / 2 - viewHeight / 2).rounded()
+            return titlebar.isFlipped ? top : height - top - viewHeight
+        }
+        var x: CGFloat = 19
+        for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            guard let button = standardWindowButton(type) else { continue }
+            let origin = NSPoint(x: x, y: y(button.frame.height))
+            if button.frame.origin != origin { button.setFrameOrigin(origin) }
+            x = button.frame.maxX + 9
+        }
+        if let toggle = titlebar.subviews.first(where: { $0.identifier == Self.sidebarToggleIdentifier }) {
+            let size = toggle.fittingSize
+            let origin = NSPoint(x: x - 9 + 18, y: y(size.height))
+            if toggle.frame != NSRect(origin: origin, size: size) { toggle.frame = NSRect(origin: origin, size: size) }
+        }
+    }
+}
+
+/// Shows or hides the sidebar from a plain icon just after the traffic lights, which
+/// stays put whether the sidebar is shown or not.
+private struct TitlebarSidebarToggle: NSViewRepresentable {
+    let toggle: () -> Void
+
+    func makeNSView(context: Context) -> NSView { HostView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        (view as? HostView)?.button.onClick = toggle
+    }
+
+    private final class HostView: NSView {
+        let button = ToggleButton()
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            button.removeFromSuperview()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, let titlebar = window.standardWindowButton(.zoomButton)?.superview else { return }
+            button.identifier = NSWindow.sidebarToggleIdentifier
+            titlebar.addSubview(button)
+            window.placeTitlebarButtons()
+        }
+    }
+
+    /// Secondary until hovered, like the icons beside it in Finder's title bar.
+    private final class ToggleButton: NSButton {
+        var onClick: () -> Void = {}
+
+        init() {
+            super.init(frame: .zero)
+            let symbol = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Show or Hide Sidebar")
+            image = symbol?.withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
+            imagePosition = .imageOnly
+            isBordered = false
+            contentTintColor = Theme.secondaryText
+            toolTip = "Show or Hide Sidebar (⌃⌘S)"
+            target = self
+            action = #selector(click)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+        @objc private func click() { onClick() }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        }
+
+        override func mouseEntered(with event: NSEvent) { contentTintColor = Theme.text }
+        override func mouseExited(with event: NSEvent) { contentTintColor = Theme.secondaryText }
+    }
+}
+
 /// Only for show: clicks, selection and its context menu pass through to the window.
 private final class PassiveWebView: WKWebView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-private struct Sidebar: View {
-    @Environment(AppModel.self) private var model
-    @State private var showingWarnings = false
-    @State private var expanded: Set<String> = []
-    @AppStorage("cardsExpanded") private var cardsExpanded = true
-    @AppStorage("decksExpanded") private var decksExpanded = true
-    @AppStorage("tagsExpanded") private var tagsExpanded = true
-    @AppStorage("viewsExpanded") private var viewsExpanded = true
-
-    private var hasCards: Bool {
-        !model.deckNames.isEmpty || !model.savedViews.isEmpty || !model.tags.isEmpty
-    }
-
-    var body: some View {
-        @Bindable var model = model
-        List(selection: $model.selection) {
-            Label("Dashboard", systemImage: "chart.bar.xaxis")
-                .tag(SidebarItem.dashboard)
-            Section("Review") {
-                ReviewRow()
-                    .tag(SidebarItem.review)
-            }
-            // Sections collapse from the chevron shown when hovering the header.
-            if hasCards {
-                Section("Cards", isExpanded: $cardsExpanded) {
-                    if !model.deckNames.isEmpty {
-                        DisclosureGroup(isExpanded: $decksExpanded) {
-                            ForEach(DeckNode.tree(decks: model.deckNames)) { node in
-                                DeckTree(node: node, expanded: $expanded)
-                            }
-                        } label: {
-                            Label("Decks", systemImage: "rectangle.portrait.on.rectangle.portrait")
-                                .tag(SidebarItem.cards)
-                        }
-                    }
-                    if !model.savedViews.isEmpty {
-                        DisclosureGroup(isExpanded: $viewsExpanded) {
-                            ForEach(model.savedViews, id: \.id) { view in
-                                SavedViewRow(view: view)
-                            }
-                        } label: {
-                            Label("Saved Views", systemImage: "line.3.horizontal.decrease.circle")
-                                .tag(SidebarItem.views)
-                        }
-                    }
-                    if !model.tags.isEmpty {
-                        DisclosureGroup(isExpanded: $tagsExpanded) {
-                            ForEach(model.tags, id: \.name) { tag in
-                                TagRow(tag: tag.name)
-                            }
-                        } label: {
-                            Label("Tags", systemImage: "number")
-                                .tag(SidebarItem.tags)
-                        }
-                    }
-                }
-            }
-        }
-        // The scroll bar appearing re-tiles the list and cancels its expand and collapse
-        // animations, so the sidebar scrolls without one.
-        .scrollIndicators(.never)
-        .toolbar {
-            if !model.warnings.isEmpty {
-                ToolbarItem {
-                    Button {
-                        showingWarnings.toggle()
-                    } label: {
-                        Label("Warnings", systemImage: "exclamationmark.triangle")
-                    }
-                    .help("\(model.warnings.count) problems found while reading cards")
-                    .popover(isPresented: $showingWarnings, arrowEdge: .bottom) { WarningList() }
-                }
-            }
-        }
-    }
-}
-
-// Rows that show counts read them in views of their own, so an answer re-renders those
-// rows rather than the whole list.
-
-private struct ReviewRow: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        Label(model.folder?.lastPathComponent ?? "All Cards", systemImage: "rectangle.stack")
-            .lineLimit(1)
-            .badge(Int(model.totalDueAndLearning))
-    }
-}
-
-/// A deck in the sidebar: a deck file, a folder, or both (`lang.md` and `lang/`).
-private struct DeckNode: Identifiable {
-    let id: String
-    let title: String
-    let children: [DeckNode]
-
-    /// The top-level decks.
-    static func tree(decks: [DeckName]) -> [DeckNode] {
-        // `decks` lists parents before children, so grouping keeps file order.
-        let byParent = Dictionary(grouping: decks) { deck in
-            deck.name.split(separator: "/").dropLast().joined(separator: "/")
-        }
-        func children(of parent: String) -> [DeckNode] {
-            (byParent[parent] ?? []).map { deck in
-                DeckNode(id: deck.name, title: deck.title, children: children(of: deck.name))
-            }
-        }
-        return children(of: "")
-    }
-}
-
-private struct DeckTree: View {
-    let node: DeckNode
-    @Binding var expanded: Set<String>
-
-    var body: some View {
-        if node.children.isEmpty {
-            row
-        } else {
-            DisclosureGroup(isExpanded: isExpanded) {
-                ForEach(node.children) { child in
-                    DeckTree(node: child, expanded: $expanded)
-                }
-            } label: {
-                row
-            }
-        }
-    }
-
-    private var row: some View {
-        Label(node.title, systemImage: node.children.isEmpty ? "rectangle.portrait.on.rectangle.portrait" : "folder")
-            .lineLimit(1)
-            .tag(SidebarItem.deck(node.id))
-    }
-
-    private var isExpanded: Binding<Bool> {
-        Binding(
-            get: { expanded.contains(node.id) },
-            set: { open in
-                if open { expanded.insert(node.id) } else { expanded.remove(node.id) }
-            }
-        )
-    }
-}
-
-private struct TagRow: View {
-    @Environment(AppModel.self) private var model
-    let tag: String
-    @State private var choosingIcon = false
-
-    var body: some View {
-        let icon = model.icon(forTag: tag)
-        Label {
-            Text(tag)
-        } icon: {
-            if let icon { Text(icon) } else { Image(systemName: "number") }
-        }
-        .lineLimit(1)
-        .tag(SidebarItem.tag(tag))
-        .contextMenu {
-            Button("Choose Icon…") { choosingIcon = true }
-            if icon != nil {
-                Button("Remove Icon") { model.setIcon(nil, forTag: tag) }
-            }
-        }
-        .popover(isPresented: $choosingIcon, arrowEdge: .trailing) {
-            EmojiPicker(current: icon) { model.setIcon($0, forTag: tag) }
-        }
-    }
-}
-
-private struct SavedViewRow: View {
-    @Environment(AppModel.self) private var model
-    let view: SavedView
-    @State private var choosingIcon = false
-
-    var body: some View {
-        Label {
-            Text(view.name)
-        } icon: {
-            if let icon = view.icon { Text(icon) } else { Image(systemName: "line.3.horizontal.decrease.circle") }
-        }
-        .lineLimit(1)
-        .help(view.query)
-        .tag(SidebarItem.view(view.id))
-        .contextMenu {
-            Button("Edit View…") { model.editSavedView(view) }
-            Button("Choose Icon…") { choosingIcon = true }
-            if view.icon != nil {
-                Button("Remove Icon") { model.setIcon(nil, for: view) }
-            }
-            Divider()
-            Button("Delete View") { model.deleteSavedView(view) }
-        }
-        .popover(isPresented: $choosingIcon, arrowEdge: .trailing) {
-            EmojiPicker(current: view.icon) { model.setIcon($0, for: view) }
-        }
-    }
 }
 
 /// Names a saved view and its search.
@@ -423,22 +417,5 @@ private struct SavedViewEditor: View {
         }
         .padding(20)
         .frame(width: 400)
-    }
-}
-
-private struct WarningList: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        List(Array(model.warnings.enumerated()), id: \.offset) { _, warning in
-            VStack(alignment: .leading, spacing: 2) {
-                Text(warning.message)
-                Text("\(warning.path):\(warning.line)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .frame(width: 360, height: 220)
     }
 }

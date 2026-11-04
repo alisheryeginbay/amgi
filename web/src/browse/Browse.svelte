@@ -535,7 +535,7 @@
 
   /* Suspended cards stay listed, tinted yellow as out of rotation. */
   .row.suspended:not(.selected) {
-    background: color-mix(in srgb, var(--yellow) 28%, transparent);
+    background: var(--yellow-background);
   }
 
   .row.context {

@@ -1,22 +1,23 @@
-/* Colors follow the system: WebKit on macOS exposes AppKit's semantic colors, so the
-   panes match the native sidebar in light and dark mode and with any accent color.
-   The fallbacks are for opening the page in another browser while developing. */
+/* Plain neutral grays, a step softer than the system's, with the Mac's own accent
+   color, as in the native sidebar (`app/Sources/Amgi/Theme.swift`). */
 :root {
   color-scheme: light dark;
-  --label: #000000d9;
-  --secondary-label: #00000080;
-  --tertiary-label: #00000040;
-  --quaternary-label: #0000001a;
-  --separator: #0000001a;
+  --label: #2b2b2b;
+  --secondary-label: #7a7a7a;
+  --tertiary-label: #b5b5b5;
+  --quaternary-label: #e3e3e3;
+  --separator: #e3e3e3;
   --accent: #0a84ff;
-  --yellow: #ffcc00;
-  --blue: #007aff;
-  --red: #ff3b30;
-  --green: #28cd41;
-  --selected-row: #0064e1;
-  --unfocused-selected-row: #dcdcdc;
-  --selected-text: #ffffff;
-  --text-background: #ffffff;
+  /* Answer colors, muted to sit with the grays. */
+  --yellow: #a67c00;
+  --blue: #3b62a8;
+  --red: #c24236;
+  --green: #4f7a43;
+  --yellow-background: #f5efd9;
+  --selected-row: #e2e2e2;
+  --unfocused-selected-row: #ebebeb;
+  --selected-text: #2b2b2b;
+  --text-background: #fcfcfc;
   --fill: color-mix(in srgb, var(--label) 7%, transparent);
   --fill-strong: color-mix(in srgb, var(--label) 11%, transparent);
   --tile: color-mix(in srgb, var(--label) 4%, transparent);
@@ -62,38 +63,28 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --label: #ffffffd9;
-    --secondary-label: #ffffff8c;
-    --tertiary-label: #ffffff40;
-    --quaternary-label: #ffffff1a;
-    --separator: #ffffff1a;
-    --yellow: #ffd60a;
-    --blue: #0a84ff;
-    --red: #ff453a;
-    --green: #32d74b;
-    --unfocused-selected-row: #464646;
-    --text-background: #1e1e1e;
-    --card-background: #2c2c2e;
+    --label: #d8d8d8;
+    --secondary-label: #8c8c8c;
+    --tertiary-label: #5c5c5c;
+    --quaternary-label: #333333;
+    --separator: #333333;
+    --yellow: #d0a93f;
+    --blue: #7fa2dc;
+    --red: #e06a5e;
+    --green: #84b077;
+    --yellow-background: #383220;
+    --selected-row: #383838;
+    --unfocused-selected-row: #2b2b2b;
+    --selected-text: #d8d8d8;
+    --text-background: #212121;
+    --card-background: #272727;
     --card-shadow: 0 0 0 0.5px #ffffff14, 0 1px 2px #00000033, 0 8px 24px #00000040;
   }
 }
 
-@supports (color: -apple-system-label) {
+@supports (color: -apple-system-control-accent) {
   :root {
-    --label: -apple-system-label;
-    --secondary-label: -apple-system-secondary-label;
-    --tertiary-label: -apple-system-tertiary-label;
-    --quaternary-label: -apple-system-quaternary-label;
-    --separator: -apple-system-separator;
     --accent: -apple-system-control-accent;
-    --yellow: -apple-system-yellow;
-    --blue: -apple-system-blue;
-    --red: -apple-system-red;
-    --green: -apple-system-green;
-    --selected-row: -apple-system-selected-content-background;
-    --unfocused-selected-row: -apple-system-unemphasized-selected-content-background;
-    --selected-text: -apple-system-alternate-selected-text;
-    --text-background: -apple-system-text-background;
   }
 }
 
@@ -108,7 +99,7 @@ body,
   margin: 0;
 }
 
-/* The web view is transparent, so the window's own background shows through. */
+/* The web view is transparent, so the panel's background shows through. */
 body {
   background: transparent;
   color: var(--label);
