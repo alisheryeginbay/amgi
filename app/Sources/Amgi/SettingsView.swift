@@ -113,7 +113,7 @@ private struct StudySettings: View {
                 }
             } label: {
                 Text("Leech threshold")
-                Text("Forgetting a card this many times makes it a leech, noted while you study and listed in the Leeches view. 8 suits most people.")
+                Text("Forgetting a card this many times makes it a leech, noted while you study and listed by `amgi search is:leech`. 8 suits most people.")
             }
             Toggle(isOn: $model.suspendsLeeches) {
                 Text("Suspend leeches")

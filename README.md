@@ -53,12 +53,7 @@ note-types/
 
 ## What it does
 
-<table>
-  <tr>
-    <td width="50%"><img src="media/screenshots/math.webp" alt="A card with the chain rule typeset as math" /></td>
-    <td width="50%"><img src="media/screenshots/dashboard.webp" alt="The dashboard: due and reviewed counts, a streak, a year of activity, cards due over the next two weeks and retention" /></td>
-  </tr>
-</table>
+<img src="media/screenshots/math.webp" alt="A card with the chain rule typeset as math" />
 
 - **Rich cards:** images, sounds, TeX math, code highlighted in 200+ languages, and
   [notes with fields](https://docs.amgi.study/card-format#notes-with-fields) that make
@@ -67,14 +62,14 @@ note-types/
 - **Bring your Anki decks:** `.apkg` and `.colpkg` files become Markdown with their media
   and review history, and an [AnkiConnect](https://docs.amgi.study/yomitan) server lets
   Yomitan and other Anki tools add cards.
-- **A command line:** `amgi status`, `check`, `stats`, `search` with
-  `deck:french #verbs is:due` or `lapses>3`, and `diff` to list the cards added, changed
-  and removed since a git commit.
+- **A command line:** `amgi status`, `check`, `stats` with a year of activity, retention
+  and the coming workload, `search` with `deck:french #verbs is:due` or `lapses>3`, and
+  `diff` to list the cards added, changed and removed since a git commit.
 
 ## Install
 
 Amgi is early and changing quickly, so there are no downloads for now: build it from
-source. It's a Rust core with a SwiftUI app and Svelte panes in a web view, and needs
+source. It's a Rust core with a SwiftUI app and a Svelte page in a web view, and needs
 macOS 26 on Apple Silicon, Xcode, Rust and [Bun](https://bun.sh).
 
 ```sh
@@ -96,8 +91,7 @@ The full docs are at [docs.amgi.study](https://docs.amgi.study).
 
 ## License
 
-[MIT](LICENSE). The fonts (Source Serif 4, Brygada 1918 and Noto Serif CJK) are
-under the [SIL Open Font License](https://openfontlicense.org), and the emoji names
-come from GitHub's [gemoji](https://github.com/github/gemoji) (MIT).
+[MIT](LICENSE). The fonts (Source Serif 4 and Noto Serif CJK) are
+under the [SIL Open Font License](https://openfontlicense.org).
 
 *Amgi* (암기) is Korean for memorization.

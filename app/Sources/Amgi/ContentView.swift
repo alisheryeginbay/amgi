@@ -17,10 +17,13 @@ struct ContentView: View {
                     // macOS's Move & Resize > Center is off for windows of a fixed size.
                     .background(CenterWindow())
             } else {
-                CollectionLayout()
-                .frame(minWidth: CollectionWindowFrame.minSize.width, minHeight: CollectionWindowFrame.minSize.height)
-                // The welcome screen's window is small, so take back the size last used here.
-                .background(CollectionWindowFrame())
+                // Fills the window, up under its clear title bar.
+                ReviewView()
+                    .frame(minWidth: CollectionWindowFrame.minSize.width, minHeight: CollectionWindowFrame.minSize.height)
+                    .ignoresSafeArea()
+                    .background(Color(nsColor: Theme.panel).ignoresSafeArea())
+                    // The welcome screen's window is small, so take back the size last used here.
+                    .background(CollectionWindowFrame())
             }
         }
         .background(WindowChrome())
@@ -171,63 +174,9 @@ private struct CollectionWindowFrame: NSViewRepresentable {
     }
 }
 
-/// The sidebar beside the detail panel, which is inset from the window's edges with
-/// rounded corners. Both reach up into the title bar.
-private struct CollectionLayout: View {
-    @Environment(AppModel.self) private var model
-    @AppStorage("sidebarWidth") private var sidebarWidth = 220.0
-
-    var body: some View {
-        HStack(spacing: 0) {
-            if model.sidebarShown {
-                Sidebar()
-                    .frame(width: sidebarWidth)
-                    .overlay(alignment: .trailing) { SidebarResizer(width: $sidebarWidth) }
-                    .transition(.move(edge: .leading))
-            }
-            DetailView()
-                .background(Color(nsColor: Theme.panel))
-                .clipShape(.rect(cornerRadius: 12, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color(nsColor: Theme.separator))
-                }
-                .padding(.leading, model.sidebarShown ? 0 : panelInset)
-                .padding([.top, .bottom, .trailing], panelInset)
-        }
-        .animation(.smooth(duration: 0.25), value: model.sidebarShown)
-        .ignoresSafeArea()
-        // The sidebar and the gaps around the panel.
-        .background(Color(nsColor: Theme.sidebar).ignoresSafeArea())
-        .background(TitlebarSidebarToggle(toggle: model.toggleSidebar))
-    }
-}
-
-/// Drags the sidebar's edge to resize it.
-private struct SidebarResizer: View {
-    @Binding var width: Double
-    @State private var start: Double?
-
-    var body: some View {
-        Color.clear
-            .frame(width: 8)
-            .contentShape(.rect)
-            .pointerStyle(.frameResize(position: .trailing))
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                    .onChanged { drag in
-                        let start = start ?? width
-                        self.start = start
-                        width = min(max(start + drag.translation.width, 190), 320)
-                    }
-                    .onEnded { _ in start = nil }
-            )
-    }
-}
-
-/// Lets the content fill the whole window under a clear title bar, and moves the
-/// traffic lights down level with the panel's header. An empty toolbar would lower them
-/// too, but its edge shows as a line across the window while it's inactive.
+/// Moves the traffic lights down level with the header. An empty toolbar would lower
+/// them too, but its edge shows as a line across the window while it's inactive. The
+/// clear title bar comes from the scene's `.windowStyle(.hiddenTitleBar)`.
 private struct WindowChrome: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { ChromeView() }
     func updateNSView(_ view: NSView, context: Context) {}
@@ -246,10 +195,6 @@ private struct WindowChrome: NSViewRepresentable {
             guard let window, let close = window.standardWindowButton(.closeButton),
                   let titlebar = close.superview, let container = titlebar.superview
             else { return }
-            window.styleMask.insert(.fullSizeContentView)
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden
-            window.titlebarSeparatorStyle = .none
             // AppKit puts the buttons back whenever it lays out the title bar.
             let center = NotificationCenter.default
             observers = [close, titlebar, container].map { view in
@@ -268,13 +213,15 @@ private struct WindowChrome: NSViewRepresentable {
     }
 }
 
-extension NSWindow {
-    /// The sidebar button placed after the traffic lights, if any.
-    static let sidebarToggleIdentifier = NSUserInterfaceItemIdentifier("sidebarToggle")
+/// How far down the title bar reaches: just past the traffic lights.
+let titlebarDepth: CGFloat = 36
 
-    /// Centers the traffic lights on the sidebar's top row, as with a toolbar, with the
-    /// sidebar button after them. Again once AppKit
-    /// is done laying out, as some changes, such as the title, move them after this.
+/// How far down the window the traffic lights' row reaches. The header lines up with it.
+let titlebarHeight: CGFloat = 52
+
+extension NSWindow {
+    /// Centers the traffic lights on the header, as with a toolbar. Again once AppKit is
+    /// done laying out, as some changes, such as the title, move them after this.
     func placeTitlebarButtons() {
         placeTitlebarButtonsNow()
         DispatchQueue.main.async { [weak self] in self?.placeTitlebarButtonsNow() }
@@ -303,70 +250,28 @@ extension NSWindow {
             if button.frame.origin != origin { button.setFrameOrigin(origin) }
             x = button.frame.maxX + 9
         }
-        if let toggle = titlebar.subviews.first(where: { $0.identifier == Self.sidebarToggleIdentifier }) {
-            let size = toggle.fittingSize
-            let origin = NSPoint(x: x - 9 + 18, y: y(size.height))
-            if toggle.frame != NSRect(origin: origin, size: size) { toggle.frame = NSRect(origin: origin, size: size) }
-        }
     }
 }
 
-/// Shows or hides the sidebar from a plain icon just after the traffic lights, which
-/// stays put whether the sidebar is shown or not.
-private struct TitlebarSidebarToggle: NSViewRepresentable {
-    let toggle: () -> Void
-
-    func makeNSView(context: Context) -> NSView { HostView() }
-
-    func updateNSView(_ view: NSView, context: Context) {
-        (view as? HostView)?.button.onClick = toggle
-    }
-
-    private final class HostView: NSView {
-        let button = ToggleButton()
-
-        override func viewWillMove(toWindow newWindow: NSWindow?) {
-            super.viewWillMove(toWindow: newWindow)
-            button.removeFromSuperview()
+extension View {
+    /// Moves the window when dragged, and zooms or minimizes it on a double-click as the
+    /// title bar would, for the bars drawn where the title bar is. Buttons on top still
+    /// take their own clicks.
+    func windowDragArea() -> some View {
+        background {
+            Color.clear
+                .contentShape(.rect)
+                .gesture(WindowDragGesture())
+                .simultaneousGesture(TapGesture(count: 2).onEnded {
+                    guard let window = NSApp.keyWindow else { return }
+                    switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+                    case "Minimize": window.performMiniaturize(nil)
+                    case "None": break
+                    default: window.performZoom(nil)
+                    }
+                })
+                .allowsWindowActivationEvents(true)
         }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard let window, let titlebar = window.standardWindowButton(.zoomButton)?.superview else { return }
-            button.identifier = NSWindow.sidebarToggleIdentifier
-            titlebar.addSubview(button)
-            window.placeTitlebarButtons()
-        }
-    }
-
-    /// Secondary until hovered, like the icons beside it in Finder's title bar.
-    private final class ToggleButton: NSButton {
-        var onClick: () -> Void = {}
-
-        init() {
-            super.init(frame: .zero)
-            let symbol = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Show or Hide Sidebar")
-            image = symbol?.withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
-            imagePosition = .imageOnly
-            isBordered = false
-            contentTintColor = Theme.secondaryText
-            toolTip = "Show or Hide Sidebar (⌃⌘S)"
-            target = self
-            action = #selector(click)
-        }
-
-        required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-        @objc private func click() { onClick() }
-
-        override func updateTrackingAreas() {
-            super.updateTrackingAreas()
-            trackingAreas.forEach(removeTrackingArea)
-            addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-        }
-
-        override func mouseEntered(with event: NSEvent) { contentTintColor = Theme.text }
-        override func mouseExited(with event: NSEvent) { contentTintColor = Theme.secondaryText }
     }
 }
 

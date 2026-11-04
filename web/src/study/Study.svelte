@@ -198,7 +198,7 @@
         <Icon name={stages[card.stage].icon} size={14} />
         {stages[card.stage].label}
         {#if leech}
-          <span class="leech" title="Leeches are cards you keep forgetting, which usually need rewording or splitting. The Leeches view lists them; ⌘Z takes the answer back.">
+          <span class="leech" title="Leeches are cards you keep forgetting, which usually need rewording or splitting. `amgi search --view Leeches` lists them; ⌘Z takes the answer back.">
             <Icon name="warning" size={14} />
             {leech.suspended ? "Suspended the last card, a leech" : "The last card is a leech"}: forgotten {leech.lapses} times
           </span>
@@ -223,8 +223,10 @@
     flex-direction: column;
     height: 100%;
     overflow-y: auto;
-    /* A scrollbar showing for a long answer doesn't nudge the card sideways. */
-    scrollbar-gutter: stable both-edges;
+    /* No scroll bar, so the card stays centered and a long answer doesn't nudge it
+       sideways. WebKit reserves room for one only on the right, even with
+       `scrollbar-gutter: stable both-edges`. A trackpad or wheel still scrolls. */
+    scrollbar-width: none;
     padding: 64px 40px 104px;
   }
 

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Dashboard from "./dashboard/Dashboard.svelte";
   import Study from "./study/Study.svelte";
   import { app } from "./lib/app.svelte";
 
@@ -9,18 +8,17 @@
   });
 
   // CJK font packs arrive as they finish downloading. One that arrives while CJK text
-  // shows waits for the next card or pane, so text never changes font while
-  // it's being read. Linked before the page updates, the new text starts in the new font.
+  // shows waits for the next card, so text never changes font while it's being read. Linked before the page updates, the new text starts in the new font.
   const CJK = /[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}]/u;
   const linked = new Set<string>();
   let shown = "";
   $effect.pre(() => {
-    const view = `${app.pane}\n${app.study?.card?.id}`;
+    const view = app.study?.card?.id ?? "";
     const moved = view !== shown;
     shown = view;
     const waiting = app.fonts.filter((href) => !linked.has(href));
     if (!waiting.length) return;
-    if (!moved && app.pane && CJK.test(document.getElementById("app")?.textContent ?? "")) return;
+    if (!moved && app.study && CJK.test(document.getElementById("app")?.textContent ?? "")) return;
     for (const href of waiting) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
@@ -31,8 +29,6 @@
   });
 </script>
 
-{#if app.pane === "study"}
+{#if app.study}
   <Study />
-{:else if app.pane === "dashboard"}
-  <Dashboard />
 {/if}

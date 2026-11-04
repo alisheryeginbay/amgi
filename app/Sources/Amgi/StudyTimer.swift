@@ -6,7 +6,7 @@ import AppKit
 /// whatever happens to the date and time, so setting the clock, travelling across
 /// time zones or a network time sync can't make a review negative or hours long, and
 /// it stops while the Mac sleeps. On top of that the timer pauses while nobody can
-/// be studying: the review pane isn't showing, Amgi isn't the active app, its window
+/// be studying: Amgi isn't the active app, its window
 /// is minimized, closed or covered, or the screen is asleep or locked. The core caps
 /// what's left at a minute, for someone who walks away with the card up.
 @MainActor
@@ -30,10 +30,6 @@ final class StudyTimer {
     private var screenAsleep = false
     private var screenLocked = false
     private var sessionInactive = false
-    /// Set by the model: the review pane is the one showing.
-    var reviewing = false {
-        didSet { update() }
-    }
 
     init() {
         let center = NotificationCenter.default
@@ -101,7 +97,7 @@ final class StudyTimer {
     private func update() {
         let now = clock.now
         if let since { counted += since.duration(to: now) }
-        let running = cardID != nil && reviewing && appActive && windowVisible
+        let running = cardID != nil && appActive && windowVisible
             && !screenAsleep && !screenLocked && !sessionInactive
         since = running ? now : nil
     }

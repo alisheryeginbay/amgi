@@ -34,7 +34,7 @@ let package = Package(
         .executableTarget(
             name: "Amgi",
             dependencies: ["AmgiCore"],
-            resources: [.copy("Web"), .copy("Emoji.tsv"), .copy("Amgi.svg"), .copy("AmgiDev.icns")],
+            resources: [.copy("Web"), .copy("Amgi.svg"), .copy("AmgiDev.icns")],
             linkerSettings: [
                 .unsafeFlags(
                     ["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", devInfoPlist],

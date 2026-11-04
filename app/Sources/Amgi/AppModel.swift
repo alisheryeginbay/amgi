@@ -5,13 +5,6 @@ import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// What the sidebar shows in the detail pane.
-enum SidebarItem: Hashable {
-    case dashboard
-    /// Study the whole collection.
-    case review
-}
-
 struct DeckName: Equatable {
     let name: String
     let title: String
@@ -28,7 +21,6 @@ final class AppModel {
     private static let retentionKey = "desiredRetention"
     private static let quickAddShortcutKey = "quickAddShortcut"
     private static let ankiConnectKey = "ankiConnect"
-    private static let sidebarShownKey = "sidebarShown"
     /// The port AnkiConnect listens on, which Yomitan and other tools try by default.
     static let ankiConnectPort: UInt16 = 8765
     /// The range the core accepts.
@@ -54,7 +46,6 @@ final class AppModel {
     /// The last answer made its card a leech; shown beside the next card.
     private(set) var leechNotice: LeechNotice?
     private(set) var importing = false
-    private(set) var dashboard: Dashboard?
     /// The card the Card Info window shows, kept current as cards are studied or edited.
     private(set) var infoCard: CardInfo?
     @ObservationIgnored private var infoCardID: String?
@@ -130,15 +121,6 @@ final class AppModel {
         }
     }
 
-    /// Whether the sidebar shows, as it was left last time.
-    var sidebarShown: Bool = UserDefaults.standard.object(forKey: AppModel.sidebarShownKey) as? Bool ?? true {
-        didSet { UserDefaults.standard.set(sidebarShown, forKey: Self.sidebarShownKey) }
-    }
-
-    func toggleSidebar() {
-        sidebarShown.toggle()
-    }
-
     /// Whether ⌥⌘N opens Add Card from any app.
     var quickAddShortcut: Bool = UserDefaults.standard.object(forKey: AppModel.quickAddShortcutKey) as? Bool ?? true {
         didSet {
@@ -159,20 +141,8 @@ final class AppModel {
     /// Why AnkiConnect isn't answering although it's on, such as its port being taken.
     private(set) var ankiConnectError: String?
 
-    var selection: SidebarItem = .review {
-        didSet {
-            guard oldValue != selection else { return }
-            timer.reviewing = selection == .review
-            switch selection {
-            case .dashboard: loadDashboard()
-            // A card showing its answer stays up until it's rated.
-            case .review: if current == nil || !revealed { loadNext() }
-            }
-        }
-    }
-
     private var collection: CardCollection?
-    /// The web view behind every detail pane.
+    /// The web view the cards show in.
     let web = WebHost()
     /// CJK fonts for card text, downloaded when the collection first uses them.
     let fonts = FontPacks()
@@ -189,7 +159,6 @@ final class AppModel {
 
     init() {
         timer.view = web.webView
-        timer.reviewing = selection == .review
         web.onMessage = { [weak self] in self?.handle($0) }
         loadConfig()
         monitorReviewShortcuts()
@@ -204,7 +173,7 @@ final class AppModel {
     var totalDue: UInt32 { today.dueAvailable }
     /// Cards answered Again and not yet passed, waiting to come back or back already.
     var totalLearning: UInt32 { today.learning }
-    /// Due and learning cards, which the sidebar and menu bar badges count.
+    /// Due and learning cards, which the menu bar counts.
     var totalDueAndLearning: UInt32 { totalDue + totalLearning }
     /// Cards still to study today: due, learning and new.
     var totalLeft: UInt32 { totalDue + totalLearning + today.newAvailable }
@@ -254,7 +223,6 @@ final class AppModel {
             self.leechNotice = nil
             self.folder = url
             web.collectionRoot = url
-            self.selection = .review
             UserDefaults.standard.set(url.path, forKey: Self.folderKey)
         }
         restartAnkiConnect()
@@ -269,7 +237,6 @@ final class AppModel {
         folder = nil
         web.collectionRoot = nil
         UserDefaults.standard.removeObject(forKey: Self.folderKey)
-        selection = .review
         deckNames = []
         noteTypes = []
         warnings = []
@@ -277,7 +244,6 @@ final class AppModel {
         study = .none
         timer.reset()
         canUndoAnswer = false
-        dashboard = nil
         infoCard = nil
         infoCardID = nil
     }
@@ -337,7 +303,6 @@ final class AppModel {
         }
         fonts.fetch(for: collection.scripts(), han: EnvironmentPayload.preferredHan)
         loadCardInfo()
-        if selection == .dashboard { loadDashboard() }
         if current == nil || !revealed { loadNext() }
     }
 
@@ -369,35 +334,12 @@ final class AppModel {
         }
     }
 
-    /// Statistics are only gathered while the dashboard is showing.
-    func loadDashboard() {
-        guard let collection else { return }
-        perform { update(\.dashboard, try collection.dashboard(scope: .all, activityDays: Self.activityDays())) }
-    }
+    // MARK: Web view
 
-    /// Weeks of activity on the dashboard, one column each.
-    private static let activityWeeks = 53
-
-    /// Days to request so the heatmap ends today and fills its week columns.
-    private static func activityDays(now: Date = .now) -> UInt32 {
-        // Study days roll over at 4am, like the scheduler.
-        let today = now.addingTimeInterval(-4 * 3600)
-        let calendar = Calendar.current
-        let weekday = (calendar.component(.weekday, from: today) - calendar.firstWeekday + 7) % 7
-        return UInt32((activityWeeks - 1) * 7 + weekday + 1)
-    }
-
-    // MARK: Web panes
-
-    /// What the web panes show. Read while rendering the detail column, so any change
-    /// here updates the page.
+    /// What the page shows. Read while rendering the window, so any change here updates
+    /// the page.
     func webState(autoplay: Bool, progress: Bool) -> WebState {
-        let pane: WebPane = switch selection {
-        case .dashboard: .dashboard
-        case .review: .study
-        }
-        return WebState(
-            pane: pane,
+        WebState(
             environment: .current(answerKeys: answerKeys),
             fonts: fonts.stylesheets,
             study: StudyPayload(
@@ -409,8 +351,7 @@ final class AppModel {
                 reviewed: today.reviewed,
                 remaining: totalLeft,
                 leech: leechNotice
-            ),
-            dashboard: pane == .dashboard ? dashboard.map { DashboardPayload($0, due: totalDueAndLearning, today: today) } : nil
+            )
         )
     }
 
@@ -431,7 +372,7 @@ final class AppModel {
 
     /// ⌘S suspends the card being studied, ⌘Z takes back the last answer and ⌘I shows
     /// Card Info for the card. Caught before any view, so they work whether the web view,
-    /// sidebar or nothing has focus.
+    /// the header or nothing has focus.
     private func monitorReviewShortcuts() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
@@ -441,16 +382,16 @@ final class AppModel {
                 guard let self, flags == .command, let window, window.attachedSheet == nil,
                       window === self.web.webView.window
                 else { return false }
-                if key == "i", self.selection == .review, let id = self.current?.id {
+                if key == "i", let id = self.current?.id {
                     self.showCardInfo(id: id)
                     return true
                 }
                 // A text field keeps ⌘Z for its own undo.
-                if key == "z", self.selection == .review, !(window.firstResponder is NSText) {
+                if key == "z", !(window.firstResponder is NSText) {
                     self.undoAnswer()
                     return true
                 }
-                guard key == "s", self.selection == .review, self.current != nil else { return false }
+                guard key == "s", self.current != nil else { return false }
                 if !event.isARepeat { self.suspendCurrent() }
                 return true
             }

@@ -4,29 +4,28 @@ description: "Keyboard shortcuts, scheduling, adding cards and the menu bar."
 ---
 
 Keys while studying: <kbd>Space</kbd> shows the answer, <kbd>1</kbd>–<kbd>4</kbd> rate
-Again/Hard/Good/Easy ([or keys you choose](#changing-the-answer-keys)), <kbd>⌘Z</kbd> takes back the last rating and shows that card again,
-<kbd>R</kbd> replays the card's sounds, <kbd>⌘O</kbd> opens a folder, <kbd>⌘R</kbd> reloads,
-<kbd>⌘1</kbd> and <kbd>⌘2</kbd> go to Dashboard and Review, and <kbd>⌃⌘S</kbd> shows
-or hides the sidebar. Files also reload
+Again/Hard/Good/Easy ([or keys you choose](#changing-the-answer-keys)), <kbd>⌘Z</kbd>
+takes back the last rating and shows that card again, <kbd>R</kbd> replays the card's
+sounds, <kbd>⌘O</kbd> opens a folder and <kbd>⌘R</kbd> reloads. Files also reload
 whenever the app comes to the front.
 
 **View ▸ Command Palette** (<kbd>⌘K</kbd>) finds any command as you type: <kbd>↑</kbd>
-and <kbd>↓</kbd> pick one, <kbd>Return</kbd> runs it
-and <kbd>Esc</kbd> puts the palette away. What you can do with the card on screen comes
+and <kbd>↓</kbd> pick one, <kbd>Return</kbd> runs it and <kbd>Esc</kbd> puts the
+palette away. What you can do with the card on screen comes
 first, with each command's shortcut beside it.
 
 A card that asks you to [type its answer](/card-format#notes-with-fields) has a box
 under the question: type, then press <kbd>Return</kbd> to see the answer with what you
 typed checked against it. Rate it with <kbd>1</kbd>–<kbd>4</kbd> as usual.
 
-The window's subtitle counts what's left today: **due** cards come back after
+The header counts what's left today: **due** cards come back after
 [days](#when-cards-are-due), **learning** cards are ones you answered **Again** and
 haven't passed since, and **new** cards you haven't studied. Once some reviews are
 [timed](#time-spent-studying), it also says about how long they'll take. Which of these
 the card on screen is shows just above it.
 
-**Review** in the sidebar studies the whole collection. To find cards, list them or see
-their history, use the [command line](/cli): `amgi search`, `amgi info` and `amgi stats`.
+The window studies the whole collection. To find cards, see a card's history or your
+statistics, use the [command line](/cli): `amgi search`, `amgi info` and `amgi stats`.
 
 ## Changing the answer keys
 
@@ -79,8 +78,9 @@ threshold** in Settings; the notes then come every half threshold. Turn on **Sus
 leeches** to have Amgi also [suspend](/card-format#suspending-cards) a card when it
 becomes a leech, by tagging it `#suspended` in its file. <kbd>⌘Z</kbd> takes back the
 answer and the suspension together. Both settings belong to the collection.
+`amgi search is:leech` lists your leeches.
 
-The **Retention** table on the Dashboard (and in `amgi stats`) shows how much you
+The **Retention** table in `amgi stats` shows how much you
 remembered today, yesterday, and over the last week, month and year: the share of reviews
 not rated **Again**, counting only cards that were scheduled a day or more ahead, as
 Anki does, so a card you forgot isn't counted again when it comes back. It's split into
@@ -90,18 +90,17 @@ it with your desired retention; if it's lower, cards are coming back too late.
 ## Time spent studying
 
 Amgi times each card from when it shows until you rate it. The timer pauses whenever you
-can't be studying: while another pane or app is in front, the window is minimized or
+can't be studying: while another app is in front, the window is minimized or
 covered, or the screen is asleep or locked. A card counts a minute at most, in case you
 step away with it on screen, as Anki does by default. If you take back an answer with
 <kbd>⌘Z</kbd>, the card's timer carries on from where it was.
 
-- The **Dashboard** shows the time studied today, about how long the cards left today will
-  take, the average time per day you studied and the time per review, over the last 30
-  days. Switch the **Activity** heatmap to **Time** to shade days by time instead of
-  reviews; hover a day for both.
-- The **forecast** says about how long each day's due cards will take.
+- `amgi stats` shows the time studied today, about how long the cards left today will
+  take, and the average time per day you studied and per review over the last 30 days.
+  `amgi stats --time` shades the days by time instead of reviews, and its forecast says
+  about how long each day's due cards will take.
 - **Card Info** (<kbd>⌘I</kbd>) shows a card's average and total time; hover a review for its own.
-- The window's subtitle and the menu bar show the time left today, and the menu bar the
+- The header and the menu bar show the time left today, and the menu bar the
   time studied so far.
 
 The estimates go by your last 30 days: new cards by how long a new card took on the day

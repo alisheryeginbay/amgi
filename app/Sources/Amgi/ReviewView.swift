@@ -2,9 +2,9 @@ import AmgiCore
 import AppKit
 import SwiftUI
 
-/// The detail panel: a header with the title and buttons, over the shared web view for
-/// every pane, with the glass answer buttons floating over study cards.
-struct DetailView: View {
+/// The window's content: a header with the collection and buttons over the web view the
+/// cards show in, with the glass answer buttons floating over the card.
+struct ReviewView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(autoplaySoundsKey) private var autoplay = true
     @AppStorage(studyProgressKey) private var progress = true
@@ -14,7 +14,7 @@ struct DetailView: View {
             web
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 // Content scrolled up fades out under the header rather than being cut off,
-                // over the same band as the sidebar's rows, just under the traffic lights.
+                // just under the traffic lights.
                 .mask {
                     VStack(spacing: 0) {
                         LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
@@ -22,8 +22,8 @@ struct DetailView: View {
                         Color.black
                     }
                 }
-                .padding(.top, titlebarDepth - panelInset)
-            DetailHeader(title: title, subtitle: subtitle)
+                .padding(.top, titlebarDepth)
+            ReviewHeader()
         }
     }
 
@@ -32,13 +32,13 @@ struct DetailView: View {
             // Glass lives only on the floating controls, over the content, which scrolls
             // beneath them. The page leaves room below for them.
             .overlay(alignment: .bottom) {
-                if model.selection == .review, let card = model.current {
+                if let card = model.current {
                     AnswerControls(card: card, revealed: model.revealed)
                         .padding(.bottom, 24)
                 }
             }
             .overlay {
-                if model.selection == .review && model.current == nil {
+                if model.current == nil {
                     ContentUnavailableView(
                         "All caught up",
                         systemImage: "checkmark",
@@ -47,84 +47,85 @@ struct DetailView: View {
                 }
             }
     }
-
-    private var title: String {
-        switch model.selection {
-        case .dashboard: "Dashboard"
-        case .review: model.folder?.lastPathComponent ?? "All Cards"
-        }
-    }
-
-    private var subtitle: String {
-        switch model.selection {
-        case .dashboard: model.folder?.lastPathComponent ?? ""
-        case .review: model.studyCounts
-        }
-    }
 }
 
-/// How far the panel is inset from the window's edges.
-let panelInset: CGFloat = 8
-
-/// The panel's header, which centers on the traffic lights as the panel starts lower.
-private let headerHeight = (titlebarHeight / 2 - panelInset) * 2
-
-/// The title and subtitle on one line, then the pane's buttons, level with the traffic lights.
-private struct DetailHeader: View {
+/// The collection's name and what's left today on one line, then the buttons, level
+/// with the traffic lights.
+private struct ReviewHeader: View {
     @Environment(AppModel.self) private var model
-    let title: String
-    let subtitle: String
+    @State private var showingWarnings = false
 
     var body: some View {
         HStack(spacing: 4) {
-            // One line, as the traffic lights beside it are: the subtitle follows the
-            // title, and gives way first when space runs short.
+            // One line, as the traffic lights beside it are: the counts follow the name,
+            // and give way first when space runs short.
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(title)
+                Text(model.folder?.lastPathComponent ?? "")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.themeText)
                     .layoutPriority(1)
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.themeSecondaryText)
-                }
+                Text(model.studyCounts)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.themeSecondaryText)
             }
             .lineLimit(1)
             .padding(.trailing, 12)
             Spacer(minLength: 0)
             buttons
         }
-        // Clears the traffic lights and sidebar button, which sit over the panel when
-        // the sidebar is hidden.
-        .padding(.leading, model.sidebarShown ? 16 : 124)
+        // Clears the traffic lights.
+        .padding(.leading, trafficLightsWidth)
         .padding(.trailing, 10)
-        .frame(height: headerHeight)
+        .frame(height: titlebarHeight)
         .windowDragArea()
-        .animation(.smooth(duration: 0.25), value: model.sidebarShown)
     }
 
     @ViewBuilder private var buttons: some View {
-        switch model.selection {
-        case .review:
-            if let card = model.current {
-                if card.hasSounds {
-                    HeaderButton("Replay Audio", systemImage: "speaker.wave.2", help: "Replay Audio (R)") {
-                        model.web.command("replay")
-                    }
-                }
-                // ⌘S is caught by `AppModel`, so it works from any focus.
-                HeaderButton("More", systemImage: "ellipsis", help: "More") {
-                    model.showMoreMenu()
-                }
-                .background(MenuAnchorView { model.moreMenuAnchor = $0 })
-                HeaderButton("Edit Card", systemImage: "pencil", help: "Open \(card.path), line \(card.line)") {
-                    model.revealInEditor(path: card.path)
+        if !model.warnings.isEmpty {
+            HeaderButton(
+                "Problems", systemImage: "exclamationmark.triangle",
+                help: "\(model.warnings.count) problems found while reading cards"
+            ) {
+                showingWarnings.toggle()
+            }
+            .popover(isPresented: $showingWarnings, arrowEdge: .bottom) { WarningList() }
+        }
+        if let card = model.current {
+            if card.hasSounds {
+                HeaderButton("Replay Audio", systemImage: "speaker.wave.2", help: "Replay Audio (R)") {
+                    model.web.command("replay")
                 }
             }
-        case .dashboard:
-            EmptyView()
+            // ⌘S is caught by `AppModel`, so it works from any focus.
+            HeaderButton("More", systemImage: "ellipsis", help: "More") {
+                model.showMoreMenu()
+            }
+            .background(MenuAnchorView { model.moreMenuAnchor = $0 })
+            HeaderButton("Edit Card", systemImage: "pencil", help: "Open \(card.path), line \(card.line)") {
+                model.revealInEditor(path: card.path)
+            }
         }
+    }
+}
+
+/// Where the header's title starts: past the traffic lights.
+private let trafficLightsWidth: CGFloat = 96
+
+/// Problems found in the deck files, each with its file and line.
+private struct WarningList: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        List(Array(model.warnings.enumerated()), id: \.offset) { _, warning in
+            VStack(alignment: .leading, spacing: 2) {
+                Text(warning.message)
+                Text("\(warning.path):\(warning.line)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .frame(width: 360, height: 220)
     }
 }
 

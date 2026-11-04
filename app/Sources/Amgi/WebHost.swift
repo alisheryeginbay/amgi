@@ -3,8 +3,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 
-/// The one web view behind every detail pane, kept for the life of the app so
-/// switching panes never reloads the page. Swift owns the state and sends it to the
+/// The one web view the cards show in, kept for the life of the app so the page never
+/// reloads. Swift owns the state and sends it to the
 /// page; the page sends back what the user did.
 @MainActor
 final class WebHost: NSObject {
@@ -22,11 +22,9 @@ final class WebHost: NSObject {
     private var ready = false
     private var state: WebState?
     // What the page has, to send only what changed.
-    private var sentPane: WebPane?
     private var sentEnvironment: EnvironmentPayload?
     private var sentFonts: [String]?
     private var sentStudy: StudyPayload?
-    private var sentDashboard: DashboardPayload?
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -70,19 +68,14 @@ final class WebHost: NSObject {
         send("fonts", state.fonts, &sentFonts)
         send("study", state.study, &sentStudy)
         // A card that asks for its answer takes the keyboard, for its typing box.
-        if state.pane == .study, state.study.card?.typed != nil, !state.study.revealed,
+        if state.study.card?.typed != nil, !state.study.revealed,
            let window = webView.window, window.firstResponder !== webView {
             window.makeFirstResponder(webView)
         }
-        if let dashboard = state.dashboard {
-            send("dashboard", dashboard, &sentDashboard)
-        }
-        send("pane", state.pane, &sentPane)
     }
 
-    /// Study keys reach the card wherever focus is, so selecting Review leaves the sidebar
-    /// focused: arrows still move through it, and these keys answer the card instead of
-    /// jumping to rows. Text being typed and the page's own key handling are left alone.
+    /// Study keys reach the card wherever focus is, such as a header button clicked last.
+    /// Text being typed and the page's own key handling are left alone.
     /// The answer keys come from the config file.
     private var studyKeys: Set<String> { Set([" ", "r"] + (state?.environment.answerKeys ?? [])) }
     private var keyMonitor: Any?
@@ -97,7 +90,7 @@ final class WebHost: NSObject {
             let repeated = event.isARepeat
             let forwarded = MainActor.assumeIsolated { () -> Bool in
                 guard let self, plain, self.studyKeys.contains(key),
-                      self.ready, self.state?.pane == .study,
+                      self.ready,
                       let window, window === self.webView.window,
                       window.firstResponder !== self.webView,
                       !(window.firstResponder is NSText)
@@ -140,11 +133,9 @@ final class WebHost: NSObject {
         case .ready:
             // A fresh page has nothing; send it everything.
             ready = true
-            sentPane = nil
             sentEnvironment = nil
             sentFonts = nil
             sentStudy = nil
-            sentDashboard = nil
             if let state {
                 self.state = nil
                 apply(state)

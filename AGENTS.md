@@ -1,6 +1,6 @@
 # Agent guide
 
-Amgi is a macOS flash-card app: a Rust core, a SwiftUI shell and Svelte panes in a web
+Amgi is a macOS flash-card app: a Rust core, a SwiftUI shell and a Svelte page in a web
 view. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the layout and build, and
 [docs/](docs/) for what the app does. The card format is in
 [docs/card-format.mdx](docs/card-format.mdx).
@@ -8,7 +8,7 @@ view. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the layout and build, and
 ## Commands
 
 ```sh
-make build                   # build the core, web panes and app
+make build                   # build the core, web page and app
 make test                    # cargo test, then bun test in web/
 cd web && bun run check      # svelte-check (types)
 amgi check --dir examples    # validate deck files

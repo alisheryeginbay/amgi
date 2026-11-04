@@ -38,7 +38,6 @@ struct MenuBarMenu: View {
             }
             Section {
                 Button(model.totalLeft > 0 ? "Study Now" : "Nothing Left Today") {
-                    model.selection = .review
                     showMainWindow()
                 }
                 .disabled(model.totalLeft == 0)

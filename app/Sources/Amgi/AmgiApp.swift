@@ -19,6 +19,10 @@ struct AmgiApp: App {
         }
         // The welcome screen is a fixed size; the collection's window resizes freely.
         .windowResizability(.contentSize)
+        // Content fills the window under a clear title bar. Set here rather than on the
+        // window, which SwiftUI resets when the content changes, bringing back the title
+        // bar's background: a blur over the header with a line under it.
+        .windowStyle(.hiddenTitleBar)
         .commands {
             HelpCommands()
             CommandGroup(replacing: .newItem) {
@@ -37,22 +41,9 @@ struct AmgiApp: App {
                     .keyboardShortcut("i", modifiers: [.command, .shift])
                     .disabled(model.folder == nil || model.importing)
             }
-            // The sidebar's items, as in Mail and Finder.
             CommandGroup(before: .sidebar) {
                 Button("Command Palette…") { model.toggleCommandPalette() }
                     .keyboardShortcut("k")
-                Divider()
-                Button("Dashboard") { model.selection = .dashboard }
-                    .keyboardShortcut("1")
-                    .disabled(model.folder == nil)
-                Button("Review") { model.selection = .review }
-                    .keyboardShortcut("2")
-                    .disabled(model.folder == nil)
-                Divider()
-                // ⌃⌘S as in Finder and Mail.
-                Button(model.sidebarShown ? "Hide Sidebar" : "Show Sidebar") { model.toggleSidebar() }
-                    .keyboardShortcut("s", modifiers: [.control, .command])
-                    .disabled(model.folder == nil)
                 Divider()
             }
         }
@@ -97,7 +88,7 @@ let isDevBuild = Bundle.main.bundleIdentifier == nil
 let appName = isDevBuild ? "Amgi Dev" : "Amgi"
 
 extension Bundle {
-    /// The app's own resources (web panes, emoji, artwork). Amgi.app keeps them in
+    /// The app's own resources (the web page and artwork). Amgi.app keeps them in
     /// Contents/Resources, where SwiftPM's `Bundle.module` doesn't look: it checks the
     /// app's top folder and the folder it was built in, so it only finds them on the
     /// Mac that built the app. The dev build falls back to `Bundle.module`.

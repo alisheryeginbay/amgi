@@ -51,7 +51,7 @@ struct PaletteCommand {
             let before = text[text.index(before: range.lowerBound)]
             return before.isLetter || before.isNumber ? 50 : 80
         }
-        // Letters in order, such as "ss" for Show Sidebar; runs and word starts count more.
+        // Letters in order, such as "ac" for Add Card; runs and word starts count more.
         var score = 0
         var index = text.startIndex
         var previous: String.Index?
@@ -420,13 +420,13 @@ private final class PaletteCell: NSTableCellView {
 // MARK: Commands
 
 extension AppModel {
-    /// What the palette offers now: what can be done where you are first, then going
-    /// elsewhere and the app's commands.
+    /// What the palette offers now: what can be done with the card on screen first, then
+    /// the app's commands.
     func paletteCommands() -> [PaletteCommand] {
         var commands: [PaletteCommand] = []
         let open = folder != nil
 
-        if open, selection == .review, let card = current {
+        if open, let card = current {
             if revealed {
                 let keys = answerKeys.ordered
                 for rating in Rating.allCases {
@@ -446,7 +446,7 @@ extension AppModel {
                 self?.showCardInfo(id: card.id)
             })
         }
-        if open, selection == .review, canUndoAnswer {
+        if open, canUndoAnswer {
             commands.append(PaletteCommand("Undo Answer", kind: "Study", symbol: "arrow.uturn.backward", shortcut: "⌘Z") { [weak self] in
                 self?.undoAnswer()
             })
@@ -454,15 +454,6 @@ extension AppModel {
         if open {
             commands.append(PaletteCommand("Add Card…", kind: "Command", symbol: "plus.rectangle.portrait", shortcut: "⌘N") { [weak self] in
                 self?.toggleQuickAdd()
-            })
-            commands.append(PaletteCommand("Dashboard", kind: "Go To", symbol: "chart.bar.xaxis", shortcut: "⌘1") { [weak self] in
-                self?.selection = .dashboard
-            })
-            commands.append(PaletteCommand("Review", kind: "Go To", symbol: "rectangle.stack", shortcut: "⌘2") { [weak self] in
-                self?.selection = .review
-            })
-            commands.append(PaletteCommand("Show or Hide Sidebar", kind: "View", symbol: "sidebar.left", shortcut: "⌃⌘S") { [weak self] in
-                self?.toggleSidebar()
             })
             commands.append(PaletteCommand("Reload Cards", kind: "Command", symbol: "arrow.clockwise", shortcut: "⌘R") { [weak self] in
                 self?.reload()

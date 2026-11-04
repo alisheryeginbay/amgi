@@ -1,6 +1,6 @@
 # Everyday tasks. Each one rebuilds only what changed since the last run.
-#   make           build the core and the web panes if needed, then run the app
-#   make dev       same, but serve the panes from Vite with live reload
+#   make           build the core and the web page if needed, then run the app
+#   make dev       same, but serve the page from Vite with live reload
 #   make build     build everything without running
 #   make test      core and web tests
 #   make bundle    build target/bundle/Amgi.app

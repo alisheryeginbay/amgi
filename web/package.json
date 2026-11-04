@@ -23,7 +23,6 @@
     "vite": "^8.3.4"
   },
   "dependencies": {
-    "@fontsource-variable/brygada-1918": "^5.3.0",
     "@fontsource-variable/source-serif-4": "^5.3.1",
     "marked": "^18.1.1",
     "shiki": "^4.5.0",
