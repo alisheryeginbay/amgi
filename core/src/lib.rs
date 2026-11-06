@@ -535,6 +535,14 @@ fn leech_flagged(lapses: u32, threshold: u32) -> bool {
     lapses >= threshold && (lapses - threshold).is_multiple_of(every)
 }
 
+/// Lapses to count for a card in the forecast, so the simulator, which stops a card on
+/// reaching `threshold`, stops it at the lapse that would suspend it next. A leech
+/// that was unsuspended keeps coming back until it's flagged again.
+fn lapses_toward_leech(lapses: u32, threshold: u32) -> u32 {
+    let next = (lapses + 1..).find(|&n| leech_flagged(n, threshold)).unwrap_or(threshold);
+    threshold - (next - lapses)
+}
+
 #[derive(uniffi::Object)]
 pub struct CardCollection {
     inner: Mutex<Inner>,
@@ -1679,6 +1687,7 @@ impl Inner {
         let shift = self.utc_offset_secs - self.rollover_secs;
         let today = (now + shift).div_euclid(DAY_SECS);
         let day = |t: i64| (t + shift).div_euclid(DAY_SECS) - today;
+        let threshold = self.leech_threshold;
         let cards: Vec<PlannedCard> = self
             .in_scope(scope)
             .filter(|c| !c.suspended())
@@ -1687,7 +1696,7 @@ impl Inner {
                 memory: s.memory,
                 last_day: day(s.last_review),
                 due_day: day(s.due),
-                lapses: s.lapses,
+                lapses: lapses_toward_leech(s.lapses, threshold),
             })
             .collect();
         // The collection's own habits once there are enough ratings to go by.
@@ -2384,6 +2393,37 @@ mod tests {
         // An unclosed code block would take the card in; the file is left as it was.
         assert!(err(new("b", CardKind::Basic, "three")).contains("unclosed code block"));
         assert_eq!(fs::read_to_string(dir.join("cards/b.md")).unwrap(), "```\nopen");
+        drop(c);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn forecast_counts_lapses_up_to_the_next_suspension() {
+        // Threshold 8 flags lapses 8, 12, 16...
+        let toward = |lapses| lapses_toward_leech(lapses, 8);
+        assert_eq!(toward(0), 0);
+        assert_eq!(toward(7), 7);
+        assert_eq!(toward(8), 4);
+        assert_eq!(toward(11), 7);
+        assert_eq!(toward(12), 4);
+        assert_eq!(lapses_toward_leech(5, 1), 0);
+    }
+
+    #[test]
+    fn unsuspended_leeches_are_still_forecast() {
+        let (dir, c) = collection(&[("a.md", "Q: capital of Peru\nA: Lima\n")]);
+        let id = c.cards(StudyScope::All)[0].id.clone();
+        c.set_leech_threshold(1).unwrap();
+        c.set_suspends_leeches(true).unwrap();
+        let mut inner = c.lock();
+        inner.answer(&id, Rating::Good, None, T0 - 2 * DAY_SECS).unwrap();
+        // Forgotten yesterday, so a suspended leech due today; then unsuspended.
+        assert!(inner.answer(&id, Rating::Again, None, T0 - DAY_SECS).unwrap().unwrap().suspended);
+        inner.set_suspended(std::slice::from_ref(&id), false).unwrap();
+
+        let w = inner.workload(&StudyScope::All, 0, 30, T0).unwrap();
+        assert_eq!(w.reviews[0], 1.0);
+        drop(inner);
         drop(c);
         fs::remove_dir_all(dir).unwrap();
     }
