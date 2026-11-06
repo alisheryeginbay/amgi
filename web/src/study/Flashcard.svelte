@@ -31,6 +31,37 @@
     return new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
   });
   const comparison = $derived(revealed && typedText.trim() ? compare(typedText, expected) : null);
+  /** What the typing box asks for: the gap's hint, else the note field. */
+  const placeholder = $derived(
+    card.typedHint ?? (card.typedField ? `Type the ${card.typedField}` : cloze ? "…" : "Type the answer"),
+  );
+
+  /** A cloze whose gap is typed: the box stands in the gap until it's answered. It's
+   *  made here, not in the template, because the gap is inside the card's rendered HTML. */
+  $effect(() => {
+    if (!gap || card.typed == null || revealed) return;
+    const hint = live.querySelector(".gap .hint");
+    if (!hint) return;
+    const box = document.createElement("input");
+    const [value, hintText] = untrack(() => [typedText, placeholder]);
+    Object.assign(box, { type: "text", className: "typed-gap", value, placeholder: hintText });
+    box.setAttribute("autocomplete", "off");
+    box.setAttribute("autocapitalize", "off");
+    box.setAttribute("spellcheck", "false");
+    box.setAttribute("aria-label", "Your answer");
+    // Wide enough for the hint, growing with the text.
+    const fit = () => (box.style.width = `${Math.max(box.value.length, box.placeholder.length, 3) + 1.5}ch`);
+    fit();
+    box.addEventListener("input", () => {
+      typedText = box.value;
+      fit();
+    });
+    box.addEventListener("keydown", onTypedKey);
+    const shown = [...hint.childNodes];
+    hint.replaceChildren(box);
+    box.focus({ preventScroll: true });
+    return () => hint.replaceChildren(...shown);
+  });
 
   /** Focus the box as the card appears, so typing goes straight in. */
   function focusOnMount(node: HTMLInputElement) {
@@ -75,10 +106,28 @@
   }
 </script>
 
+{#snippet compared(shown: boolean)}
+  {#if shown && comparison}
+    <div class="comparison" class:correct={comparison.correct}>
+      {#if comparison.correct}
+        <span class="mark" aria-label="Right">✓</span> {typedText.trim()}
+      {:else}
+        <!-- prettier-ignore -->
+        <div class="yours"><span class="mark" aria-label="Typed">✗</span> {#each comparison.typed as piece, i (i)}<span class={piece.kind}>{piece.text}</span>{/each}</div>
+        <!-- prettier-ignore -->
+        <div class="right"><span class="mark" aria-hidden="true"></span> {#each comparison.answer as piece, i (i)}<span class={piece.kind}>{piece.text}</span>{/each}</div>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet content(shown: boolean)}
   <div class="body" class:shown>
     {#if gap}
       <Markdown source={gap.source} {gap} cardPath={card.path} emphasis />
+      {#if card.typed != null}
+        <div class="gap-comparison">{@render compared(shown)}</div>
+      {/if}
     {:else if cloze}
       <div class="swap">
         <div class="side" inert={shown}>
@@ -97,7 +146,7 @@
               class="typed"
               type="text"
               bind:value={typedText}
-              placeholder={card.typedField ? `Type the ${card.typedField}` : "Type the answer"}
+              {placeholder}
               autocomplete="off"
               autocapitalize="off"
               spellcheck="false"
@@ -105,17 +154,8 @@
               use:focusOnMount
               onkeydown={onTypedKey}
             />
-          {:else if comparison}
-            <div class="comparison" class:correct={comparison.correct}>
-              {#if comparison.correct}
-                <span class="mark" aria-label="Right">✓</span> {typedText.trim()}
-              {:else}
-                <!-- prettier-ignore -->
-                <div class="yours"><span class="mark" aria-label="Typed">✗</span> {#each comparison.typed as piece, i (i)}<span class={piece.kind}>{piece.text}</span>{/each}</div>
-                <!-- prettier-ignore -->
-                <div class="right"><span class="mark" aria-hidden="true"></span> {#each comparison.answer as piece, i (i)}<span class={piece.kind}>{piece.text}</span>{/each}</div>
-              {/if}
-            </div>
+          {:else}
+            {@render compared(shown)}
           {/if}
         {/if}
       </div>
@@ -209,6 +249,32 @@
 
   .typed::placeholder {
     color: var(--tertiary-label);
+  }
+
+  /* A typed gap: a box in the sentence, with what was typed under it once answered. */
+  .body :global(.typed-gap) {
+    max-width: 100%;
+    padding: 0 0.2em;
+    border: none;
+    border-bottom: 2px solid var(--accent);
+    border-radius: 0;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    color: var(--accent);
+    font: inherit;
+    font-weight: 600;
+    text-align: center;
+    outline: none;
+  }
+
+  .body :global(.typed-gap::placeholder) {
+    color: var(--tertiary-label);
+    font-weight: 400;
+  }
+
+  .gap-comparison {
+    display: flex;
+    justify-content: center;
+    text-align: left;
   }
 
   .comparison {

@@ -90,6 +90,7 @@ struct CardPayload: Encodable {
     let stage: String
     let typed: String?
     let typedField: String?
+    let typedHint: String?
 
     init(_ card: StudyCard) {
         id = card.id
@@ -103,6 +104,7 @@ struct CardPayload: Encodable {
         stage = card.stage.name
         typed = card.typed
         typedField = card.typedField
+        typedHint = card.typedHint
     }
 }
 

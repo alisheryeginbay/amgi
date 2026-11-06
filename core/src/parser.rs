@@ -20,6 +20,11 @@
 //! lines and lines starting `Q:` included. Brackets in code are literal; a deletion
 //! there is written `{{answer}}` or `{{answer|hint}}`.
 //!
+//! A gap written `[=answer]` or `[=answer|hint]` is typed in before it shows. In an
+//! `A:` line the same marks the part of the answer to type; the rest shows once it's
+//! answered, and other brackets there stay literal. The `=` doesn't count toward a
+//! card's id, so a gap made typed keeps its history.
+//!
 //! A card's last lines may hold tags: `#korean #verbs`. A file may start with TOML
 //! front matter between `+++` lines, giving the deck a `name` and default `tags`.
 //!
@@ -66,8 +71,10 @@ pub struct ParsedCard {
 /// The answer a card asks to have typed in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Typed {
-    /// The field it comes from, which the typing box names.
-    pub field: String,
+    /// The note field it comes from, which the typing box names.
+    pub field: Option<String>,
+    /// The hint of a `[=answer|hint]`, which the typing box shows.
+    pub hint: Option<String>,
     /// Markdown.
     pub answer: String,
 }
@@ -826,7 +833,7 @@ fn finish(pending: Option<Pending>, types: &NoteTypes, out: &mut ParseResult) {
         }),
         Field::Answer => {
             let front = join(&p.question);
-            let back = join(&p.answer);
+            let (back, typed) = typed_answer(&join(&p.answer), p.line, out);
             if front.is_empty() || back.is_empty() {
                 out.warnings.push(ParseWarning {
                     line: p.line,
@@ -843,7 +850,7 @@ fn finish(pending: Option<Pending>, types: &NoteTypes, out: &mut ParseResult) {
                 line: p.line,
                 tags,
                 note: None,
-                typed: None,
+                typed,
                 old_id,
             });
         }
@@ -882,7 +889,7 @@ fn note_cards(p: &Pending, types: &NoteTypes, tags: Vec<String>, out: &mut Parse
             note: Some(note.clone()),
             typed: rule
                 .typed
-                .then(|| rule.back.iter().find_map(|&f| Some(Typed { field: note_type.fields[f].clone(), answer: value(f)? })))
+                .then(|| rule.back.iter().find_map(|&f| Some(Typed { field: Some(note_type.fields[f].clone()), hint: None, answer: value(f)? })))
                 .flatten(),
             old_id,
         });
@@ -898,8 +905,32 @@ fn note_cards(p: &Pending, types: &NoteTypes, tags: Vec<String>, out: &mut Parse
 
 enum Segment<'a> {
     Text(&'a str),
-    /// `code` for a `{{…}}` deletion inside code.
-    Deletion { answer: &'a str, hint: Option<&'a str>, code: bool },
+    /// `code` for a `{{…}}` deletion inside code; `typed`, where the `=` of a
+    /// `[=…]` is.
+    Deletion { answer: &'a str, hint: Option<&'a str>, code: bool, typed: Option<usize> },
+}
+
+/// An answer with the part to type, `[=…]`, unbracketed, and that part; or the answer
+/// as written, with a warning, if its `[=` isn't closed or comes twice.
+fn typed_answer(back: &str, line: u32, out: &mut ParseResult) -> (String, Option<Typed>) {
+    let warn = |out: &mut ParseResult, message: &str| {
+        out.warnings.push(ParseWarning { line, message: message.into() });
+        (back.to_string(), None)
+    };
+    let Ok(segs) = segments(back, true) else { return warn(out, "unclosed `[=` in answer") };
+    let mut text = String::new();
+    let mut typed = None;
+    for seg in &segs {
+        match seg {
+            Segment::Text(t) => text.push_str(t),
+            Segment::Deletion { .. } if typed.is_some() => return warn(out, "answer has more than one `[=…]` to type"),
+            Segment::Deletion { answer, hint, .. } => {
+                text.push_str(answer);
+                typed = Some(Typed { field: None, hint: hint.map(String::from), answer: answer.to_string() });
+            }
+        }
+    }
+    (text, typed)
 }
 
 /// Open and close a deletion inside code in a cloze card's sides, where `**` could be
@@ -908,9 +939,10 @@ pub const CODE_GAP_OPEN: char = '\u{E001}';
 pub const CODE_GAP_CLOSE: char = '\u{E002}';
 
 /// A cloze's text and deletions: `[…]` outside code, `{{…}}` inside code spans and
-/// fenced blocks. Outside code, brackets escaped with a backslash, in an image or in
-/// math are literal. `Err` names a deletion left open.
-fn segments(text: &str) -> Result<Vec<Segment<'_>>, &'static str> {
+/// fenced blocks; with `typed_only`, as in an answer, only `[=…]`. Outside code,
+/// brackets escaped with a backslash, in an image or in math are literal. `Err` names
+/// a deletion left open.
+fn segments(text: &str, typed_only: bool) -> Result<Vec<Segment<'_>>, &'static str> {
     let mut segs = Vec::new();
     let (mut text_start, mut skip_to, mut escaped) = (0, 0, false);
     // The open deletion: whether it is in code, where it starts, its first `|`.
@@ -957,8 +989,8 @@ fn segments(text: &str) -> Result<Vec<Segment<'_>>, &'static str> {
                     *bar = Some(i);
                 }
             }
-            '[' if !in_code && open.is_none() => open = Some((false, i + 1, None)),
-            '{' if in_code && open.is_none() && rest.starts_with("{{") => {
+            '[' if !in_code && open.is_none() && (!typed_only || rest.starts_with("[=")) => open = Some((false, i + 1, None)),
+            '{' if in_code && open.is_none() && !typed_only && rest.starts_with("{{") => {
                 open = Some((true, i + 2, None));
                 skip_to = i + 2;
             }
@@ -972,11 +1004,14 @@ fn segments(text: &str) -> Result<Vec<Segment<'_>>, &'static str> {
                 if start - delimiter > text_start {
                     segs.push(Segment::Text(&text[text_start..start - delimiter]));
                 }
+                // Only a gap in text can be typed.
+                let typed = (!code && text[start..].starts_with('=')).then_some(start);
+                let from = start + typed.map_or(0, |_| 1);
                 let (answer, hint) = match bar {
-                    Some(bar) => (text[start..bar].trim(), Some(text[bar + 1..i].trim()).filter(|h| !h.is_empty())),
-                    None => (text[start..i].trim(), None),
+                    Some(bar) => (text[from..bar].trim(), Some(text[bar + 1..i].trim()).filter(|h| !h.is_empty())),
+                    None => (text[from..i].trim(), None),
                 };
-                segs.push(Segment::Deletion { answer, hint, code });
+                segs.push(Segment::Deletion { answer, hint, code, typed });
                 open = None;
                 text_start = i + delimiter;
                 skip_to = text_start;
@@ -1066,7 +1101,7 @@ pub fn image(s: &str) -> Option<(usize, &str, bool)> {
 }
 
 fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) {
-    let segs = match segments(text) {
+    let segs = match segments(text, false) {
         Ok(segs) => segs,
         Err(message) => {
             out.warnings.push(ParseWarning { line, message: message.into() });
@@ -1085,8 +1120,17 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
         return;
     }
 
+    // Ids leave out each typed gap's `=`, so typing a gap doesn't reset its history.
+    let mut id_text = text.to_string();
+    for seg in segs.iter().rev() {
+        if let Segment::Deletion { typed: Some(at), .. } = seg {
+            id_text.remove(*at);
+        }
+    }
+
     for target in 0..deletions {
         let (mut front, mut back) = (String::new(), String::new());
+        let mut typed = None;
         let mut n = 0;
         for seg in &segs {
             match seg {
@@ -1094,7 +1138,10 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
                     front.push_str(t);
                     back.push_str(t);
                 }
-                Segment::Deletion { answer, hint, code } => {
+                Segment::Deletion { answer, hint, code, typed: at } => {
+                    if n == target && at.is_some() {
+                        typed = Some(Typed { field: None, hint: hint.map(String::from), answer: answer.to_string() });
+                    }
                     let hint = hint.unwrap_or("…");
                     if n == target && *code {
                         let _ = write!(front, "{CODE_GAP_OPEN}[{hint}]{CODE_GAP_CLOSE}");
@@ -1110,7 +1157,7 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
                 }
             }
         }
-        let (id, old_id) = out.ids("cloze", text, &[&target.to_string()]);
+        let (id, old_id) = out.ids("cloze", &id_text, &[&target.to_string()]);
         out.cards.push(ParsedCard {
             id,
             kind: CardKind::Cloze,
@@ -1119,7 +1166,7 @@ fn parse_cloze(text: &str, line: u32, tags: Vec<String>, out: &mut ParseResult) 
             line,
             tags: tags.clone(),
             note: None,
-            typed: None,
+            typed,
             old_id,
         });
     }
@@ -1424,13 +1471,46 @@ mod tests {
         let r = parse_deck("@Spell\nWord: hola\nMeaning: hello\n", &types, "cards/a.md");
         // The audio is missing, so the word is what's typed.
         let typed = r.cards[0].typed.as_ref().unwrap();
-        assert_eq!((r.cards[0].front.as_str(), typed.field.as_str(), typed.answer.as_str()), ("hello", "Word", "hola"));
+        assert_eq!((r.cards[0].front.as_str(), typed.field.as_deref(), typed.answer.as_str()), ("hello", Some("Word"), "hola"));
         assert_eq!(r.cards[1].typed, None);
         // Typed or not, a card is the same card.
         let plain = "fields = [\"Word\", \"Audio\", \"Meaning\"]\ncards = [\"Meaning -> Audio, Word\"]";
         let mut other = NoteTypes::default();
         other.insert("Spell", plain);
         assert_eq!(parse_deck("@Spell\nWord: hola\nMeaning: hello\n", &other, "cards/a.md").cards[0].id, r.cards[0].id);
+    }
+
+    #[test]
+    fn typed_gaps_ask_for_their_answer() {
+        let r = parse("C: The capital of [France] is [=Paris|city].");
+        assert_eq!(r.cards.len(), 2);
+        assert_eq!(r.cards[0].typed, None);
+        let typed = r.cards[1].typed.as_ref().unwrap();
+        assert_eq!((typed.answer.as_str(), typed.hint.as_deref(), typed.field.as_deref()), ("Paris", Some("city"), None));
+        assert_eq!((r.cards[1].front.as_str(), r.cards[1].back.as_str()), ("The capital of France is **[city]**.", "The capital of France is **Paris**."));
+        // Typing a gap keeps the card's history.
+        let plain = parse("C: The capital of [France] is [Paris|city].");
+        assert_eq!(plain.cards[1].id, r.cards[1].id);
+        assert_eq!(plain.cards[0].id, r.cards[0].id);
+        // In code, and escaped, `=` is part of the answer.
+        let code = parse("C: Compare with `a {{=}} b`, or [\\==].");
+        assert!(code.cards.iter().all(|c| c.typed.is_none()));
+    }
+
+    #[test]
+    fn answers_mark_the_part_to_type() {
+        let r = parse("Q: The capital of France?\nA: [=Paris|city], on the [Seine](https://example.com).");
+        let card = &r.cards[0];
+        assert_eq!(card.back, "Paris, on the [Seine](https://example.com).");
+        let typed = card.typed.as_ref().unwrap();
+        assert_eq!((typed.answer.as_str(), typed.hint.as_deref()), ("Paris", Some("city")));
+        assert_eq!(card.id, parse("Q: The capital of France?\nA: Paris").cards[0].id);
+        assert_eq!(parse("Q: x\nA: [y] and `[=z]`").cards[0].typed, None);
+        // A mark left open or given twice is text, with a warning.
+        for source in ["Q: x\nA: [=y", "Q: x\nA: [=y] [=z]"] {
+            let r = parse(source);
+            assert_eq!((r.cards[0].back.as_str(), r.cards[0].typed.is_none(), r.warnings.len()), (&source[8..], true, 1));
+        }
     }
 
     #[test]

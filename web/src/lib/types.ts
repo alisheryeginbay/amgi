@@ -22,6 +22,8 @@ export interface StudyCard {
   typed?: string | null;
   /** The field that answer comes from, such as `Word`, which the typing box names. */
   typedField?: string | null;
+  /** The hint of a typed gap, `[=answer|hint]`, which the typing box shows. */
+  typedHint?: string | null;
 }
 
 export interface StudyState {

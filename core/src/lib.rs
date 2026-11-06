@@ -158,6 +158,8 @@ pub struct StudyCard {
     pub typed: Option<String>,
     /// The field that answer comes from, such as `Word`, which the typing box names.
     pub typed_field: Option<String>,
+    /// The hint of a typed gap, `[=answer|hint]`, which the typing box shows.
+    pub typed_hint: Option<String>,
 }
 
 /// Which of today's counts a card to study comes from, as the deck list shows them.
@@ -1389,7 +1391,8 @@ impl Inner {
             },
             intervals: preview.iter().map(|o| o.interval_secs).collect(),
             typed: card.parsed.typed.as_ref().map(|t| t.answer.clone()),
-            typed_field: card.parsed.typed.as_ref().map(|t| t.field.clone()),
+            typed_field: card.parsed.typed.as_ref().and_then(|t| t.field.clone()),
+            typed_hint: card.parsed.typed.as_ref().and_then(|t| t.hint.clone()),
         })
     }
 
