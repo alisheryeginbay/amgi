@@ -26,6 +26,7 @@ pub use scheduler::{Rating, ReviewState};
 pub use scripts::Scripts;
 use parser::ParsedCard;
 use scheduler::{Memory, PlannedCard, RatingHabits, Scheduler};
+use search::Query;
 use store::{CardState, CardTime, LogEntry, LoggedReview, Store};
 
 uniffi::setup_scaffolding!();
@@ -488,6 +489,8 @@ struct Inner {
     scripts: Scripts,
     /// New cards a day allows.
     new_per_day: u32,
+    /// Lower limits for some cards, from `amgi.toml`.
+    new_rules: Vec<NewRule>,
     /// Reviews of due cards a day allows; `None` for no limit.
     reviews_per_day: Option<u32>,
     /// Lapses that make a card a leech; at least 1.
@@ -507,9 +510,53 @@ struct Inner {
     sources: Option<Sources>,
 }
 
+/// At most `per_day` new cards a day from those the search `cards` matches.
+struct NewRule {
+    cards: String,
+    per_day: u32,
+    /// In `amgi.toml`.
+    line: u32,
+}
+
+/// What the new-card rules leave of today's new cards.
+#[derive(Default)]
+struct RuleBudget {
+    /// New cards each rule still allows today.
+    left: Vec<u32>,
+    /// The rules matching each unstudied card, by id; cards no rule matches are left out.
+    rules: HashMap<String, Vec<usize>>,
+}
+
+impl RuleBudget {
+    /// Whether every rule matching the card allows another new card today.
+    fn allows(&self, id: &str) -> bool {
+        self.rules.get(id).is_none_or(|rules| rules.iter().all(|&r| self.left[r] > 0))
+    }
+
+    /// How many of `cards`, unstudied and in order, the rules let through today, up to
+    /// `cap`. Each card taken counts toward every rule matching it.
+    fn available<'a>(&self, cards: impl Iterator<Item = &'a Card>, cap: u32) -> u32 {
+        let mut left = self.left.clone();
+        let mut taken = 0;
+        for card in cards {
+            if taken >= cap {
+                break;
+            }
+            let rules = self.rules.get(&card.parsed.id).map_or(&[][..], Vec::as_slice);
+            if rules.iter().all(|&r| left[r] > 0) {
+                rules.iter().for_each(|&r| left[r] -= 1);
+                taken += 1;
+            }
+        }
+        taken
+    }
+}
+
 /// The files a load reads, each with its path and text, in the order they're read.
 #[derive(PartialEq)]
 struct Sources {
+    /// `amgi.toml`, if there is one.
+    settings: Option<String>,
     note_types: Vec<(PathBuf, String)>,
     decks: Vec<(PathBuf, String)>,
     /// Markdown outside `cards`, checked for decks left behind there. Unreadable files
@@ -569,19 +616,6 @@ impl CardCollection {
     /// any changed; if none did, the cards are left as they were.
     pub fn reload(&self) -> Result<bool> {
         self.lock().reload()
-    }
-
-    /// How many new cards a study day allows learning. Collection-wide; 0 means none.
-    pub fn new_cards_per_day(&self) -> u32 {
-        self.lock().new_per_day
-    }
-
-    /// Set and save the daily new-card limit.
-    pub fn set_new_cards_per_day(&self, limit: u32) -> Result<()> {
-        let mut inner = self.lock();
-        inner.store.set_setting(NEW_PER_DAY_KEY, limit.into())?;
-        inner.new_per_day = limit;
-        Ok(())
     }
 
     /// Lapses that make a card a leech. Collection-wide.
@@ -786,6 +820,9 @@ impl CardCollection {
 
     /// Reviews expected over the next `days` days, in a deck or the whole collection,
     /// if `new_cards` new cards are first studied today.
+    /// What studying `new_cards` today, or each day from today when `every_day`,
+    /// adds to the coming days' reviews. Every day's cards run out with the cards not
+    /// yet studied, unless `keep_adding`.
     pub fn workload(
         &self,
         scope: StudyScope,
@@ -899,6 +936,7 @@ impl CardCollection {
             note_types: parser::NoteTypes::default(),
             scripts: Scripts::default(),
             new_per_day: DEFAULT_NEW_PER_DAY,
+            new_rules: Vec::new(),
             reviews_per_day: None,
             leech_threshold: DEFAULT_LEECH_THRESHOLD,
             leech_suspend: false,
@@ -910,6 +948,7 @@ impl CardCollection {
         };
         inner.load_settings()?;
         inner.reload()?;
+        inner.move_new_limit_to_file()?;
         Ok(CardCollection {
             inner: Mutex::new(inner),
         })
@@ -931,9 +970,6 @@ impl Inner {
         }
         if let Some(hour) = self.store.setting(ROLLOVER_HOUR_KEY)? {
             self.rollover_secs = hour.clamp(0.0, 23.0) as i64 * 3600;
-        }
-        if let Some(limit) = self.store.setting(NEW_PER_DAY_KEY)? {
-            self.new_per_day = limit.clamp(0.0, u32::MAX.into()) as u32;
         }
         self.reviews_per_day = self.store.setting(REVIEWS_PER_DAY_KEY)?.map(|n| n.clamp(0.0, u32::MAX.into()) as u32);
         if let Some(lapses) = self.store.setting(LEECH_THRESHOLD_KEY)? {
@@ -988,6 +1024,7 @@ impl Inner {
         self.warnings.clear();
         self.scripts = Scripts::default();
         self.load_note_types(&sources.note_types);
+        self.load_settings_file(sources.settings.as_deref());
         self.warn_about_stray_decks(&sources.strays);
         let cards_dir = self.root.join(CARDS_DIR);
         for (file, text) in &sources.decks {
@@ -1088,7 +1125,13 @@ impl Inner {
             .filter_map(|file| fs::read_to_string(&file).ok().map(|text| (file, text)))
             .collect();
 
-        Ok(Sources { note_types: read(note_types)?, decks: read(decks)?, strays })
+        let settings = match fs::read_to_string(self.root.join(lint::CONFIG_FILE)) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+
+        Ok(Sources { settings, note_types: read(note_types)?, decks: read(decks)?, strays })
     }
 
     /// Move history saved under a card's id from before media links were resolved for
@@ -1124,6 +1167,66 @@ impl Inner {
             let message = format!("decks are read from the `{CARDS_DIR}` folder, so this file{more} are left out: move them into it");
             self.warnings.push(CollectionWarning { path: relative(&self.root, first), line: 0, message });
         }
+    }
+
+    /// The new-card limit and rules in `amgi.toml`; the defaults if it has errors,
+    /// which become a warning.
+    fn load_settings_file(&mut self, text: Option<&str>) {
+        self.new_per_day = DEFAULT_NEW_PER_DAY;
+        self.new_rules.clear();
+        let Some(text) = text else { return };
+        match lint::Config::parse(text) {
+            Ok(config) => {
+                self.new_per_day = config.new.per_day.unwrap_or(DEFAULT_NEW_PER_DAY);
+                self.new_rules = config
+                    .new
+                    .rule
+                    .into_iter()
+                    .map(|r| NewRule {
+                        line: text[..r.cards.span().start].matches('\n').count() as u32 + 1,
+                        cards: r.cards.into_inner(),
+                        per_day: r.per_day,
+                    })
+                    .collect();
+                let cap = self.new_per_day;
+                for r in self.new_rules.iter().filter(|r| r.per_day > cap) {
+                    let message = format!(
+                        "the new-card rule for \"{}\" allows {} a day, more than the {cap} of new.per-day, so it has no effect",
+                        r.cards, r.per_day
+                    );
+                    self.warnings.push(CollectionWarning { path: lint::CONFIG_FILE.into(), line: r.line, message });
+                }
+            }
+            Err(message) => {
+                self.warnings.push(CollectionWarning { path: lint::CONFIG_FILE.into(), line: 0, message });
+            }
+        }
+    }
+
+    /// The daily new-card limit was once kept in the database; write it to `amgi.toml`
+    /// as `new.per-day`, unless the file sets its own, and forget it. A file with
+    /// errors is left alone until it's fixed.
+    fn move_new_limit_to_file(&mut self) -> Result<()> {
+        let Some(limit) = self.store.setting(NEW_PER_DAY_KEY)? else { return Ok(()) };
+        let Ok(config) = lint::Config::load(&self.root) else { return Ok(()) };
+        if config.new.per_day.is_none() {
+            let limit = limit.clamp(0.0, u32::MAX.into()) as u32;
+            let path = self.root.join(lint::CONFIG_FILE);
+            let text = match fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(e.into()),
+            };
+            let text = with_new_limit(&text, limit);
+            // Should the edit not read back as meant, the file is left as it was.
+            if lint::Config::parse(&text).ok().and_then(|c| c.new.per_day) != Some(limit) {
+                return Ok(());
+            }
+            fs::write(&path, text)?;
+            self.reload()?;
+        }
+        self.store.remove_setting(NEW_PER_DAY_KEY)?;
+        Ok(())
     }
 
     /// Every `note-types/Name.toml`, as note type `Name`.
@@ -1163,6 +1266,39 @@ impl Inner {
         Ok(self.new_per_day.saturating_sub(studied))
     }
 
+    /// What the new-card rules allow today: each counts the new cards it matches that
+    /// were studied today, across the whole collection.
+    fn rule_budget(&self, now: i64) -> Result<RuleBudget> {
+        if self.new_rules.is_empty() {
+            return Ok(RuleBudget::default());
+        }
+        let today = self.day_start(now);
+        let types = self.note_types.list();
+        let queries: Vec<Query> = self.new_rules.iter().map(|r| Query::parse_with(&r.cards, today, &types)).collect();
+        let matching = |card: &Card| -> Vec<usize> {
+            let summary = self.summary(card);
+            (0..queries.len()).filter(|&r| queries[r].matches(&summary)).collect()
+        };
+        let mut left: Vec<u32> = self.new_rules.iter().map(|r| r.per_day).collect();
+        for id in self.store.new_card_ids_since(today)? {
+            if let Some(&i) = self.index.get(&id) {
+                for r in matching(&self.cards[i]) {
+                    left[r] = left[r].saturating_sub(1);
+                }
+            }
+        }
+        let rules = self
+            .cards
+            .iter()
+            .filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id))
+            .filter_map(|c| {
+                let rules = matching(c);
+                (!rules.is_empty()).then(|| (c.parsed.id.clone(), rules))
+            })
+            .collect();
+        Ok(RuleBudget { left, rules })
+    }
+
     /// Reviews of due cards still allowed today, collection-wide.
     fn reviews_remaining(&self, now: i64) -> Result<u32> {
         let Some(limit) = self.reviews_per_day else { return Ok(u32::MAX) };
@@ -1198,6 +1334,8 @@ impl Inner {
 
     fn decks(&self, now: i64) -> Result<Vec<DeckInfo>> {
         let new_remaining = self.new_remaining(now)?;
+        let budget = self.rule_budget(now)?;
+        let unseen = || self.cards.iter().filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id));
         let reviews_remaining = self.reviews_remaining(now)?;
         // Count each deck's own cards, then add them to the deck and its parents:
         // there are far fewer decks than cards. `due` holds reviews until the limit
@@ -1243,7 +1381,11 @@ impl Inner {
                     d.name.rsplit('/').next().unwrap_or_default().to_string()
                 }),
                 due: d.due.min(reviews_remaining),
-                new: d.new.min(new_remaining),
+                new: if budget.rules.is_empty() {
+                    d.new.min(new_remaining)
+                } else {
+                    budget.available(unseen().filter(|c| contains(&d.name, &c.deck)), new_remaining)
+                },
                 note_type: self.deck_note_types.get(&d.name).cloned(),
                 ..d
             })
@@ -1255,30 +1397,29 @@ impl Inner {
     }
 
     fn cards_where(&self, scope: &StudyScope, keep: impl Fn(&Card) -> bool) -> Vec<CardSummary> {
-        self.in_scope(scope)
-            .filter(|card| keep(card))
-            .map(|card| {
-                let state = self.states.get(&card.parsed.id);
-                CardSummary {
-                    id: card.parsed.id.clone(),
-                    deck: card.deck.clone(),
-                    tags: card.parsed.tags.clone(),
-                    path: card.path.clone(),
-                    line: card.parsed.line,
-                    kind: card.parsed.kind,
-                    front: card.parsed.front.clone(),
-                    back: card.parsed.back.clone(),
-                    due: state.map(|s| s.due),
-                    interval: state.map(|s| s.interval_secs),
-                    reps: state.map_or(0, |s| s.reps),
-                    lapses: state.map_or(0, |s| s.lapses),
-                    suspended: card.suspended(),
-                    leech: state.is_some_and(|s| s.lapses >= self.leech_threshold),
-                    note_type: card.parsed.note.as_ref().map(|n| n.note_type.clone()),
-                    fields: card.parsed.note.as_ref().map(|n| n.values.clone()).unwrap_or_default(),
-                }
-            })
-            .collect()
+        self.in_scope(scope).filter(|card| keep(card)).map(|card| self.summary(card)).collect()
+    }
+
+    fn summary(&self, card: &Card) -> CardSummary {
+        let state = self.states.get(&card.parsed.id);
+        CardSummary {
+            id: card.parsed.id.clone(),
+            deck: card.deck.clone(),
+            tags: card.parsed.tags.clone(),
+            path: card.path.clone(),
+            line: card.parsed.line,
+            kind: card.parsed.kind,
+            front: card.parsed.front.clone(),
+            back: card.parsed.back.clone(),
+            due: state.map(|s| s.due),
+            interval: state.map(|s| s.interval_secs),
+            reps: state.map_or(0, |s| s.reps),
+            lapses: state.map_or(0, |s| s.lapses),
+            suspended: card.suspended(),
+            leech: state.is_some_and(|s| s.lapses >= self.leech_threshold),
+            note_type: card.parsed.note.as_ref().map(|n| n.note_type.clone()),
+            fields: card.parsed.note.as_ref().map(|n| n.values.clone()).unwrap_or_default(),
+        }
     }
 
     fn next_card(&self, scope: &StudyScope, now: i64) -> Result<Option<StudyCard>> {
@@ -1326,13 +1467,15 @@ impl Inner {
     /// The next new card, with decks taking turns. From the top of the deck tree down,
     /// each step goes to the folder or file that has given the fewest new cards today,
     /// counting everything inside it; ties go by a hash of its name and the day. A file
-    /// gives its cards in file order.
+    /// gives its cards in file order, skipping those a new-card rule holds back today.
     fn next_new_card(&self, scope: &StudyScope, now: i64) -> Result<Option<&Card>> {
+        let budget = self.rule_budget(now)?;
         // Each deck's next new card.
         let mut decks = HashSet::new();
         let mut candidates: Vec<&Card> = self
             .in_scope(scope)
             .filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id))
+            .filter(|c| budget.allows(&c.parsed.id))
             .filter(|c| decks.insert(c.deck.as_str()))
             .collect();
         let mut today: HashMap<&str, u32> = HashMap::new();
@@ -1917,10 +2060,7 @@ impl Inner {
         let since = self.day_start(now);
         let ids = self.scope_ids(scope);
         let ids = ids.as_deref();
-        let unseen = self
-            .in_scope(scope)
-            .filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id))
-            .count() as u32;
+        let unseen = || self.in_scope(scope).filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id));
         let (mut learning, mut due) = (0, 0);
         for state in self.in_scope(scope).filter(|c| !c.suspended()).filter_map(|c| self.states.get(&c.parsed.id)) {
             if state.interval_secs < DAY_SECS {
@@ -1929,7 +2069,7 @@ impl Inner {
                 due += u32::from(self.is_due(state, now));
             }
         }
-        let new_available = unseen.min(self.new_remaining(now)?);
+        let new_available = self.rule_budget(now)?.available(unseen(), self.new_remaining(now)?);
         let due_available = due.min(self.reviews_remaining(now)?);
         let time = self.time_per_card(ids, now)?;
         Ok(TodayStats {
@@ -2004,6 +2144,31 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
 }
 
 /// Whether `deck` is `parent` or one of its subdecks.
+/// `amgi.toml`'s text with `per-day = limit` under `[new]`: in that table if the file
+/// has it, else in a new one before the first `[[new.rule]]` or at the end.
+fn with_new_limit(text: &str, limit: u32) -> String {
+    let setting = format!("per-day = {limit}\n");
+    let header = |line: &str, name: &str| {
+        line.trim_start().strip_prefix(name).is_some_and(|rest| rest.trim_start().is_empty() || rest.trim_start().starts_with('#'))
+    };
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        if header(line, "[new]") {
+            let end = at + line.len();
+            let newline = if line.ends_with('\n') { "" } else { "\n" };
+            return format!("{}{newline}{setting}{}", &text[..end], &text[end..]);
+        }
+        if header(line, "[[new.rule]]") {
+            return format!("{}[new]\n{setting}\n{}", &text[..at], &text[at..]);
+        }
+        at += line.len();
+    }
+    match text.trim_end() {
+        "" => format!("[new]\n{setting}"),
+        rest => format!("{rest}\n\n[new]\n{setting}"),
+    }
+}
+
 fn contains(parent: &str, deck: &str) -> bool {
     deck.strip_prefix(parent).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
@@ -2659,7 +2824,8 @@ mod tests {
     #[test]
     fn new_card_limit() {
         let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n\nQ: 3\nA: 3\n")]);
-        c.set_new_cards_per_day(1).unwrap();
+        assert_eq!(c.lock().new_per_day, DEFAULT_NEW_PER_DAY);
+        set_new_cards(&dir, &c, "[new]\nper-day = 1\n");
         let mut inner = c.lock();
         let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
         inner.answer(&card.id, Rating::Easy, None, T0).unwrap();
@@ -2669,18 +2835,109 @@ mod tests {
         assert!(inner.next_card(&StudyScope::All, T0 + DAY_SECS).unwrap().is_some());
         drop(inner);
         // Lowering the limit below what's been learned today leaves none.
-        c.set_new_cards_per_day(0).unwrap();
+        set_new_cards(&dir, &c, "[new]\nper-day = 0\n");
         assert_eq!(c.lock().decks(T0).unwrap()[0].new, 0);
         // Raising it lets more in the same day.
-        c.set_new_cards_per_day(5).unwrap();
-        assert_eq!(c.new_cards_per_day(), 5);
+        set_new_cards(&dir, &c, "[new]\nper-day = 5\n");
         assert_eq!(c.lock().decks(T0).unwrap()[0].new, 2);
-        // The limit is kept in the database.
-        let mut inner = c.lock();
-        inner.new_per_day = DEFAULT_NEW_PER_DAY;
-        inner.load_settings().unwrap();
-        assert_eq!(inner.new_per_day, 5);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Write `amgi.toml` and read the collection again.
+    fn set_new_cards(dir: &Path, c: &CardCollection, toml: &str) {
+        fs::write(dir.join(lint::CONFIG_FILE), toml).unwrap();
+        c.reload().unwrap();
+    }
+
+    #[test]
+    fn new_card_limit_moves_to_file() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n")]);
+        let reopen = |c: CardCollection| {
+            let store = c.inner.into_inner().unwrap().store;
+            CardCollection::with_store(dir.clone(), store).unwrap()
+        };
+        let file = || fs::read_to_string(dir.join(lint::CONFIG_FILE)).unwrap_or_default();
+        // Without one in the database, nothing is written.
+        let c = reopen(c);
+        assert_eq!(file(), "");
+        // One in the database goes to the file, beside what's there, and leaves the database.
+        fs::write(dir.join(lint::CONFIG_FILE), "[lint]\ntags = false\n").unwrap();
+        c.lock().store.set_setting(NEW_PER_DAY_KEY, 7.0).unwrap();
+        let c = reopen(c);
+        assert_eq!(file(), "[lint]\ntags = false\n\n[new]\nper-day = 7\n");
+        assert_eq!(c.lock().new_per_day, 7);
+        assert_eq!(c.lock().store.setting(NEW_PER_DAY_KEY).unwrap(), None);
+        // The file's own limit wins, and the database's is dropped.
+        c.lock().store.set_setting(NEW_PER_DAY_KEY, 9.0).unwrap();
+        let c = reopen(c);
+        let inner = c.lock();
+        assert_eq!((inner.new_per_day, inner.store.setting(NEW_PER_DAY_KEY).unwrap()), (7, None));
         drop(inner);
+        // A file with errors is left alone, and the limit kept for later.
+        fs::write(dir.join(lint::CONFIG_FILE), "[new\n").unwrap();
+        c.lock().store.set_setting(NEW_PER_DAY_KEY, 9.0).unwrap();
+        let c = reopen(c);
+        let kept = c.lock().store.setting(NEW_PER_DAY_KEY).unwrap();
+        assert_eq!((file().as_str(), kept), ("[new\n", Some(9.0)));
+        drop(c);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn new_limit_goes_under_new() {
+        assert_eq!(with_new_limit("", 5), "[new]\nper-day = 5\n");
+        assert_eq!(with_new_limit("[new]\n", 5), "[new]\nper-day = 5\n");
+        assert_eq!(with_new_limit("[new] # mine", 5), "[new] # mine\nper-day = 5\n");
+        assert_eq!(
+            with_new_limit("[lint]\ntags = false\n\n[[new.rule]]\ncards = \"a\"\nper-day = 1\n", 5),
+            "[lint]\ntags = false\n\n[new]\nper-day = 5\n\n[[new.rule]]\ncards = \"a\"\nper-day = 1\n"
+        );
+    }
+
+    #[test]
+    fn new_card_rules() {
+        let (dir, c) = collection(&[
+            ("a.md", "Q: a1\nA: -\n\nQ: a2\nA: -\n\nQ: a3\nA: -\n\nQ: a4\nA: -\n#hard\n"),
+            ("b.md", "Q: b1\nA: -\n\nQ: b2\nA: -\n\nQ: b3\nA: -\n"),
+        ]);
+        let rules = "[new]\nper-day = 10\n\n[[new.rule]]\ncards = \"deck:a\"\nper-day = 2\n\n[[new.rule]]\ncards = \"deck:b\"\nper-day = 0\n";
+        set_new_cards(&dir, &c, rules);
+        let mut inner = c.lock();
+        let new = |inner: &Inner| inner.decks(T0).unwrap().iter().map(|d| d.new).collect::<Vec<_>>();
+        assert_eq!(new(&inner), [2, 0]);
+        assert_eq!(inner.today(&StudyScope::All, T0).unwrap().new_available, 2);
+        // Two from `a`, none from `b`, though the collection allows ten.
+        let mut fronts = Vec::new();
+        while let Some(card) = inner.next_card(&StudyScope::All, T0).unwrap() {
+            inner.answer(&card.id, Rating::Easy, None, T0).unwrap();
+            fronts.push(card.front.trim().to_string());
+        }
+        assert_eq!(fronts, ["a1", "a2"]);
+        assert_eq!(new(&inner), [0, 0]);
+        // Tomorrow the rules reset.
+        assert_eq!(inner.next_card(&StudyScope::All, T0 + DAY_SECS).unwrap().unwrap().front.trim(), "a3");
+        drop(inner);
+
+        // A card matching two rules takes both; the stricter one holds it back while
+        // the other's cards still come.
+        let rules = "[new]\nper-day = 10\n\n[[new.rule]]\ncards = \"deck:a\"\nper-day = 3\n\n[[new.rule]]\ncards = \"#hard\"\nper-day = 0\n";
+        set_new_cards(&dir, &c, rules);
+        let mut inner = c.lock();
+        let card = inner.next_card(&deck("a"), T0).unwrap().unwrap();
+        assert_eq!(card.front.trim(), "a3");
+        inner.answer(&card.id, Rating::Easy, None, T0).unwrap();
+        assert!(inner.next_card(&deck("a"), T0).unwrap().is_none());
+        drop(inner);
+
+        // A rule above the daily limit is flagged, with its line; a broken file too.
+        assert!(c.warnings().is_empty());
+        set_new_cards(&dir, &c, &rules.replace("per-day = 10", "per-day = 2"));
+        let w = c.warnings();
+        assert_eq!((w.len(), w[0].path.as_str(), w[0].line), (1, "amgi.toml", 5));
+        assert!(w[0].message.contains("\"deck:a\" allows 3 a day, more than the 2"), "{}", w[0].message);
+        set_new_cards(&dir, &c, "[[new.rule]]\ncards = \"deck:a\"\n");
+        let w = c.warnings();
+        assert!(w.len() == 1 && w[0].message.contains("per-day"), "{w:?}");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2713,7 +2970,7 @@ mod tests {
         assert_eq!(new.stage, StudyStage::New);
         inner.answer(&new.id, Rating::Easy, None, back).unwrap();
         drop(inner);
-        c.set_new_cards_per_day(1).unwrap();
+        set_new_cards(&dir, &c, "[new]\nper-day = 1\n");
         let inner = c.lock();
         assert!(inner.next_card(&StudyScope::All, back).unwrap().is_none());
         assert_eq!(inner.today(&StudyScope::All, back).unwrap().due_available, 0);

@@ -8,6 +8,18 @@
 //! tags = true               # a tag twice on a card, or spelled two ways
 //! ```
 //!
+//! The same file sets how many new cards a day allows, in all and for some cards
+//! (`Inner::rule_budget` in `lib.rs`):
+//!
+//! ```toml
+//! [new]
+//! per-day = 20              # in all; 20 without it
+//!
+//! [[new.rule]]
+//! cards = "deck:languages"  # a search, as `amgi search` takes it
+//! per-day = 10
+//! ```
+//!
 //! Without the file, or a rule in it, each rule has its default. Links inside code
 //! blocks and code spans are text, so they're left alone. A fix never changes a card's
 //! id, which would lose its history: a file whose ids would change isn't written.
@@ -28,6 +40,24 @@ pub const CONFIG_FILE: &str = "amgi.toml";
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub lint: Rules,
+    pub new: NewCards,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct NewCards {
+    /// New cards a day in all.
+    pub per_day: Option<u32>,
+    pub rule: Vec<NewRule>,
+}
+
+/// At most `per_day` new cards a day from those matching `cards`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct NewRule {
+    /// A search; spanned to say where a rule is in the file.
+    pub cards: toml::Spanned<String>,
+    pub per_day: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,10 +93,15 @@ impl Config {
     /// `amgi.toml` at `root`, or the defaults when there is none; or why it can't be read.
     pub fn load(root: &Path) -> Result<Self, String> {
         match fs::read_to_string(root.join(CONFIG_FILE)) {
-            Ok(text) => toml::from_str(&text).map_err(|e| format!("{CONFIG_FILE}: {}", e.to_string().trim_end())),
+            Ok(text) => Self::parse(&text).map_err(|e| format!("{CONFIG_FILE}: {e}")),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(format!("{CONFIG_FILE}: {e}")),
         }
+    }
+
+    /// The file's text as settings, or what's wrong with it.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        toml::from_str(text).map_err(|e| e.to_string().trim_end().to_string())
     }
 }
 
@@ -494,6 +529,11 @@ mod tests {
         assert_eq!(config("[lint]\nmedia-links = \"any\"\nmissing-media = false\ntags = false"), Ok((MediaLinks::Any, false, false)));
         assert!(config("[lint]\nmedia-link = \"any\"").unwrap_err().contains("unknown field"));
         assert!(config("[lint]\nmedia-links = \"relative\"").is_err());
+        let rules = Config::parse("[[new.rule]]\ncards = \"deck:a\"\nper-day = 5\n").unwrap().new.rule;
+        assert_eq!((rules[0].cards.get_ref().as_str(), rules[0].per_day), ("deck:a", 5));
+        assert!(Config::parse("[[new.rule]]\ncards = \"deck:a\"\n").unwrap_err().contains("per-day"));
+        assert_eq!(Config::parse("[new]\nper-day = 7\n").unwrap().new.per_day, Some(7));
+        assert_eq!(Config::parse("").unwrap().new.per_day, None);
         let off = Rules { media_links: MediaLinks::Any, missing_media: false, tags: false };
         let text = "Q: ![](../media/gone.png)\nA: b\n";
         assert_eq!(lint_with(text, "cards/a.md", &off), (text.to_string(), vec![]));

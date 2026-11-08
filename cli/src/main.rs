@@ -34,6 +34,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Cards left to study today, and the decks they're in.
+    #[command(after_long_help = NEW_CARD_RULES)]
     Status {
         /// One line, such as `12 due · 5 new`, or nothing when all caught up.
         #[arg(long, short)]
@@ -134,6 +135,23 @@ enum Command {
 }
 
 /// `amgi search --help`, after the options.
+const NEW_CARD_RULES: &str = "\
+New cards a day are set in `amgi.toml` at the collection root, 20 without it. Rules
+allow fewer from some cards, each a search as `amgi search` takes it:
+
+  [new]
+  per-day = 20              in all; 0 to only review
+
+  [[new.rule]]
+  cards = \"deck:languages\"
+  per-day = 10
+
+  [[new.rule]]
+  cards = \"#grammar\"
+  per-day = 0               no new cards; their reviews still come
+
+A card matching several rules counts toward each, so the strictest one decides.";
+
 const SEARCH_SYNTAX: &str = "\
 Every word must match the card's question, answer, tags or note fields, ignoring case
 and accents. Words can also be filters:
