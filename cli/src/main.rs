@@ -34,13 +34,14 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Cards left to study today, and the decks they're in.
-    #[command(after_long_help = NEW_CARD_RULES)]
     Status {
         /// One line, such as `12 due · 5 new`, or nothing when all caught up.
         #[arg(long, short)]
         short: bool,
     },
-    /// Problems in the deck files, as `path:line: message`. Exits 1 if there are any.
+    /// Problems in the deck files and `amgi.toml`, as `path:line: message`. Exits 1 if
+    /// there are any.
+    #[command(after_long_help = SETTINGS)]
     Check,
     /// Deck files that break the rules in `amgi.toml`, such as media links that don't
     /// start at the collection root, as `path:line:column: message`. Exits 1 if any are
@@ -135,22 +136,35 @@ enum Command {
 }
 
 /// `amgi search --help`, after the options.
-const NEW_CARD_RULES: &str = "\
-New cards a day are set in `amgi.toml` at the collection root, 20 without it. Rules
-allow fewer from some cards, each a search as `amgi search` takes it:
+const SETTINGS: &str = "\
+The collection's settings are in `amgi.toml` at its root. A setting left out has the
+value shown, except the new-card rules and review limit, which there are none of:
+
+  [study]
+  retention = 0.9            # how likely to remember a card when it comes due, 0.7-0.99
+  day-starts-at = 4          # the hour a study day starts; before it counts as the day before
 
   [new]
-  per-day = 20              in all; 0 to only review
+  per-day = 20               # new cards a day in all; 0 to only review
 
-  [[new.rule]]
+  [[new.rule]]               # fewer new cards from those a search matches
   cards = \"deck:languages\"
   per-day = 10
 
-  [[new.rule]]
-  cards = \"#grammar\"
-  per-day = 0               no new cards; their reviews still come
+  [review]
+  per-day = 200              # reviews of due cards a day
 
-A card matching several rules counts toward each, so the strictest one decides.";
+  [leech]
+  lapses = 8                 # times forgotten that make a card a leech
+  suspend = false            # tag a leech #suspended in its file
+
+  [lint]                     # rules for `amgi lint`
+  media-links = \"absolute\"
+  missing-media = true
+  tags = true
+
+A card matching several new-card rules counts toward each, so the strictest decides.
+Changes apply the next time the app or `amgi` reads the collection.";
 
 const SEARCH_SYNTAX: &str = "\
 Every word must match the card's question, answer, tags or note fields, ignoring case

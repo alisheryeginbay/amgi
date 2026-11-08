@@ -16,15 +16,10 @@ struct DeckName: Equatable {
 @MainActor
 final class AppModel {
     private static let folderKey = "collectionPath"
-    /// Where desired retention was kept before collections kept their own, which new
-    /// and older collections still start from.
-    private static let retentionKey = "desiredRetention"
     private static let quickAddShortcutKey = "quickAddShortcut"
     private static let ankiConnectKey = "ankiConnect"
     /// The port AnkiConnect listens on, which Yomitan and other tools try by default.
     static let ankiConnectPort: UInt16 = 8765
-    /// The range the core accepts.
-    static let retentionRange = 0.7...0.99
 
     private(set) var folder: URL?
     /// Deck names and titles, for adding cards to them.
@@ -62,54 +57,9 @@ final class AppModel {
     /// comes to the front.
     @ObservationIgnored private var configError: String?
 
-    /// Target probability of recalling a card when it comes due. The open collection's,
-    /// kept in its database.
-    var desiredRetention: Double = 0.9 {
-        didSet {
-            guard let collection, Float(desiredRetention) != collection.desiredRetention() else { return }
-            perform { try collection.setDesiredRetention(retention: Float(desiredRetention)) }
-            refreshIntervals()
-        }
-    }
-
-    /// The hour (0–23) a new study day starts. The open collection's, kept in its database.
-    var rolloverHour: Int = 4 {
-        didSet {
-            guard let collection, rolloverHour != Int(collection.rolloverHour()) else { return }
-            perform { try collection.setRolloverHour(hour: UInt8(rolloverHour)) }
-            refresh()
-        }
-    }
-
-    /// How many times a card is forgotten before it's a leech. The open collection's,
-    /// kept in its database.
-    var leechThreshold: Int = 8 {
-        didSet {
-            let lapses = UInt32(clamping: max(1, leechThreshold))
-            guard let collection, lapses != collection.leechThreshold() else { return }
-            perform { try collection.setLeechThreshold(lapses: lapses) }
-            refresh()
-        }
-    }
-
-    /// Whether a card is suspended when it becomes a leech. The open collection's.
-    var suspendsLeeches = false {
-        didSet {
-            guard let collection, suspendsLeeches != collection.suspendsLeeches() else { return }
-            perform { try collection.setSuspendsLeeches(suspend: suspendsLeeches) }
-        }
-    }
-
-    /// How many cards that came due a day allows reviewing, or `nil` for no limit. The
-    /// open collection's, kept in its database.
-    var reviewsPerDay: Int? {
-        didSet {
-            let limit = reviewsPerDay.map { UInt32(clamping: $0) }
-            guard let collection, limit != collection.reviewsPerDay() else { return }
-            perform { try collection.setReviewsPerDay(limit: limit) }
-            refresh()
-        }
-    }
+    /// Target probability of recalling a card when it comes due, from the open
+    /// collection's `amgi.toml`.
+    private(set) var desiredRetention: Double = 0.9
 
     /// Whether ⌥⌘N opens Add Card from any app.
     var quickAddShortcut: Bool = UserDefaults.standard.object(forKey: AppModel.quickAddShortcutKey) as? Bool ?? true {
@@ -201,13 +151,7 @@ final class AppModel {
         perform {
             let collection = try CardCollection.open(root: url.path)
             collection.setUtcOffset(seconds: Int32(TimeZone.current.secondsFromGMT()))
-            try collection.adoptSettings(desiredRetention: Self.savedRetention(), rolloverHour: nil)
             self.collection = collection
-            self.desiredRetention = Double(collection.desiredRetention())
-            self.rolloverHour = Int(collection.rolloverHour())
-            self.reviewsPerDay = collection.reviewsPerDay().map(Int.init)
-            self.leechThreshold = Int(collection.leechThreshold())
-            self.suspendsLeeches = collection.suspendsLeeches()
             self.canUndoAnswer = false
             self.leechNotice = nil
             self.folder = url
@@ -289,10 +233,12 @@ final class AppModel {
             update(\.noteTypes, collection.noteTypes())
             update(\.today, try collection.today(scope: .all))
             update(\.warnings, collection.warnings())
+            update(\.desiredRetention, Double(collection.desiredRetention()))
         }
         fonts.fetch(for: collection.scripts(), han: EnvironmentPayload.preferredHan)
         loadCardInfo()
-        if current == nil || !revealed { loadNext() }
+        // `amgi.toml` may have changed the schedule, so a revealed card's intervals too.
+        if current == nil || !revealed { loadNext() } else { refreshIntervals() }
     }
 
     /// Cards come due, and the study day rolls over, while the app is in the background:
@@ -476,11 +422,6 @@ final class AppModel {
                 update(\.study, revealed ? .answer(next) : .question(next))
             }
         }
-    }
-
-    /// The desired retention the app kept for every collection, if it was ever changed.
-    private static func savedRetention() -> Float? {
-        (UserDefaults.standard.object(forKey: retentionKey) as? Double).map(Float.init)
     }
 
     // MARK: Adding cards

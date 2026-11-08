@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-use amgi_core::lint;
+use amgi_core::settings;
 use amgi_core::search::Query;
 use amgi_core::{CardSummary, CardCollection, CardInfo, CardKind, Rating, Retention, StudyScope, format_interval};
 use serde_json::json;
@@ -106,8 +106,8 @@ pub fn check(c: &CardCollection, out: Output) -> Result {
 
 pub fn lint(c: &CardCollection, out: Output, fix: bool) -> Result {
     let root = c.root();
-    let config = lint::Config::load(&root)?;
-    let problems = c.lint(&config, fix)?;
+    let rules = settings::Settings::load(&root)?.lint;
+    let problems = c.lint(&rules, fix)?;
     let fixed = if fix { problems.iter().filter(|p| p.fixable).count() as u32 } else { 0 };
     let left: Vec<_> = problems.iter().filter(|p| !(fix && p.fixable)).collect();
     let code = if left.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE };

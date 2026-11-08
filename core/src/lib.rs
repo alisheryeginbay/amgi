@@ -13,6 +13,7 @@ pub mod parser;
 pub mod scheduler;
 pub mod scripts;
 pub mod search;
+pub mod settings;
 pub mod store;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -45,7 +46,8 @@ const DAY_SECS: i64 = 86_400;
 const DEFAULT_ROLLOVER_HOUR: u8 = 4;
 /// When nothing else is left, a failed card due back within this window is shown early.
 const LEARN_AHEAD_SECS: i64 = 20 * 60;
-/// Keys of the settings kept in the collection's database.
+/// Keys of the settings the collection's database kept before `amgi.toml` did, moved
+/// to the file when the collection opens.
 const RETENTION_KEY: &str = "desired_retention";
 const ROLLOVER_HOUR_KEY: &str = "rollover_hour";
 const REVIEWS_PER_DAY_KEY: &str = "reviews_per_day";
@@ -623,26 +625,9 @@ impl CardCollection {
         self.lock().leech_threshold
     }
 
-    /// Set and save the leech threshold; at least 1.
-    pub fn set_leech_threshold(&self, lapses: u32) -> Result<()> {
-        let mut inner = self.lock();
-        let lapses = lapses.max(1);
-        inner.store.set_setting(LEECH_THRESHOLD_KEY, lapses.into())?;
-        inner.leech_threshold = lapses;
-        Ok(())
-    }
-
     /// Whether a card is suspended when it becomes a leech.
     pub fn suspends_leeches(&self) -> bool {
         self.lock().leech_suspend
-    }
-
-    /// Set and save whether leeches are suspended.
-    pub fn set_suspends_leeches(&self, suspend: bool) -> Result<()> {
-        let mut inner = self.lock();
-        inner.store.set_setting(LEECH_SUSPEND_KEY, f64::from(u8::from(suspend)))?;
-        inner.leech_suspend = suspend;
-        Ok(())
     }
 
     /// Local time zone offset, used to decide when the study day rolls over.
@@ -656,47 +641,10 @@ impl CardCollection {
         (self.lock().rollover_secs / 3600) as u8
     }
 
-    /// Set and save the hour a new study day starts, clamped to 0–23.
-    pub fn set_rollover_hour(&self, hour: u8) -> Result<()> {
-        let mut inner = self.lock();
-        let hour = hour.min(23);
-        inner.store.set_setting(ROLLOVER_HOUR_KEY, hour.into())?;
-        inner.rollover_secs = i64::from(hour) * 3600;
-        Ok(())
-    }
-
     /// How many cards that came due a study day allows reviewing; `None` for no limit.
     /// Failed cards coming back and new cards don't count.
     pub fn reviews_per_day(&self) -> Option<u32> {
         self.lock().reviews_per_day
-    }
-
-    /// Set and save the daily review limit; `None` removes it.
-    pub fn set_reviews_per_day(&self, limit: Option<u32>) -> Result<()> {
-        let mut inner = self.lock();
-        match limit {
-            Some(n) => inner.store.set_setting(REVIEWS_PER_DAY_KEY, n.into())?,
-            None => inner.store.remove_setting(REVIEWS_PER_DAY_KEY)?,
-        }
-        inner.reviews_per_day = limit;
-        Ok(())
-    }
-
-    /// Settings kept by the app before collections kept their own: each is saved only if
-    /// the collection has none yet, so schedules don't change on upgrading.
-    pub fn adopt_settings(&self, desired_retention: Option<f32>, rollover_hour: Option<u8>) -> Result<()> {
-        let inner = self.lock();
-        let unset = |key| inner.store.setting(key).map(|v| v.is_none());
-        let retention = desired_retention.filter(|_| unset(RETENTION_KEY).unwrap_or(false));
-        let hour = rollover_hour.filter(|_| unset(ROLLOVER_HOUR_KEY).unwrap_or(false));
-        drop(inner);
-        if let Some(retention) = retention {
-            self.set_desired_retention(retention)?;
-        }
-        if let Some(hour) = hour {
-            self.set_rollover_hour(hour)?;
-        }
-        Ok(())
     }
 
     /// When the current study day started (Unix seconds), for searches like `is:due`.
@@ -708,15 +656,6 @@ impl CardCollection {
     /// Target probability of recall when a card comes due, between 0.7 and 0.99.
     pub fn desired_retention(&self) -> f32 {
         self.lock().scheduler.desired_retention
-    }
-
-    /// Set and save the desired retention, clamped to 0.7–0.99.
-    pub fn set_desired_retention(&self, retention: f32) -> Result<()> {
-        let mut inner = self.lock();
-        let retention = retention.clamp(0.7, 0.99);
-        inner.store.set_setting(RETENTION_KEY, retention.into())?;
-        inner.scheduler.desired_retention = retention;
-        Ok(())
     }
 
     /// Every deck and folder, parents before children. Counts include subdecks.
@@ -862,12 +801,12 @@ impl CardCollection {
         Ok(formatted)
     }
 
-    /// What in the decks breaks the rules in `config`, by file, line and column. With
-    /// `fix`, the fixable problems are fixed in the files, unless that would change a
-    /// card's id, and the collection is read again.
-    pub fn lint(&self, config: &lint::Config, fix: bool) -> Result<Vec<lint::Problem>> {
+    /// What in the decks breaks `rules`, by file, line and column. With `fix`, the
+    /// fixable problems are fixed in the files, unless that would change a card's id,
+    /// and the collection is read again.
+    pub fn lint(&self, rules: &lint::Rules, fix: bool) -> Result<Vec<lint::Problem>> {
         let mut inner = self.lock();
-        let problems = lint::run(&inner.root, &inner.note_types, config, fix)?;
+        let problems = lint::run(&inner.root, &inner.note_types, rules, fix)?;
         if fix && problems.iter().any(|p| p.fixable) {
             inner.reload()?;
         }
@@ -946,9 +885,8 @@ impl CardCollection {
             answered: Vec::new(),
             sources: None,
         };
-        inner.load_settings()?;
         inner.reload()?;
-        inner.move_new_limit_to_file()?;
+        inner.move_settings_to_file()?;
         Ok(CardCollection {
             inner: Mutex::new(inner),
         })
@@ -963,24 +901,6 @@ impl CardCollection {
 }
 
 impl Inner {
-    /// Read the collection's own settings; those it doesn't have keep their values.
-    fn load_settings(&mut self) -> rusqlite::Result<()> {
-        if let Some(retention) = self.store.setting(RETENTION_KEY)? {
-            self.scheduler.desired_retention = (retention as f32).clamp(0.7, 0.99);
-        }
-        if let Some(hour) = self.store.setting(ROLLOVER_HOUR_KEY)? {
-            self.rollover_secs = hour.clamp(0.0, 23.0) as i64 * 3600;
-        }
-        self.reviews_per_day = self.store.setting(REVIEWS_PER_DAY_KEY)?.map(|n| n.clamp(0.0, u32::MAX.into()) as u32);
-        if let Some(lapses) = self.store.setting(LEECH_THRESHOLD_KEY)? {
-            self.leech_threshold = lapses.clamp(1.0, u32::MAX.into()) as u32;
-        }
-        if let Some(suspend) = self.store.setting(LEECH_SUSPEND_KEY)? {
-            self.leech_suspend = suspend != 0.0;
-        }
-        Ok(())
-    }
-
     /// If the database file was deleted or replaced while open, switch to whatever is
     /// at its path now, as a restart would: a new, empty database if it was deleted.
     /// Otherwise writes would go to a file that is gone.
@@ -992,9 +912,6 @@ impl Inner {
             Ok((states, store)) => {
                 self.store = store;
                 self.states = states;
-                // A new database has none, so the settings in use carry on, as they
-                // also do if it can't be read: its states just were.
-                self.load_settings().ok();
                 // Those reviews were in the old file.
                 self.answered.clear();
                 if deleted {
@@ -1125,7 +1042,7 @@ impl Inner {
             .filter_map(|file| fs::read_to_string(&file).ok().map(|text| (file, text)))
             .collect();
 
-        let settings = match fs::read_to_string(self.root.join(lint::CONFIG_FILE)) {
+        let settings = match fs::read_to_string(self.root.join(settings::FILE)) {
             Ok(text) => Some(text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
@@ -1169,63 +1086,87 @@ impl Inner {
         }
     }
 
-    /// The new-card limit and rules in `amgi.toml`; the defaults if it has errors,
-    /// which become a warning.
+    /// The settings in `amgi.toml`; the defaults for those it leaves out, and for all of
+    /// them if it has errors, which become a warning.
     fn load_settings_file(&mut self, text: Option<&str>) {
-        self.new_per_day = DEFAULT_NEW_PER_DAY;
-        self.new_rules.clear();
-        let Some(text) = text else { return };
-        match lint::Config::parse(text) {
-            Ok(config) => {
-                self.new_per_day = config.new.per_day.unwrap_or(DEFAULT_NEW_PER_DAY);
-                self.new_rules = config
-                    .new
-                    .rule
-                    .into_iter()
-                    .map(|r| NewRule {
-                        line: text[..r.cards.span().start].matches('\n').count() as u32 + 1,
-                        cards: r.cards.into_inner(),
-                        per_day: r.per_day,
-                    })
-                    .collect();
-                let cap = self.new_per_day;
-                for r in self.new_rules.iter().filter(|r| r.per_day > cap) {
-                    let message = format!(
-                        "the new-card rule for \"{}\" allows {} a day, more than the {cap} of new.per-day, so it has no effect",
-                        r.cards, r.per_day
-                    );
-                    self.warnings.push(CollectionWarning { path: lint::CONFIG_FILE.into(), line: r.line, message });
-                }
-            }
+        let config = match text.map(settings::Settings::parse).transpose() {
+            Ok(config) => config.unwrap_or_default(),
             Err(message) => {
-                self.warnings.push(CollectionWarning { path: lint::CONFIG_FILE.into(), line: 0, message });
+                self.warnings.push(CollectionWarning { path: settings::FILE.into(), line: 0, message });
+                settings::Settings::default()
             }
+        };
+        let text = text.unwrap_or_default();
+        self.scheduler.desired_retention = config.study.retention.unwrap_or(Scheduler::default().desired_retention);
+        self.rollover_secs = i64::from(config.study.day_starts_at.unwrap_or(DEFAULT_ROLLOVER_HOUR)) * 3600;
+        self.reviews_per_day = config.review.per_day;
+        self.leech_threshold = config.leech.lapses.unwrap_or(DEFAULT_LEECH_THRESHOLD);
+        self.leech_suspend = config.leech.suspend.unwrap_or(false);
+        self.new_per_day = config.new.per_day.unwrap_or(DEFAULT_NEW_PER_DAY);
+        self.new_rules = config
+            .new
+            .rule
+            .into_iter()
+            .map(|r| NewRule {
+                line: text[..r.cards.span().start].matches('\n').count() as u32 + 1,
+                cards: r.cards.into_inner(),
+                per_day: r.per_day,
+            })
+        .collect();
+        let cap = self.new_per_day;
+        for r in self.new_rules.iter().filter(|r| r.per_day > cap) {
+            let message = format!(
+                "the new-card rule for \"{}\" allows {} a day, more than the {cap} of new.per-day, so it has no effect",
+                r.cards, r.per_day
+            );
+            self.warnings.push(CollectionWarning { path: settings::FILE.into(), line: r.line, message });
         }
     }
 
-    /// The daily new-card limit was once kept in the database; write it to `amgi.toml`
-    /// as `new.per-day`, unless the file sets its own, and forget it. A file with
-    /// errors is left alone until it's fixed.
-    fn move_new_limit_to_file(&mut self) -> Result<()> {
-        let Some(limit) = self.store.setting(NEW_PER_DAY_KEY)? else { return Ok(()) };
-        let Ok(config) = lint::Config::load(&self.root) else { return Ok(()) };
-        if config.new.per_day.is_none() {
-            let limit = limit.clamp(0.0, u32::MAX.into()) as u32;
-            let path = self.root.join(lint::CONFIG_FILE);
-            let text = match fs::read_to_string(&path) {
-                Ok(text) => text,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-                Err(e) => return Err(e.into()),
-            };
-            let text = with_new_limit(&text, limit);
-            // Should the edit not read back as meant, the file is left as it was.
-            if lint::Config::parse(&text).ok().and_then(|c| c.new.per_day) != Some(limit) {
+    /// Settings the database kept before `amgi.toml` did go to the file, each unless
+    /// the file sets its own, and leave the database. A file with errors is left alone
+    /// until it's fixed.
+    fn move_settings_to_file(&mut self) -> Result<()> {
+        type Format = fn(f64) -> String;
+        let moves: [(&str, &str, &str, Format); 6] = [
+            (RETENTION_KEY, "study", "retention", |v| format!("{}", (v.clamp(0.7, 0.99) * 100.0).round() / 100.0)),
+            (ROLLOVER_HOUR_KEY, "study", "day-starts-at", |v| format!("{}", v.clamp(0.0, 23.0) as u8)),
+            (NEW_PER_DAY_KEY, "new", "per-day", |v| format!("{}", v.clamp(0.0, u32::MAX.into()) as u32)),
+            (REVIEWS_PER_DAY_KEY, "review", "per-day", |v| format!("{}", v.clamp(0.0, u32::MAX.into()) as u32)),
+            (LEECH_THRESHOLD_KEY, "leech", "lapses", |v| format!("{}", v.clamp(1.0, u32::MAX.into()) as u32)),
+            (LEECH_SUSPEND_KEY, "leech", "suspend", |v| format!("{}", v != 0.0)),
+        ];
+        let mut found = Vec::new();
+        for (db_key, table, key, format) in moves {
+            if let Some(value) = self.store.setting(db_key)? {
+                found.push((db_key, table, key, format(value)));
+            }
+        }
+        if found.is_empty() {
+            return Ok(());
+        }
+        let path = self.root.join(settings::FILE);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e.into()),
+        };
+        let Ok(config) = settings::Settings::parse(&text) else { return Ok(()) };
+        let mut edited = text.clone();
+        for (_, table, key, value) in found.iter().filter(|(_, table, key, _)| !config.has(table, key)) {
+            edited = settings::set(&edited, table, key, value);
+        }
+        if edited != text {
+            // Should the edit not read back, the file is left as it was.
+            if settings::Settings::parse(&edited).is_err() {
                 return Ok(());
             }
-            fs::write(&path, text)?;
+            fs::write(&path, edited)?;
             self.reload()?;
         }
-        self.store.remove_setting(NEW_PER_DAY_KEY)?;
+        for (db_key, ..) in found {
+            self.store.remove_setting(db_key)?;
+        }
         Ok(())
     }
 
@@ -2144,31 +2085,6 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
 }
 
 /// Whether `deck` is `parent` or one of its subdecks.
-/// `amgi.toml`'s text with `per-day = limit` under `[new]`: in that table if the file
-/// has it, else in a new one before the first `[[new.rule]]` or at the end.
-fn with_new_limit(text: &str, limit: u32) -> String {
-    let setting = format!("per-day = {limit}\n");
-    let header = |line: &str, name: &str| {
-        line.trim_start().strip_prefix(name).is_some_and(|rest| rest.trim_start().is_empty() || rest.trim_start().starts_with('#'))
-    };
-    let mut at = 0;
-    for line in text.split_inclusive('\n') {
-        if header(line, "[new]") {
-            let end = at + line.len();
-            let newline = if line.ends_with('\n') { "" } else { "\n" };
-            return format!("{}{newline}{setting}{}", &text[..end], &text[end..]);
-        }
-        if header(line, "[[new.rule]]") {
-            return format!("{}[new]\n{setting}\n{}", &text[..at], &text[at..]);
-        }
-        at += line.len();
-    }
-    match text.trim_end() {
-        "" => format!("[new]\n{setting}"),
-        rest => format!("{rest}\n\n[new]\n{setting}"),
-    }
-}
-
 fn contains(parent: &str, deck: &str) -> bool {
     deck.strip_prefix(parent).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
@@ -2330,28 +2246,8 @@ mod tests {
 
         // A later rollover hour moves the day's start.
         drop(inner);
-        c.set_rollover_hour(6).unwrap();
+        write_settings(&dir, &c, "[study]\nday-starts-at = 6\n");
         assert_eq!(c.lock().day_start(T0 + DAY_SECS) - today, DAY_SECS + 2 * hour);
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn settings_are_kept_in_the_collection() {
-        let (dir, _) = collection(&[("a.md", "Q: 1\nA: -\n")]);
-        let open = || CardCollection::open(dir.to_string_lossy().into_owned()).unwrap();
-        let c = open();
-        assert_eq!((c.desired_retention(), c.rollover_hour()), (0.9, 4));
-        // The app's settings from before are taken on.
-        c.adopt_settings(Some(0.85), Some(3)).unwrap();
-        assert_eq!((c.desired_retention(), c.rollover_hour()), (0.85, 3));
-        c.set_rollover_hour(30).unwrap();
-        drop(c);
-
-        // Reopened, the collection keeps its own and no longer takes the app's.
-        let c = open();
-        assert_eq!((c.desired_retention(), c.rollover_hour()), (0.85, 23));
-        c.adopt_settings(Some(0.95), Some(5)).unwrap();
-        assert_eq!((c.desired_retention(), c.rollover_hour()), (0.85, 23));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2621,8 +2517,7 @@ mod tests {
     fn unsuspended_leeches_are_still_forecast() {
         let (dir, c) = collection(&[("a.md", "Q: capital of Peru\nA: Lima\n")]);
         let id = c.cards(StudyScope::All)[0].id.clone();
-        c.set_leech_threshold(1).unwrap();
-        c.set_suspends_leeches(true).unwrap();
+        write_settings(&dir, &c, "[leech]\nlapses = 1\nsuspend = true\n");
         let mut inner = c.lock();
         inner.answer(&id, Rating::Good, None, T0 - 2 * DAY_SECS).unwrap();
         // Forgotten yesterday, so a suspended leech due today; then unsuspended.
@@ -2825,7 +2720,7 @@ mod tests {
     fn new_card_limit() {
         let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n\nQ: 3\nA: 3\n")]);
         assert_eq!(c.lock().new_per_day, DEFAULT_NEW_PER_DAY);
-        set_new_cards(&dir, &c, "[new]\nper-day = 1\n");
+        write_settings(&dir, &c, "[new]\nper-day = 1\n");
         let mut inner = c.lock();
         let card = inner.next_card(&StudyScope::All, T0).unwrap().unwrap();
         inner.answer(&card.id, Rating::Easy, None, T0).unwrap();
@@ -2835,63 +2730,72 @@ mod tests {
         assert!(inner.next_card(&StudyScope::All, T0 + DAY_SECS).unwrap().is_some());
         drop(inner);
         // Lowering the limit below what's been learned today leaves none.
-        set_new_cards(&dir, &c, "[new]\nper-day = 0\n");
+        write_settings(&dir, &c, "[new]\nper-day = 0\n");
         assert_eq!(c.lock().decks(T0).unwrap()[0].new, 0);
         // Raising it lets more in the same day.
-        set_new_cards(&dir, &c, "[new]\nper-day = 5\n");
+        write_settings(&dir, &c, "[new]\nper-day = 5\n");
         assert_eq!(c.lock().decks(T0).unwrap()[0].new, 2);
         fs::remove_dir_all(dir).unwrap();
     }
 
     /// Write `amgi.toml` and read the collection again.
-    fn set_new_cards(dir: &Path, c: &CardCollection, toml: &str) {
-        fs::write(dir.join(lint::CONFIG_FILE), toml).unwrap();
+    fn write_settings(dir: &Path, c: &CardCollection, toml: &str) {
+        fs::write(dir.join(settings::FILE), toml).unwrap();
         c.reload().unwrap();
     }
 
     #[test]
-    fn new_card_limit_moves_to_file() {
+    fn settings_move_to_file() {
         let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n")]);
         let reopen = |c: CardCollection| {
             let store = c.inner.into_inner().unwrap().store;
             CardCollection::with_store(dir.clone(), store).unwrap()
         };
-        let file = || fs::read_to_string(dir.join(lint::CONFIG_FILE)).unwrap_or_default();
-        // Without one in the database, nothing is written.
+        let file = || fs::read_to_string(dir.join(settings::FILE)).unwrap_or_default();
+        let db = |c: &CardCollection, key| c.lock().store.setting(key).unwrap();
+        // Without any in the database, nothing is written, and the defaults hold.
         let c = reopen(c);
         assert_eq!(file(), "");
-        // One in the database goes to the file, beside what's there, and leaves the database.
-        fs::write(dir.join(lint::CONFIG_FILE), "[lint]\ntags = false\n").unwrap();
-        c.lock().store.set_setting(NEW_PER_DAY_KEY, 7.0).unwrap();
+        assert_eq!((c.desired_retention(), c.rollover_hour(), c.reviews_per_day()), (0.9, 4, None));
+        assert_eq!((c.leech_threshold(), c.suspends_leeches()), (DEFAULT_LEECH_THRESHOLD, false));
+
+        // Those in the database go to the file, beside what's there, and leave the database.
+        fs::write(dir.join(settings::FILE), "[lint]\ntags = false\n\n[[new.rule]]\ncards = \"a\"\nper-day = 1\n").unwrap();
+        let saved = [
+            (RETENTION_KEY, f64::from(0.85_f32)),
+            (ROLLOVER_HOUR_KEY, 3.0),
+            (NEW_PER_DAY_KEY, 7.0),
+            (REVIEWS_PER_DAY_KEY, 150.0),
+            (LEECH_THRESHOLD_KEY, 5.0),
+            (LEECH_SUSPEND_KEY, 1.0),
+        ];
+        for (key, value) in saved {
+            c.lock().store.set_setting(key, value).unwrap();
+        }
         let c = reopen(c);
-        assert_eq!(file(), "[lint]\ntags = false\n\n[new]\nper-day = 7\n");
-        assert_eq!(c.lock().new_per_day, 7);
-        assert_eq!(c.lock().store.setting(NEW_PER_DAY_KEY).unwrap(), None);
-        // The file's own limit wins, and the database's is dropped.
+        assert_eq!(
+            file(),
+            "[lint]\ntags = false\n\n[new]\nper-day = 7\n\n[[new.rule]]\ncards = \"a\"\nper-day = 1\n\n\
+             [study]\nretention = 0.85\nday-starts-at = 3\n\n[review]\nper-day = 150\n\n[leech]\nlapses = 5\nsuspend = true\n"
+        );
+        assert_eq!((c.desired_retention(), c.rollover_hour(), c.reviews_per_day()), (0.85, 3, Some(150)));
+        let new_per_day = c.lock().new_per_day;
+        assert_eq!((new_per_day, c.leech_threshold(), c.suspends_leeches()), (7, 5, true));
+        assert!(saved.iter().all(|(key, _)| db(&c, key).is_none()));
+
+        // The file's own settings win, and the database's are dropped.
         c.lock().store.set_setting(NEW_PER_DAY_KEY, 9.0).unwrap();
         let c = reopen(c);
-        let inner = c.lock();
-        assert_eq!((inner.new_per_day, inner.store.setting(NEW_PER_DAY_KEY).unwrap()), (7, None));
-        drop(inner);
-        // A file with errors is left alone, and the limit kept for later.
-        fs::write(dir.join(lint::CONFIG_FILE), "[new\n").unwrap();
+        let new_per_day = c.lock().new_per_day;
+        assert_eq!((new_per_day, db(&c, NEW_PER_DAY_KEY)), (7, None));
+        // A file with errors is left alone, and the setting kept for later.
+        fs::write(dir.join(settings::FILE), "[new\n").unwrap();
         c.lock().store.set_setting(NEW_PER_DAY_KEY, 9.0).unwrap();
         let c = reopen(c);
-        let kept = c.lock().store.setting(NEW_PER_DAY_KEY).unwrap();
-        assert_eq!((file().as_str(), kept), ("[new\n", Some(9.0)));
+        assert_eq!((file().as_str(), db(&c, NEW_PER_DAY_KEY)), ("[new\n", Some(9.0)));
+        assert_eq!(c.warnings().len(), 1);
         drop(c);
         fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn new_limit_goes_under_new() {
-        assert_eq!(with_new_limit("", 5), "[new]\nper-day = 5\n");
-        assert_eq!(with_new_limit("[new]\n", 5), "[new]\nper-day = 5\n");
-        assert_eq!(with_new_limit("[new] # mine", 5), "[new] # mine\nper-day = 5\n");
-        assert_eq!(
-            with_new_limit("[lint]\ntags = false\n\n[[new.rule]]\ncards = \"a\"\nper-day = 1\n", 5),
-            "[lint]\ntags = false\n\n[new]\nper-day = 5\n\n[[new.rule]]\ncards = \"a\"\nper-day = 1\n"
-        );
     }
 
     #[test]
@@ -2901,7 +2805,7 @@ mod tests {
             ("b.md", "Q: b1\nA: -\n\nQ: b2\nA: -\n\nQ: b3\nA: -\n"),
         ]);
         let rules = "[new]\nper-day = 10\n\n[[new.rule]]\ncards = \"deck:a\"\nper-day = 2\n\n[[new.rule]]\ncards = \"deck:b\"\nper-day = 0\n";
-        set_new_cards(&dir, &c, rules);
+        write_settings(&dir, &c, rules);
         let mut inner = c.lock();
         let new = |inner: &Inner| inner.decks(T0).unwrap().iter().map(|d| d.new).collect::<Vec<_>>();
         assert_eq!(new(&inner), [2, 0]);
@@ -2921,7 +2825,7 @@ mod tests {
         // A card matching two rules takes both; the stricter one holds it back while
         // the other's cards still come.
         let rules = "[new]\nper-day = 10\n\n[[new.rule]]\ncards = \"deck:a\"\nper-day = 3\n\n[[new.rule]]\ncards = \"#hard\"\nper-day = 0\n";
-        set_new_cards(&dir, &c, rules);
+        write_settings(&dir, &c, rules);
         let mut inner = c.lock();
         let card = inner.next_card(&deck("a"), T0).unwrap().unwrap();
         assert_eq!(card.front.trim(), "a3");
@@ -2931,11 +2835,11 @@ mod tests {
 
         // A rule above the daily limit is flagged, with its line; a broken file too.
         assert!(c.warnings().is_empty());
-        set_new_cards(&dir, &c, &rules.replace("per-day = 10", "per-day = 2"));
+        write_settings(&dir, &c, &rules.replace("per-day = 10", "per-day = 2"));
         let w = c.warnings();
         assert_eq!((w.len(), w[0].path.as_str(), w[0].line), (1, "amgi.toml", 5));
         assert!(w[0].message.contains("\"deck:a\" allows 3 a day, more than the 2"), "{}", w[0].message);
-        set_new_cards(&dir, &c, "[[new.rule]]\ncards = \"deck:a\"\n");
+        write_settings(&dir, &c, "[[new.rule]]\ncards = \"deck:a\"\n");
         let w = c.warnings();
         assert!(w.len() == 1 && w[0].message.contains("per-day"), "{w:?}");
         fs::remove_dir_all(dir).unwrap();
@@ -2950,7 +2854,7 @@ mod tests {
             inner.answer(&card.id, Rating::Good, None, T0).unwrap();
         }
         drop(inner);
-        c.set_reviews_per_day(Some(1)).unwrap();
+        write_settings(&dir, &c, "[review]\nper-day = 1\n");
         assert_eq!(c.reviews_per_day(), Some(1));
         let mut inner = c.lock();
         let later = T0 + 100 * DAY_SECS;
@@ -2970,22 +2874,15 @@ mod tests {
         assert_eq!(new.stage, StudyStage::New);
         inner.answer(&new.id, Rating::Easy, None, back).unwrap();
         drop(inner);
-        set_new_cards(&dir, &c, "[new]\nper-day = 1\n");
+        write_settings(&dir, &c, "[new]\nper-day = 1\n\n[review]\nper-day = 1\n");
         let inner = c.lock();
         assert!(inner.next_card(&StudyScope::All, back).unwrap().is_none());
         assert_eq!(inner.today(&StudyScope::All, back).unwrap().due_available, 0);
         // Tomorrow the limit resets, and without one every due card comes.
         assert_eq!(inner.decks(later + DAY_SECS).unwrap()[0].due, 1);
         drop(inner);
-        c.set_reviews_per_day(None).unwrap();
+        write_settings(&dir, &c, "[new]\nper-day = 1\n");
         assert_eq!(c.lock().decks(back).unwrap()[0].due, 2);
-        // The limit is kept in the database.
-        c.set_reviews_per_day(Some(5)).unwrap();
-        let mut inner = c.lock();
-        inner.reviews_per_day = None;
-        inner.load_settings().unwrap();
-        assert_eq!(inner.reviews_per_day, Some(5));
-        drop(inner);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3001,7 +2898,7 @@ mod tests {
     fn leeches_are_reported_and_optionally_suspended() {
         let (dir, c) = collection(&[("a.md", "Q: capital of Peru\nA: Lima\n")]);
         let id = c.cards(StudyScope::All)[0].id.clone();
-        c.set_leech_threshold(2).unwrap();
+        write_settings(&dir, &c, "[leech]\nlapses = 2\n");
         let mut inner = c.lock();
         // Learning a card and forgetting it once doesn't make a leech.
         assert_eq!(inner.answer(&id, Rating::Good, None, T0).unwrap(), None);
@@ -3014,7 +2911,7 @@ mod tests {
         drop(inner);
 
         // Suspending leeches tags the card in its file, and undoing the answer untags it.
-        c.set_suspends_leeches(true).unwrap();
+        write_settings(&dir, &c, "[leech]\nlapses = 2\nsuspend = true\n");
         let mut inner = c.lock();
         let leech = inner.answer(&id, Rating::Again, None, T0 + 4 * DAY_SECS).unwrap();
         assert_eq!(leech, Some(Leech { lapses: 3, suspended: true }));
@@ -3024,16 +2921,7 @@ mod tests {
         inner.undo_answer(T0 + 4 * DAY_SECS).unwrap().unwrap();
         assert!(!fs::read_to_string(&file).unwrap().contains("#suspended"));
         assert_eq!(inner.cards(&StudyScope::All)[0].lapses, 2);
-
-        // Both settings are kept in the database.
-        inner.leech_threshold = DEFAULT_LEECH_THRESHOLD;
-        inner.leech_suspend = false;
-        inner.load_settings().unwrap();
-        assert_eq!((inner.leech_threshold, inner.leech_suspend), (2, true));
         drop(inner);
-        // A threshold of 0 would flag every card.
-        c.set_leech_threshold(0).unwrap();
-        assert_eq!(c.leech_threshold(), 1);
         fs::remove_dir_all(dir).unwrap();
     }
 
