@@ -578,10 +578,18 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
 /// Days `amgi forecast` shows one by one; longer stretches show a line per week.
 const FORECAST_DAILY_DAYS: u32 = 31;
 
-pub fn forecast(c: &CardCollection, out: Output, new_cards: u32, days: u32, deck: Option<&str>) -> Result {
+pub fn forecast(
+    c: &CardCollection,
+    out: Output,
+    new_cards: u32,
+    every_day: bool,
+    keep_adding: bool,
+    days: u32,
+    deck: Option<&str>,
+) -> Result {
     let days = days.max(1);
     let scope = deck_scope(c, deck)?;
-    let w = c.workload(scope.clone(), new_cards, days)?;
+    let w = c.workload(scope.clone(), new_cards, every_day, keep_adding, days)?;
     if out.json {
         let deck = match &scope {
             StudyScope::All => None,
@@ -591,12 +599,15 @@ pub fn forecast(c: &CardCollection, out: Output, new_cards: u32, days: u32, deck
     }
 
     // Cards to study each day: those studied before, and what the new ones add, them
-    // included today. Seconds where reviews were timed.
-    let added: Vec<f64> = w.added_reviews.iter().enumerate().map(|(i, n)| n + if i == 0 { f64::from(new_cards) } else { 0.0 }).collect();
+    // included the day they're first studied. Seconds where reviews were timed.
+    let added: Vec<f64> = w.added_reviews.iter().zip(&w.new_studied).map(|(n, &new)| n + f64::from(new)).collect();
     let secs = |i: usize| -> Option<f64> {
-        let new = if i == 0 { f64::from(new_cards) * w.secs_per_new_card? } else { 0.0 };
+        let new = if w.new_studied[i] > 0 { f64::from(w.new_studied[i]) * w.secs_per_new_card? } else { 0.0 };
         Some((w.reviews[i] + w.added_reviews[i]) * w.secs_per_due_card? + new)
     };
+    let studied: u32 = w.new_studied.iter().sum();
+    // The day the cards not yet studied run out, if within the days shown.
+    let run_out = every_day.then(|| w.new_studied.iter().rposition(|&n| n > 0)).flatten().filter(|&i| i + 1 < days as usize && w.new_studied[i + 1] == 0);
     let now = text::now();
     let day_label = |i: usize| match i {
         0 => "Today".to_string(),
@@ -615,14 +626,16 @@ pub fn forecast(c: &CardCollection, out: Output, new_cards: u32, days: u32, deck
                 _ => format!("From {}", &text::date(now + start as i64 * DAY)[5..]),
             };
             let sum = |v: &[f64]| v[range.clone()].iter().sum::<f64>();
-            let time = range.clone().map(secs).sum::<Option<f64>>();
+            // A day's time on average, over a week.
+            let time = range.clone().map(secs).sum::<Option<f64>>().map(|t| t / range.len() as f64);
             (label, sum(&w.reviews), sum(&added), time)
         })
         .collect();
 
     let mut heading = format!("Reviews in the next {}", count(days, "day", "days"));
     if new_cards > 0 {
-        heading += &format!(", studying {} today", count(new_cards, "new card", "new cards"));
+        let when = if every_day { " a day" } else { " today" };
+        heading += &format!(", studying {}{when}", count(new_cards, "new card", "new cards"));
     }
     println!("{}", bold(heading));
     let max = rows.iter().map(|r| (r.1 + r.2).round() as u32).max().unwrap_or(0);
@@ -642,7 +655,10 @@ pub fn forecast(c: &CardCollection, out: Output, new_cards: u32, days: u32, deck
         let new_len = bar(added, max, 30).chars().count().min(len);
         let bar = format!("{}{}{}", yellow("█".repeat(len - new_len)), blue("▒".repeat(new_len)), " ".repeat(30 - len));
         let time = match time {
-            Some(t) if total > 0 => dim(format!("  about {}", text::study_time(t.round() as u32))),
+            Some(t) if total > 0 => {
+                let a_day = if span > 1 { " a day" } else { "" };
+                dim(format!("  about {}{a_day}", text::study_time(t.round() as u32)))
+            }
             _ => String::new(),
         };
         println!("  {label}  {}{plus}  {bar}{time}", figure(total, 5, |s| s));
@@ -661,16 +677,20 @@ pub fn forecast(c: &CardCollection, out: Output, new_cards: u32, days: u32, deck
         count(before.round() as u32, "review", "reviews"),
         dim(format!(" of cards studied before{}", about(total_time(&w.reviews, 0))))
     );
-    if new_cards > 0 {
+    if studied > 0 {
+        let after = if every_day { "after their first day" } else { "after today" };
         println!(
             "  {}{}",
             blue(format!("+{}", count(reviews.round() as u32, "review", "reviews"))),
             dim(format!(
-                " of the {} after today{}",
-                count(new_cards, "new card", "new cards"),
-                about(total_time(&w.added_reviews, new_cards))
+                " of the {} {after}{}",
+                count(studied, "new card", "new cards"),
+                about(total_time(&w.added_reviews, studied))
             ))
         );
+    }
+    if let Some(last) = run_out {
+        println!("  {}", dim(format!("The cards not yet studied run out after {}.", day_label(last).replace("To", "to"))));
     }
     println!("  {}", dim("Simulated from each card's memory, without the daily review limit."));
     Ok(ExitCode::SUCCESS)

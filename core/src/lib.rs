@@ -426,10 +426,15 @@ pub struct Workload {
     /// Reviews expected each day from today of the cards studied before, averaged over
     /// simulated runs; today includes overdue cards. Not held to the daily review limit.
     pub reviews: Vec<f64>,
-    /// Reviews the new cards add each day after they are first studied today.
+    /// Reviews the new cards add each day after the day each is first studied.
     pub added_reviews: Vec<f64>,
-    /// New cards first studied today.
+    /// New cards first studied today, or each day when `every_day`.
     pub new_cards: u32,
+    pub every_day: bool,
+    /// With `every_day`, as if new cards are added as fast, so they never run out.
+    pub keep_adding: bool,
+    /// New cards first studied on each day, fewer once the unstudied cards run out.
+    pub new_studied: Vec<u32>,
     /// Average seconds a card studied before takes on a day it comes back.
     pub secs_per_due_card: Option<f64>,
     /// Average seconds a new card takes the day it is first studied.
@@ -781,8 +786,15 @@ impl CardCollection {
 
     /// Reviews expected over the next `days` days, in a deck or the whole collection,
     /// if `new_cards` new cards are first studied today.
-    pub fn workload(&self, scope: StudyScope, new_cards: u32, days: u32) -> Result<Workload> {
-        self.lock().workload(&scope, new_cards, days, unix_now())
+    pub fn workload(
+        &self,
+        scope: StudyScope,
+        new_cards: u32,
+        every_day: bool,
+        keep_adding: bool,
+        days: u32,
+    ) -> Result<Workload> {
+        self.lock().workload(&scope, new_cards, every_day, keep_adding, days, unix_now())
     }
 
     pub fn warnings(&self) -> Vec<CollectionWarning> {
@@ -1686,7 +1698,15 @@ impl Inner {
         })
     }
 
-    fn workload(&self, scope: &StudyScope, new_cards: u32, days: u32, now: i64) -> Result<Workload> {
+    fn workload(
+        &self,
+        scope: &StudyScope,
+        new_cards: u32,
+        every_day: bool,
+        keep_adding: bool,
+        days: u32,
+        now: i64,
+    ) -> Result<Workload> {
         let shift = self.utc_offset_secs - self.rollover_secs;
         let today = (now + shift).div_euclid(DAY_SECS);
         let day = |t: i64| (t + shift).div_euclid(DAY_SECS) - today;
@@ -1717,15 +1737,35 @@ impl Inner {
         }
         let suspend_after = self.leech_suspend.then_some(self.leech_threshold);
         let days = days.max(1) as usize;
+        // Every day, until the cards not yet studied run out.
+        let keep_adding = every_day && keep_adding;
+        let pool = if keep_adding {
+            new_cards.saturating_mul(days as u32)
+        } else if every_day {
+            self.in_scope(scope).filter(|c| !c.suspended() && !self.states.contains_key(&c.parsed.id)).count() as u32
+        } else {
+            new_cards
+        };
+        let mut left = pool;
+        let new_studied = (0..days)
+            .map(|_| {
+                let n = new_cards.min(left);
+                left -= n;
+                n
+            })
+            .collect();
         // Cards don't affect each other without a review limit, so the new ones are
         // simulated apart and what they add stays clear of the others' noise.
-        let reviews = self.scheduler.simulate_reviews(&cards, 0, days, habits, suspend_after)?;
-        let added_reviews = self.scheduler.simulate_reviews(&[], new_cards, days, habits, suspend_after)?;
+        let reviews = self.scheduler.simulate_reviews(&cards, 0, 0, days, habits, suspend_after)?;
+        let added_reviews = self.scheduler.simulate_reviews(&[], pool, new_cards, days, habits, suspend_after)?;
         let time = self.time_per_card(self.scope_ids(scope).as_deref(), now)?;
         Ok(Workload {
             reviews,
             added_reviews,
             new_cards,
+            every_day,
+            keep_adding,
+            new_studied,
             secs_per_due_card: time.seen_ms.or(time.new_ms).map(|ms| ms / 1000.0),
             secs_per_new_card: time.new_ms.or(time.seen_ms).map(|ms| ms / 1000.0),
         })
@@ -2424,7 +2464,7 @@ mod tests {
         assert!(inner.answer(&id, Rating::Again, None, T0 - DAY_SECS).unwrap().unwrap().suspended);
         inner.set_suspended(std::slice::from_ref(&id), false).unwrap();
 
-        let w = inner.workload(&StudyScope::All, 0, 30, T0).unwrap();
+        let w = inner.workload(&StudyScope::All, 0, false, false, 30, T0).unwrap();
         assert_eq!(w.reviews[0], 1.0);
         drop(inner);
         drop(c);
@@ -2439,15 +2479,25 @@ mod tests {
         // Failed yesterday, so due today; the others are new.
         inner.answer(&ids[0], Rating::Again, None, T0 - DAY_SECS).unwrap();
 
-        let w = inner.workload(&StudyScope::All, 0, 30, T0).unwrap();
+        let w = inner.workload(&StudyScope::All, 0, false, false, 30, T0).unwrap();
         assert_eq!(w.reviews.len(), 30);
         assert_eq!(w.reviews[0], 1.0);
         assert_eq!(w.added_reviews, vec![0.0; 30]);
 
-        let w = inner.workload(&StudyScope::All, 20, 30, T0).unwrap();
+        let w = inner.workload(&StudyScope::All, 20, false, false, 30, T0).unwrap();
         assert_eq!(w.new_cards, 20);
+        assert_eq!(w.new_studied[..2], [20, 0]);
         assert_eq!(w.added_reviews[0], 0.0);
         assert!(w.added_reviews.iter().sum::<f64>() > 20.0);
+
+        // One a day until the two new cards run out.
+        let w = inner.workload(&StudyScope::All, 1, true, false, 30, T0).unwrap();
+        assert_eq!(w.new_studied[..3], [1, 1, 0]);
+        assert_eq!(w.added_reviews[0], 0.0);
+        assert!(w.added_reviews.iter().sum::<f64>() > 0.0);
+        // Or every day, as if more are added.
+        let w = inner.workload(&StudyScope::All, 1, true, true, 30, T0).unwrap();
+        assert_eq!(w.new_studied, vec![1; 30]);
         drop(inner);
         drop(c);
         fs::remove_dir_all(dir).unwrap();

@@ -202,7 +202,8 @@ const SIMULATION_RUNS: u64 = 50;
 
 impl Scheduler {
     /// Reviews expected on each of `days` days from today, of `cards` and of `new_cards`
-    /// first studied today, not counting those first views. It averages runs of the
+    /// first studied up to `per_day` a day from today, not counting those first views.
+    /// It averages runs of the
     /// FSRS simulator, which draws whether each review is remembered from the card's
     /// retrievability and its rating from `habits`. A failed card is studied again the
     /// same day, as with Again's short delay. There's no daily review limit; a card
@@ -211,6 +212,7 @@ impl Scheduler {
         &self,
         cards: &[PlannedCard],
         new_cards: u32,
+        per_day: u32,
         days: usize,
         habits: RatingHabits,
         suspend_after: Option<u32>,
@@ -226,7 +228,7 @@ impl Scheduler {
             max_ivl: MAX_INTERVAL_DAYS,
             first_rating_prob: habits.first,
             review_rating_prob: habits.passed,
-            learn_limit: new_cards as usize,
+            learn_limit: per_day as usize,
             suspend_after_lapses: suspend_after,
             // One more look after Again, as the card comes back ten minutes later.
             learning_step_count: 1,
@@ -273,14 +275,14 @@ mod tests {
     fn simulated_reviews_of_new_cards() {
         let s = Scheduler::default();
         let habits = RatingHabits::default();
-        let reviews = s.simulate_reviews(&[], 100, 60, habits, None).unwrap();
+        let reviews = s.simulate_reviews(&[], 100, 100, 60, habits, None).unwrap();
         // First views aren't counted, and most cards come back within days.
         assert_eq!(reviews[0], 0.0);
         assert!(reviews[1..8].iter().sum::<f64>() > 80.0);
         // Fewer each week as intervals grow.
         let week = |w: usize| reviews[w * 7..w * 7 + 7].iter().sum::<f64>();
         assert!(week(1) > week(6), "{} <= {}", week(1), week(6));
-        assert_eq!(s.simulate_reviews(&[], 0, 30, habits, None).unwrap(), vec![0.0; 30]);
+        assert_eq!(s.simulate_reviews(&[], 0, 0, 30, habits, None).unwrap(), vec![0.0; 30]);
     }
 
     #[test]
@@ -292,7 +294,7 @@ mod tests {
             due_day,
             lapses: 0,
         };
-        let reviews = s.simulate_reviews(&[card(-3), card(0), card(4)], 0, 10, RatingHabits::default(), None).unwrap();
+        let reviews = s.simulate_reviews(&[card(-3), card(0), card(4)], 0, 0, 10, RatingHabits::default(), None).unwrap();
         // Overdue cards are due today; a remembered card isn't back within the 10 days,
         // but a forgotten one can be.
         assert_eq!(reviews[0], 2.0);

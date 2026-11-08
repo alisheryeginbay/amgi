@@ -111,12 +111,20 @@ enum Command {
         time: bool,
     },
     /// Reviews to expect in the coming days, simulated from each card's memory, and
-    /// what studying new cards today would add to them.
+    /// what studying new cards today, or every day, would add to them.
     Forecast {
         /// New cards to study today.
         #[arg(long, short, default_value_t = 0, value_name = "N")]
         new: u32,
-        /// Days ahead to show; past a month, a line per week.
+        /// New cards to study each day from today, until the cards not yet studied run out.
+        #[arg(long, value_name = "N", conflicts_with = "new")]
+        per_day: Option<u32>,
+        /// With --per-day, as if you add new cards as fast as you study them, so they
+        /// never run out.
+        #[arg(long, requires = "per_day")]
+        keep_adding: bool,
+        /// Days ahead to show; past a month, a line per week with
+        /// the time a day on average.
         #[arg(long, default_value_t = 30)]
         days: u32,
         /// Only this deck and its subdecks, such as `lang/french`.
@@ -171,7 +179,10 @@ fn main() -> ExitCode {
         Command::Prune { trash } => commands::prune(&collection, out, trash),
         Command::Diff { revs, staged, check, reviewed } => commands::diff(&collection, out, &revs, staged, check, reviewed),
         Command::Stats { days, deck, time } => commands::stats(&collection, out, days, deck.as_deref(), time),
-        Command::Forecast { new, days, deck } => commands::forecast(&collection, out, new, days, deck.as_deref()),
+        Command::Forecast { new, per_day, keep_adding, days, deck } => {
+            let (new, every_day) = per_day.map_or((new, false), |n| (n, true));
+            commands::forecast(&collection, out, new, every_day, keep_adding, days, deck.as_deref())
+        }
     };
     match result {
         Ok(code) => code,
