@@ -106,7 +106,7 @@ enum Command {
         /// Only this deck and its subdecks, such as `lang/french`.
         #[arg(long, short)]
         deck: Option<String>,
-        /// Show the days by time spent rather than reviews.
+        /// Show the time spent each day rather than reviews.
         #[arg(long)]
         time: bool,
     },

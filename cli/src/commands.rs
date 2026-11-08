@@ -499,7 +499,25 @@ pub fn stats(c: &CardCollection, out: Output, days: u32, deck: Option<&str>, by_
             dim(format!(": {total}, on {}", count(days_studied, "day", "days")))
         );
     }
-    if days_studied > 0 && days <= SPARKLINE_DAYS {
+    if days_studied > 0 && days <= SPARKLINE_DAYS && by_time {
+        // A line per day, oldest first, with its time and a bar.
+        let times: Vec<String> = shaded.iter().map(|&s| if s > 0 { text::study_time(s) } else { "–".into() }).collect();
+        let time_width = times.iter().map(|t| width(t)).max().unwrap_or(0);
+        let max = shaded.iter().copied().max().unwrap_or(0);
+        let last = shaded.len() - 1;
+        for (i, (&secs, time)) in shaded.iter().zip(&times).enumerate() {
+            let day = stats.activity_start + i as i64 * DAY;
+            let label = match last - i {
+                0 => bold(pad("Today", 9)),
+                1 => dim(pad("Yesterday", 9)),
+                _ => dim(pad(&format!("{} {}", text::weekday(day), &text::date(day)[5..]), 9)),
+            };
+            let time = format!("{}{time}", " ".repeat(time_width - width(time)));
+            let time = if secs > 0 { time } else { dim(time) };
+            let bar = if secs > 0 { format!("  {}", blue(bar(secs, max, 30))) } else { String::new() };
+            println!("  {label}  {time}{bar}");
+        }
+    } else if days_studied > 0 && days <= SPARKLINE_DAYS {
         println!("  {}", blue(sparkline(shaded)));
         // The first day under the line's start, and today under its end when there's room.
         let start = text::date(stats.activity_start);
