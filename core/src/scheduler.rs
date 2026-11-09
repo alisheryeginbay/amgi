@@ -4,8 +4,11 @@
 //! The crate predicts memory state; this module adds the scheduling policy:
 //! there are no learning steps, a failed card comes back after [`AGAIN_DELAY_SECS`],
 //! and other intervals are whole days that increase strictly from Hard to Easy.
+//!
+//! The memory model has 21 parameters: the defaults, fitted to many people's reviews,
+//! or those [`fit`] finds for one person's.
 
-use fsrs::{FSRS, MemoryState};
+use fsrs::{FSRS, FSRSItem, FSRSReview, MemoryState};
 
 pub const AGAIN_DELAY_SECS: i64 = 10 * 60;
 const DAY_SECS: i64 = 86_400;
@@ -93,19 +96,23 @@ pub struct Outcome {
     pub interval_secs: i64,
 }
 
+/// The memory model's parameters, FSRS-6's 21.
+pub type Parameters = [f32; 21];
+
 /// Probability of recalling a card with this stability `elapsed_days` after its last
-/// review: the forgetting curve of the default parameters, 90% at `stability` days.
-pub fn retrievability(stability: f64, elapsed_days: f64) -> f64 {
+/// review, on the forgetting curve that falls by `decay`, 90% at `stability` days.
+pub fn retrievability(stability: f64, elapsed_days: f64, decay: f64) -> f64 {
     let state = MemoryState {
         stability: stability as f32,
         difficulty: 5.0, // The curve doesn't depend on difficulty.
     };
-    fsrs::current_retrievability(state, elapsed_days.max(0.0) as f32, fsrs::DEFAULT_PARAMETERS[20]).into()
+    fsrs::current_retrievability(state, elapsed_days.max(0.0) as f32, decay as f32).into()
 }
 
 #[derive(Debug, Clone)]
 pub struct Scheduler {
     fsrs: FSRS,
+    parameters: Parameters,
     pub desired_retention: f32,
 }
 
@@ -113,12 +120,34 @@ impl Default for Scheduler {
     fn default() -> Self {
         Scheduler {
             fsrs: FSRS::default(),
+            parameters: fsrs::DEFAULT_PARAMETERS,
             desired_retention: 0.9,
         }
     }
 }
 
 impl Scheduler {
+    /// A scheduler with these parameters, or why they can't be used.
+    pub fn new(parameters: Parameters, desired_retention: f32) -> fsrs::Result<Self> {
+        if parameters.iter().any(|p| !p.is_finite()) {
+            return Err(fsrs::FSRSError::InvalidParameters);
+        }
+        Ok(Scheduler {
+            fsrs: FSRS::new(&parameters)?,
+            parameters,
+            desired_retention,
+        })
+    }
+
+    pub fn parameters(&self) -> &Parameters {
+        &self.parameters
+    }
+
+    /// How fast recall falls past stability; the forgetting curve's shape.
+    pub fn decay(&self) -> f64 {
+        self.parameters[20].into()
+    }
+
     /// Outcomes for all four ratings, indexed by `rating as usize - 1`.
     /// `memory` is `None` for a card never reviewed; `elapsed_days` counts study days
     /// since the last review (0 for a review on the same day).
@@ -150,9 +179,16 @@ impl Scheduler {
     }
 
     /// Probability of recalling a card `elapsed_days` after its last review, on the
-    /// forgetting curve of the default parameters the scheduler uses.
+    /// scheduler's forgetting curve.
     pub fn retrievability(&self, memory: Memory, elapsed_days: f64) -> f64 {
-        retrievability(memory.stability, elapsed_days)
+        retrievability(memory.stability, elapsed_days, self.decay())
+    }
+
+    /// The memory state after each of a card's reviews, from its first: the same as
+    /// rating it with [`Self::schedule`] review by review.
+    pub fn memories(&self, reviews: &[PastReview]) -> fsrs::Result<Vec<Memory>> {
+        let states = self.fsrs.historical_memory_states(item(reviews), None)?;
+        Ok(states.into_iter().map(Into::into).collect())
     }
 
     pub fn schedule(
@@ -254,7 +290,7 @@ impl Scheduler {
         for seed in 0..SIMULATION_RUNS {
             let result = fsrs::simulate(
                 &config,
-                &fsrs::DEFAULT_PARAMETERS,
+                &self.parameters,
                 self.desired_retention,
                 Some(seed),
                 Some(existing.clone()),
@@ -265,6 +301,102 @@ impl Scheduler {
         }
         Ok(totals.into_iter().map(|n| n as f64 / SIMULATION_RUNS as f64).collect())
     }
+}
+
+/// A review in a card's history, for [`Scheduler::memories`] and [`fit`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PastReview {
+    pub rating: Rating,
+    /// Whole study days since the review before; ignored on the first.
+    pub elapsed_days: u32,
+}
+
+/// One card's reviews as the crate takes them; the first is 0 days after nothing.
+fn item(reviews: &[PastReview]) -> FSRSItem {
+    FSRSItem {
+        reviews: reviews
+            .iter()
+            .enumerate()
+            .map(|(i, r)| FSRSReview {
+                rating: r.rating as u32,
+                delta_t: if i == 0 { 0 } else { r.elapsed_days },
+            })
+            .collect(),
+    }
+}
+
+/// How well parameters predict whether reviews were remembered; lower is better.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct Fitness {
+    /// Average log loss of the predicted recall.
+    pub log_loss: f64,
+    /// How far predicted recall is from the share remembered, over reviews grouped
+    /// alike: 0.05 is 5 points off.
+    pub rmse: f64,
+}
+
+/// Result of [`fit`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fit {
+    pub parameters: Parameters,
+    /// Of the parameters in use, and of the fitted ones, on the same reviews.
+    pub before: Fitness,
+    pub after: Fitness,
+    /// Reviews the fit learned to predict, each a day or more after the one before,
+    /// and the cards they're of.
+    pub reviews: usize,
+    pub cards: usize,
+}
+
+/// Parameters fitted to `histories`, each a card's reviews from its very first,
+/// compared with `current` on them; rounded to 4 decimals, as written down. `None`
+/// without enough reviews on a later day than the one before to learn from.
+pub fn fit(histories: &[Vec<PastReview>], current: &Parameters) -> fsrs::Result<Option<Fit>> {
+    // An item per review on a later day than the one before, holding the reviews up
+    // to it; same-day reviews are only history, as in Anki.
+    let (mut items, mut card_ids) = (Vec::new(), Vec::new());
+    for (id, history) in histories.iter().enumerate() {
+        for end in 2..=history.len() {
+            if history[end - 1].elapsed_days > 0 {
+                items.push(item(&history[..end]));
+                card_ids.push(id as i64);
+            }
+        }
+    }
+    if items.is_empty() {
+        return Ok(None);
+    }
+    let fitted = fsrs::compute_parameters(fsrs::ComputeParametersInput {
+        train_set: items.clone(),
+        card_ids: Some(card_ids.clone()),
+        // One more look after Again, as the card comes back ten minutes later.
+        num_relearning_steps: Some(1),
+        ..Default::default()
+    })?;
+    // What the crate gives back when there's too little to learn from.
+    if fitted == fsrs::DEFAULT_PARAMETERS {
+        return Ok(None);
+    }
+    let mut parameters = *current;
+    for (p, fitted) in parameters.iter_mut().zip(fitted) {
+        *p = (fitted * 10_000.0).round() / 10_000.0;
+    }
+    let fitness = |parameters: &Parameters| -> fsrs::Result<Fitness> {
+        let e = FSRS::new(parameters)?.evaluate_with_card_ids(items.clone(), card_ids.clone(), |_| true)?;
+        Ok(Fitness {
+            log_loss: e.log_loss.into(),
+            rmse: e.rmse_bins.into(),
+        })
+    };
+    let mut cards = card_ids.clone();
+    cards.dedup();
+    Ok(Some(Fit {
+        before: fitness(current)?,
+        after: fitness(&parameters)?,
+        parameters,
+        reviews: items.len(),
+        cards: cards.len(),
+    }))
 }
 
 #[cfg(test)]
@@ -407,5 +539,64 @@ mod tests {
         };
         let p = s.preview(Some(m), 0).unwrap();
         assert!(p[1].interval_secs < p[2].interval_secs && p[2].interval_secs < p[3].interval_secs);
+    }
+
+    /// Reviews of `cards` cards by someone who forgets as `truth` says, each due when
+    /// the scheduler has it, give or take a few days.
+    fn simulated_histories(truth: &Parameters, cards: usize) -> Vec<Vec<PastReview>> {
+        let s = Scheduler::new(*truth, 0.9).unwrap();
+        let mut seed: u64 = 42;
+        let mut random = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        (0..cards)
+            .map(|_| {
+                let mut history = vec![PastReview { rating: Rating::Good, elapsed_days: 0 }];
+                let mut memory = s.schedule(None, 0, Rating::Good).unwrap().memory;
+                for _ in 0..8 {
+                    let interval = s.schedule(Some(memory), 0, Rating::Good).unwrap().interval_secs / DAY_SECS;
+                    let days = ((interval as f64 * (0.7 + 0.6 * random())) as u32).max(1);
+                    let remembered = random() < s.retrievability(memory, days.into());
+                    let rating = if remembered { Rating::Good } else { Rating::Again };
+                    memory = s.schedule(Some(memory), days, rating).unwrap().memory;
+                    history.push(PastReview { rating, elapsed_days: days });
+                    if !remembered {
+                        // Seen again ten minutes later.
+                        memory = s.schedule(Some(memory), 0, Rating::Good).unwrap().memory;
+                        history.push(PastReview { rating: Rating::Good, elapsed_days: 0 });
+                    }
+                }
+                history
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fits_someone_who_remembers_longer() {
+        let mut truth = fsrs::DEFAULT_PARAMETERS;
+        for p in &mut truth[..4] {
+            *p *= 3.0;
+        }
+        let histories = simulated_histories(&truth, 400);
+        let fit = fit(&histories, &fsrs::DEFAULT_PARAMETERS).unwrap().unwrap();
+        // One review a day or more after the one before for each of the 8 rounds.
+        assert_eq!((fit.reviews, fit.cards), (400 * 8, 400));
+        assert!(fit.after.log_loss < fit.before.log_loss, "{:?} vs {:?}", fit.after, fit.before);
+        assert!(fit.after.rmse < fit.before.rmse, "{:?} vs {:?}", fit.after, fit.before);
+        // Good on a first review lasts longer than the defaults say.
+        assert!(fit.parameters[2] > fsrs::DEFAULT_PARAMETERS[2], "{:?}", fit.parameters);
+        assert!(fit.parameters.iter().all(|p| (p * 10_000.0).round() / 10_000.0 == *p));
+    }
+
+    #[test]
+    fn too_few_reviews_to_fit() {
+        let truth = fsrs::DEFAULT_PARAMETERS;
+        assert_eq!(fit(&simulated_histories(&truth, 1), &truth).unwrap(), None);
+        // Only same-day reviews: nothing to predict.
+        let same_day = vec![vec![PastReview { rating: Rating::Again, elapsed_days: 0 }, PastReview { rating: Rating::Good, elapsed_days: 0 }]; 50];
+        assert_eq!(fit(&same_day, &truth).unwrap(), None);
     }
 }

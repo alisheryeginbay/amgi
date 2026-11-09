@@ -112,6 +112,19 @@ pub struct LoggedReview {
     pub taken_ms: Option<u32>,
 }
 
+/// A review in [`Store::histories`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HistoryRow {
+    /// Its row in the log.
+    pub id: i64,
+    pub rating: Rating,
+    /// Whole study days since the review before.
+    pub elapsed_days: u32,
+    /// Whether it was the card's first review, not one partway through a history
+    /// imported without its start.
+    pub first: bool,
+}
+
 /// An entry to write to the review log.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LogEntry {
@@ -262,6 +275,56 @@ impl Store {
             }))
         })?;
         rows.filter_map(Result::transpose).collect()
+    }
+
+    /// Every card's reviews since it was last reset to new, oldest first, by card id;
+    /// cards with none are left out.
+    pub fn histories(&self) -> rusqlite::Result<Vec<(String, Vec<HistoryRow>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT card_id, id, rating, elapsed_days, was_new, review_state
+             FROM review_log ORDER BY card_id, reviewed_at, id",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut cards: Vec<(String, Vec<HistoryRow>)> = Vec::new();
+        while let Some(r) = rows.next()? {
+            let card_id: String = r.get(0)?;
+            if cards.last().is_none_or(|(id, _)| *id != card_id) {
+                cards.push((card_id, Vec::new()));
+            }
+            let history = &mut cards.last_mut().expect("just pushed").1;
+            let Some(rating) = Rating::from_number(r.get(2)?) else {
+                // A reset, or a rating not known.
+                history.clear();
+                continue;
+            };
+            let state = r.get::<_, Option<i64>>(5)?.and_then(ReviewState::from_number);
+            history.push(HistoryRow {
+                id: r.get(1)?,
+                rating,
+                elapsed_days: r.get::<_, f64>(3)?.round().max(0.0) as u32,
+                // Before the state was logged, the first review of a new card.
+                first: state.map_or(r.get(4)?, |s| s == ReviewState::New),
+            });
+        }
+        cards.retain(|(_, h)| !h.is_empty());
+        Ok(cards)
+    }
+
+    /// Write memory states recalculated from the review log: those after each review,
+    /// by log row, and each card's latest. Due dates stay as they were.
+    pub fn set_memories(&mut self, rows: &[(i64, Memory)], cards: &[(String, Memory)]) -> rusqlite::Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut row = tx.prepare("UPDATE review_log SET stability = ?2, difficulty = ?3 WHERE id = ?1")?;
+            for (id, m) in rows {
+                row.execute(params![id, m.stability, m.difficulty])?;
+            }
+            let mut card = tx.prepare("UPDATE card_state SET stability = ?2, difficulty = ?3 WHERE card_id = ?1")?;
+            for (id, m) in cards {
+                card.execute(params![id, m.stability, m.difficulty])?;
+            }
+        }
+        tx.commit()
     }
 
     /// Stage of the card's latest review; `None` if it has none or it predates the

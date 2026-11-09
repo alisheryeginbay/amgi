@@ -1,6 +1,7 @@
 //! One function per subcommand. Each prints its result and returns the exit code.
 
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -893,4 +894,62 @@ pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool, chec
         println!("{}", red(format!("{cards} review history, which no card will use.")));
     }
     Ok(code)
+}
+
+pub fn optimize(c: &CardCollection, out: Output, dry_run: bool) -> Result {
+    let in_use = if settings::Settings::load(&c.root())?.study.parameters.is_some() { "In use" } else { "Default" };
+    let waiting = !out.json && std::io::stderr().is_terminal();
+    if waiting {
+        eprint!("{}", dim("Fitting to your reviews…"));
+    }
+    let fit = c.fit_parameters();
+    if waiting {
+        eprint!("\r\x1b[K");
+    }
+    let Some(fit) = fit? else {
+        if out.json {
+            return print_json(&json!({ "fit": null, "saved": false }));
+        }
+        println!("Not enough reviews to fit to yet: it takes a few dozen cards each studied again on a later day.");
+        return Ok(ExitCode::SUCCESS);
+    };
+    let better = fit.after.log_loss < fit.before.log_loss;
+    let save = better && !dry_run;
+    if save {
+        c.save_parameters(fit.parameters)?;
+    }
+    if out.json {
+        return print_json(&json!({
+            "reviews": fit.reviews,
+            "cards": fit.cards,
+            // As written to `amgi.toml`, not widened from f32.
+            "parameters": fit.parameters.map(|p| p.to_string().parse::<f64>().unwrap_or(f64::NAN)),
+            "before": fit.before,
+            "after": fit.after,
+            "better": better,
+            "saved": save,
+        }));
+    }
+
+    println!("{}", bold(format!("Fitted to {} of {}", count(fit.reviews as u32, "review", "reviews"), count(fit.cards as u32, "card", "cards"))));
+    println!();
+    println!("{}", dim(format!("{:<18}{:>9}{:>9}", "", in_use, "Fitted")));
+    let paint = |s: String| if better { green(s) } else { s };
+    let row = |label: &str, before: String, after: String| {
+        println!("{}{}{}", pad(label, 18), dim(format!("{before:>9}")), paint(format!("{after:>9}")));
+    };
+    row("Prediction error", format!("{:.1}%", fit.before.rmse * 100.0), format!("{:.1}%", fit.after.rmse * 100.0));
+    row("Log loss", format!("{:.4}", fit.before.log_loss), format!("{:.4}", fit.after.log_loss));
+    println!();
+    if !better {
+        println!("The parameters in use predict your reviews as well, so {} is unchanged.", settings::FILE);
+    } else if dry_run {
+        println!("{}", dim("Run `amgi optimize` without --dry-run to save them."));
+    } else {
+        println!(
+            "Saved to {}. Cards' memory now follows them; due dates stay as they were.",
+            settings::FILE
+        );
+    }
+    Ok(ExitCode::SUCCESS)
 }

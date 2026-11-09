@@ -133,7 +133,21 @@ enum Command {
         #[arg(long, short)]
         deck: Option<String>,
     },
+    /// Fit the memory model to your reviews, so intervals follow how fast you forget,
+    /// and save its parameters to `amgi.toml` if they predict your reviews better than
+    /// those in use. Each card's memory is worked out again; due dates stay.
+    #[command(after_long_help = OPTIMIZE)]
+    Optimize {
+        /// Show how well the fitted parameters do without saving them.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
+
+const OPTIMIZE: &str = "\
+The parameters go in `amgi.toml` as `study.parameters`. Fitting them again every month
+or so, as reviews add up, keeps them current; delete them to go back to the defaults,
+which come from many people's reviews. A card's memory follows whichever are in the file.";
 
 /// `amgi search --help`, after the options.
 const SETTINGS: &str = "\
@@ -143,6 +157,7 @@ value shown, except the new-card rules and review limit, which there are none of
   [study]
   retention = 0.9            # how likely to remember a card when it comes due, 0.7-0.99
   day-starts-at = 4          # the hour a study day starts; before it counts as the day before
+  parameters = [0.212, ...]  # the memory model's 21, fitted to your reviews by `amgi optimize`
 
   [new]
   per-day = 20               # new cards a day in all; 0 to only review
@@ -215,6 +230,7 @@ fn main() -> ExitCode {
             let (new, every_day) = per_day.map_or((new, false), |n| (n, true));
             commands::forecast(&collection, out, new, every_day, keep_adding, days, deck.as_deref())
         }
+        Command::Optimize { dry_run } => commands::optimize(&collection, out, dry_run),
     };
     match result {
         Ok(code) => code,

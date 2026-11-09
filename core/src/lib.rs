@@ -26,7 +26,7 @@ pub use parser::CardKind;
 pub use scheduler::{Rating, ReviewState};
 pub use scripts::Scripts;
 use parser::ParsedCard;
-use scheduler::{Memory, PlannedCard, RatingHabits, Scheduler};
+use scheduler::{Memory, Parameters, PastReview, PlannedCard, RatingHabits, Scheduler};
 use search::Query;
 use store::{CardState, CardTime, LogEntry, LoggedReview, Store};
 
@@ -56,6 +56,9 @@ const NEW_PER_DAY_KEY: &str = "new_cards_per_day";
 const DEFAULT_NEW_PER_DAY: u32 = 20;
 const LEECH_THRESHOLD_KEY: &str = "leech_threshold";
 const LEECH_SUSPEND_KEY: &str = "leech_suspend";
+/// The parameters the memory states in the database were worked out with, as
+/// [`parameters_key`] gives them; the defaults when it's missing.
+const MEMORY_PARAMETERS_KEY: &str = "memory_parameters";
 /// Lapses that make a card a leech when the collection hasn't set its own, as in Anki.
 pub const DEFAULT_LEECH_THRESHOLD: u32 = 8;
 /// The most time one review counts, as Anki does by default: past this, the person
@@ -236,6 +239,8 @@ pub struct CardInfo {
     pub difficulty: Option<f64>,
     /// Probability of recalling it now; `None` for a new card.
     pub retrievability: Option<f64>,
+    /// The forgetting curve's decay, for drawing it with `recall_probability`.
+    pub decay: f64,
     /// Oldest first.
     pub reviews: Vec<CardReview>,
 }
@@ -785,6 +790,41 @@ impl CardCollection {
 }
 
 impl CardCollection {
+    /// Memory-model parameters fitted to the collection's reviews, compared with those
+    /// in use; `None` without enough reviews. Only the histories from a card's first
+    /// review are learned from, not those imported partway.
+    pub fn fit_parameters(&self) -> Result<Option<scheduler::Fit>> {
+        let inner = self.lock();
+        let histories: Vec<Vec<PastReview>> = inner
+            .store
+            .histories()?
+            .into_iter()
+            .filter(|(_, h)| h[0].first)
+            .map(|(_, h)| h.iter().map(|r| PastReview { rating: r.rating, elapsed_days: r.elapsed_days }).collect())
+            .collect();
+        let current = *inner.scheduler.parameters();
+        drop(inner);
+        Ok(scheduler::fit(&histories, &current)?)
+    }
+
+    /// Write `parameters` to `amgi.toml` and use them, working out every card's memory
+    /// again. Due dates stay as they were.
+    pub fn save_parameters(&self, parameters: Parameters) -> Result<()> {
+        let mut inner = self.lock();
+        let path = inner.root.join(settings::FILE);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e.into()),
+        };
+        if let Err(message) = settings::Settings::parse(&text) {
+            return Err(AmgiError::Io { message: format!("{}: {message}", settings::FILE) });
+        }
+        fs::write(&path, settings::set_parameters(&text, &parameters))?;
+        inner.reload()?;
+        Ok(())
+    }
+
     /// The folder holding the collection's decks.
     pub fn root(&self) -> PathBuf {
         self.lock().root.clone()
@@ -914,7 +954,9 @@ impl Inner {
                 self.states = states;
                 // Those reviews were in the old file.
                 self.answered.clear();
-                if deleted {
+                if let Err(e) = self.follow_parameters(false) {
+                    format!("The review database was replaced on disk, and its cards' memory couldn't be worked out again: {e}")
+                } else if deleted {
                     "The review database was deleted, so a new one was started.".to_string()
                 } else {
                     "The review database was replaced on disk, so it was opened again.".to_string()
@@ -941,7 +983,9 @@ impl Inner {
         self.warnings.clear();
         self.scripts = Scripts::default();
         self.load_note_types(&sources.note_types);
+        let parameters = *self.scheduler.parameters();
         self.load_settings_file(sources.settings.as_deref());
+        self.follow_parameters(parameters != *self.scheduler.parameters())?;
         self.warn_about_stray_decks(&sources.strays);
         let cards_dir = self.root.join(CARDS_DIR);
         for (file, text) in &sources.decks {
@@ -1089,15 +1133,26 @@ impl Inner {
     /// The settings in `amgi.toml`; the defaults for those it leaves out, and for all of
     /// them if it has errors, which become a warning.
     fn load_settings_file(&mut self, text: Option<&str>) {
-        let config = match text.map(settings::Settings::parse).transpose() {
-            Ok(config) => config.unwrap_or_default(),
+        let (config, parameters) = match text.map(settings::Settings::parse).transpose() {
+            Ok(config) => {
+                let config = config.unwrap_or_default();
+                let parameters = config.study.parameters().unwrap_or(fsrs::DEFAULT_PARAMETERS);
+                (config, parameters)
+            }
             Err(message) => {
                 self.warnings.push(CollectionWarning { path: settings::FILE.into(), line: 0, message });
-                settings::Settings::default()
+                // Working every card's memory out again over a typo would only be
+                // undone once it's fixed.
+                let parameters = text
+                    .and_then(settings::parameters_despite_errors)
+                    .unwrap_or(*self.scheduler.parameters());
+                (settings::Settings::default(), parameters)
             }
         };
         let text = text.unwrap_or_default();
-        self.scheduler.desired_retention = config.study.retention.unwrap_or(Scheduler::default().desired_retention);
+        let retention = config.study.retention.unwrap_or(Scheduler::default().desired_retention);
+        // `parse` has checked them.
+        self.scheduler = Scheduler::new(parameters, retention).unwrap_or_default();
         self.rollover_secs = i64::from(config.study.day_starts_at.unwrap_or(DEFAULT_ROLLOVER_HOUR)) * 3600;
         self.reviews_per_day = config.review.per_day;
         self.leech_threshold = config.leech.lapses.unwrap_or(DEFAULT_LEECH_THRESHOLD);
@@ -1121,6 +1176,40 @@ impl Inner {
             );
             self.warnings.push(CollectionWarning { path: settings::FILE.into(), line: r.line, message });
         }
+    }
+
+    /// Bring the database's memory states in line with the parameters in use, working
+    /// them out again from the review log if they were found with others, and read
+    /// them again if `changed` since the last load, as another process may have done
+    /// that. Answers to undo are let go then, as they'd put back the old states.
+    fn follow_parameters(&mut self, changed: bool) -> Result<()> {
+        let key = parameters_key(self.scheduler.parameters());
+        let found_with = self.store.setting(MEMORY_PARAMETERS_KEY)?.unwrap_or(parameters_key(&fsrs::DEFAULT_PARAMETERS));
+        if found_with != key {
+            self.recalculate_memories()?;
+            self.store.set_setting(MEMORY_PARAMETERS_KEY, key)?;
+        }
+        if changed || found_with != key {
+            self.states = self.store.states()?;
+            self.answered.clear();
+        }
+        Ok(())
+    }
+
+    /// Every card's memory after each of its reviews, worked out again with the
+    /// scheduler's parameters, in the log and the card's state.
+    fn recalculate_memories(&mut self) -> Result<()> {
+        let (mut rows, mut cards) = (Vec::new(), Vec::new());
+        for (id, history) in self.store.histories()? {
+            let reviews: Vec<PastReview> = history.iter().map(|r| PastReview { rating: r.rating, elapsed_days: r.elapsed_days }).collect();
+            let memories = self.scheduler.memories(&reviews)?;
+            rows.extend(history.iter().map(|r| r.id).zip(memories.iter().copied()));
+            if let Some(&last) = memories.last() {
+                cards.push((id, last));
+            }
+        }
+        self.store.set_memories(&rows, &cards)?;
+        Ok(())
     }
 
     /// Settings the database kept before `amgi.toml` did go to the file, each unless
@@ -1517,6 +1606,7 @@ impl Inner {
                 let days = (now - s.last_review) as f64 / DAY_SECS as f64;
                 self.scheduler.retrievability(s.memory, days)
             }),
+            decay: self.scheduler.decay(),
             reviews: reviews
                 .into_iter()
                 .map(|r| CardReview {
@@ -2025,6 +2115,13 @@ impl Inner {
     }
 }
 
+/// Parameters as a number the `setting` table can keep, to tell them apart.
+fn parameters_key(parameters: &Parameters) -> f64 {
+    let bits = parameters.map(|p| p.to_bits().to_string()).join(",");
+    // 52 bits, exact as an f64.
+    (parser::stable_hash(&[&bits]) >> 12) as f64
+}
+
 /// A review's time as the log keeps it: up to `MAX_ANSWER_MS`.
 fn cap_taken(taken_ms: Option<u32>) -> Option<u32> {
     taken_ms.map(|ms| ms.min(MAX_ANSWER_MS))
@@ -2044,10 +2141,10 @@ fn time_left(time: CardTime, new: u32, due: u32, learning: u32) -> Option<u32> {
 
 /// Short human-readable interval for answer buttons: `10m`, `3d`, `1.5mo`, `2.1y`.
 /// Probability of recalling a card with this stability (in days) `elapsed_days` after
-/// its last review, for drawing its forgetting curve.
+/// its last review, on the curve with `CardInfo::decay`, for drawing it.
 #[uniffi::export]
-pub fn recall_probability(stability: f64, elapsed_days: f64) -> f64 {
-    scheduler::retrievability(stability, elapsed_days)
+pub fn recall_probability(stability: f64, elapsed_days: f64, decay: f64) -> f64 {
+    scheduler::retrievability(stability, elapsed_days, decay)
 }
 
 #[uniffi::export]
@@ -2735,6 +2832,86 @@ mod tests {
         // Raising it lets more in the same day.
         write_settings(&dir, &c, "[new]\nper-day = 5\n");
         assert_eq!(c.lock().decks(T0).unwrap()[0].new, 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn memories_follow_the_parameters() {
+        let (dir, c) = collection(&[("a.md", "Q: 1\nA: 1\n\nQ: 2\nA: 2\n")]);
+        let mut inner = c.lock();
+        for (day, rating) in [(0, Rating::Good), (0, Rating::Again), (1, Rating::Good), (4, Rating::Hard), (9, Rating::Good)] {
+            let id = inner.cards[0].parsed.id.clone();
+            inner.answer(&id, rating, None, T0 + day * DAY_SECS).unwrap();
+        }
+        let id = inner.cards[0].parsed.id.clone();
+        let memory = |inner: &Inner| (inner.states[&id].memory, inner.store.reviews(&id).unwrap().last().unwrap().memory);
+        let (before, logged) = memory(&inner);
+        assert_eq!(before, logged);
+        let due = inner.states[&id].due;
+        // Worked out from the log, they're as reviewing found them.
+        inner.recalculate_memories().unwrap();
+        inner.states = inner.store.states().unwrap();
+        let (again, _) = memory(&inner);
+        assert!((again.stability - before.stability).abs() < 1e-3 && (again.difficulty - before.difficulty).abs() < 1e-3, "{again:?} != {before:?}");
+        drop(inner);
+
+        let mut fitted = fsrs::DEFAULT_PARAMETERS;
+        fitted[2] *= 2.0;
+        c.save_parameters(fitted).unwrap();
+        let inner = c.lock();
+        let (after, logged) = memory(&inner);
+        assert!(after.stability > before.stability + 0.5, "{after:?} vs {before:?}");
+        assert_eq!(after, logged);
+        assert_eq!(inner.states[&id].due, due);
+        assert_eq!(inner.store.setting(MEMORY_PARAMETERS_KEY).unwrap(), Some(parameters_key(&fitted)));
+        drop(inner);
+
+        // A mistake elsewhere in the file keeps them, as does one that isn't TOML.
+        let text = fs::read_to_string(dir.join(settings::FILE)).unwrap();
+        write_settings(&dir, &c, &format!("{text}\n[review]\nper-dya = 1\n"));
+        assert!(c.warnings().iter().any(|w| w.message.contains("unknown field")));
+        let kept = |c: &CardCollection| {
+            let inner = c.lock();
+            (memory(&inner).0, *inner.scheduler.parameters())
+        };
+        assert_eq!(kept(&c), (after, fitted));
+        write_settings(&dir, &c, &format!("{text}\n[review\n"));
+        assert_eq!(kept(&c), (after, fitted));
+
+        // Back without them, back to the memory the defaults give.
+        write_settings(&dir, &c, "");
+        let (restored, _) = memory(&c.lock());
+        assert!((restored.stability - before.stability).abs() < 1e-3);
+        write_settings(&dir, &c, "[study]\nparameters = [1, 2]\n");
+        assert!(c.warnings().iter().any(|w| w.message.contains("21 numbers")));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn fits_parameters_to_reviews() {
+        let deck: String = (1..=30).map(|n| format!("Q: {n}\nA: {n}\n\n")).collect();
+        let (dir, c) = collection(&[("a.md", &deck)]);
+        assert_eq!(c.fit_parameters().unwrap(), None);
+        let mut inner = c.lock();
+        let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
+        let answer = |inner: &mut Inner, reviews: &[(i64, Rating)]| {
+            for id in &ids {
+                for &(day, rating) in reviews {
+                    inner.answer(id, rating, None, T0 + day * DAY_SECS).unwrap();
+                }
+            }
+        };
+        // Reviews on the day a card is first seen are nothing to learn from.
+        answer(&mut inner, &[(0, Rating::Again), (0, Rating::Good)]);
+        drop(inner);
+        assert_eq!(c.fit_parameters().unwrap(), None);
+        let mut inner = c.lock();
+        answer(&mut inner, &[(3, Rating::Good), (10, Rating::Again), (10, Rating::Good), (12, Rating::Hard)]);
+        drop(inner);
+        let fit = c.fit_parameters().unwrap().unwrap();
+        // The reviews a day or more after the one before.
+        assert_eq!((fit.reviews, fit.cards), (90, 30));
+        assert!(fit.after.log_loss.is_finite() && fit.before.log_loss.is_finite());
         fs::remove_dir_all(dir).unwrap();
     }
 

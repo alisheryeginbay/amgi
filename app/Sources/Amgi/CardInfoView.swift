@@ -84,7 +84,7 @@ private struct CardInfoForm: View {
 
                 if !info.reviews.isEmpty {
                     Section {
-                        ForgettingCurve(reviews: info.reviews, target: target, now: context.date)
+                        ForgettingCurve(reviews: info.reviews, decay: info.decay, target: target, now: context.date)
                     }
                 }
 
@@ -123,6 +123,8 @@ private struct CardInfoForm: View {
 private struct ForgettingCurve: View {
     /// Oldest first; not empty.
     let reviews: [CardReview]
+    /// The forgetting curve's shape, from the collection's parameters.
+    let decay: Double
     let target: Double
     let now: Date
     @State private var hovered: Date?
@@ -146,7 +148,7 @@ private struct ForgettingCurve: View {
     /// Recall on `day`, from the last review at or before it.
     private func recall(at day: Date) -> Double? {
         guard let review = reviews.last(where: { date($0.reviewedAt) <= day }) else { return nil }
-        return recallProbability(stability: review.stability, elapsedDays: day.timeIntervalSince(date(review.reviewedAt)) / 86_400)
+        return recallProbability(stability: review.stability, elapsedDays: day.timeIntervalSince(date(review.reviewedAt)) / 86_400, decay: decay)
     }
 
     /// Each review's stretch sampled, ending in the drop the next review resets.
@@ -154,7 +156,7 @@ private struct ForgettingCurve: View {
         let steps = 40
         for i in 0...steps {
             let day = from.addingTimeInterval(to.timeIntervalSince(from) * Double(i) / Double(steps))
-            let recall = recallProbability(stability: stability, elapsedDays: day.timeIntervalSince(review) / 86_400)
+            let recall = recallProbability(stability: stability, elapsedDays: day.timeIntervalSince(review) / 86_400, decay: decay)
             points.append(Point(id: points.count, date: day, recall: recall))
         }
     }
