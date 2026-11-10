@@ -30,7 +30,9 @@ export type Block =
   /** Sounds next to each other share a row. */
   | { type: "sounds"; sounds: { src: string | null; path: string }[] }
   /** A fenced code block, highlighted once its language is loaded. */
-  | { type: "code"; html: string; language: string };
+  | { type: "code"; html: string; language: string }
+  /** Lines starting `>`, as Markdown with those markers taken off. */
+  | { type: "quote"; source: string };
 
 const escapes: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 export const escapeHTML = (s: string) => s.replace(/[&<>"']/g, (c) => escapes[c]);
@@ -219,6 +221,23 @@ export function splitFences(source: string): Part[] {
   return parts;
 }
 
+/** Up to three spaces, `>` and an optional space, as in CommonMark. */
+const QUOTE = /^ {0,3}> ?/;
+
+/** Text split into runs of quoted lines, with their markers taken off, and the lines
+ *  between them. */
+export function splitQuotes(text: string): { quote: boolean; text: string }[] {
+  const runs: { quote: boolean; lines: string[] }[] = [];
+  for (const line of text.split("\n")) {
+    const quote = QUOTE.test(line);
+    const last = runs.at(-1);
+    const stripped = quote ? line.replace(QUOTE, "") : line;
+    if (last?.quote === quote) last.lines.push(stripped);
+    else runs.push({ quote, lines: [stripped] });
+  }
+  return runs.map(({ quote, lines }) => ({ quote, text: lines.join("\n") }));
+}
+
 /** Shiki with no grammars yet: each language is a chunk of its own, loaded when a card
  *  first uses it. The JavaScript engine needs no WebAssembly and works synchronously. */
 const shiki = createHighlighterCoreSync({
@@ -293,7 +312,7 @@ export function highlight(source: string, language: string): string {
 export function oneLine(source: string): string {
   return splitFences(source)
     .map((part) => {
-      if ("text" in part) return part.text;
+      if ("text" in part) return part.text.split("\n").map((line) => line.replace(/^(?: {0,3}> ?)+/, "")).join("\n");
       const code = part.code.replace(/\s+/g, " ").trim();
       if (!code) return "";
       // A code span's backticks must outnumber any run inside it.
@@ -305,7 +324,7 @@ export function oneLine(source: string): string {
     .trim();
 }
 
-/** A card's Markdown as rows: text, code blocks, images, and rows of sounds. Media
+/** A card's Markdown as rows: text, code blocks, quotes, images, and rows of sounds. Media
  *  paths are relative to the deck file at `cardPath`. */
 export function parseBlocks(source: string, cardPath: string): Block[] {
   const blocks: Block[] = [];
@@ -313,7 +332,10 @@ export function parseBlocks(source: string, cardPath: string): Block[] {
     if ("code" in part) {
       blocks.push({ type: "code", html: highlight(part.code, part.language), language: part.language });
     } else {
-      parseMedia(part.text, cardPath, blocks);
+      for (const run of splitQuotes(part.text)) {
+        if (!run.quote) parseMedia(run.text, cardPath, blocks);
+        else if (run.text.trim()) blocks.push({ type: "quote", source: run.text });
+      }
     }
   }
   return blocks;
@@ -352,16 +374,23 @@ function parseMedia(source: string, cardPath: string, blocks: Block[]) {
   addText(source.slice(rest));
 }
 
+/** Every block in `source`, with those inside quotes in place of the quotes. */
+function allBlocks(source: string, cardPath: string): Block[] {
+  return parseBlocks(source, cardPath).flatMap((block) =>
+    block.type === "quote" ? allBlocks(block.source, cardPath) : [block],
+  );
+}
+
 /** Every sound linked in `source`, in order. */
 export function soundSources(source: string, cardPath: string): string[] {
-  return parseBlocks(source, cardPath).flatMap((block) =>
+  return allBlocks(source, cardPath).flatMap((block) =>
     block.type === "sounds" ? block.sounds.flatMap((s) => (s.src ? [s.src] : [])) : [],
   );
 }
 
 /** Every image shown from `source`, in order. */
 export function imageSources(source: string, cardPath: string): string[] {
-  return parseBlocks(source, cardPath).flatMap((block) => (block.type === "image" && block.src ? [block.src] : []));
+  return allBlocks(source, cardPath).flatMap((block) => (block.type === "image" && block.src ? [block.src] : []));
 }
 
 /** URL of a media link written in a card. Paths are relative to the deck file, or to

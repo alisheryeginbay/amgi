@@ -1,12 +1,13 @@
 <script lang="ts">
   import CardImage from "./CardImage.svelte";
+  import Markdown from "./Markdown.svelte";
   import SoundButton from "./SoundButton.svelte";
   import { GAP, loadLanguage, parseBlocks, type Block } from "../lib/markdown";
 
   type Sound = Extract<Block, { type: "sounds" }>["sounds"][number];
 
-  /** Card Markdown that keeps its line breaks, with images and sounds on rows of their
-   *  own. With `emphasis`, bold runs (cloze gaps and answers) are tinted. A `gap`, as
+  /** Card Markdown that keeps its line breaks, with images, sounds and quotes on rows of
+   *  their own. With `emphasis`, bold runs (cloze gaps and answers) are tinted. A `gap`, as
    *  from `clozeGap`, fills the `GAP` in `source` with both its hint and its answer, for
    *  the card to show one or the other. With `inlineSounds`, sounds after text end its
    *  last line as small speakers instead of taking a row. */
@@ -73,6 +74,10 @@
     {:else if block.type === "code"}
       <!-- Escaped by the highlighter. -->
       <pre class="code"><code data-language={block.language || undefined}>{@html block.html}</code></pre>
+    {:else if block.type === "quote"}
+      <blockquote class="quote">
+        <Markdown source={block.source} {cardPath} {emphasis} {inlineSounds} {gap} />
+      </blockquote>
     {:else if block.type === "image"}
       <CardImage src={block.src} alt={block.alt} path={block.path} />
     {:else}
@@ -166,6 +171,14 @@
 
   .code :global(.gap) {
     background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
+  .quote {
+    align-self: stretch;
+    margin: 0;
+    padding-left: 0.75em;
+    border-left: 3px solid var(--tertiary-label);
+    color: var(--secondary-label);
   }
 
   .emphasis :global(strong) {

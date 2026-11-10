@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { clozeGap, GAP, highlight, imageSources, loadLanguage, oneLine, renderInline, splitFences } from "./markdown.ts";
+import { clozeGap, GAP, highlight, imageSources, loadLanguage, oneLine, parseBlocks, renderInline, soundSources, splitFences } from "./markdown.ts";
 
 test("finds the gap a cloze's answer fills", () => {
   const gap = clozeGap("The capital of **[…]** is Paris.", "The capital of **France** is Paris.");
@@ -87,4 +87,26 @@ test("keeps a formula with a mistake on one line in table cells", () => {
   assert.ok(renderInline("$\\frac{$").includes("ParseError"));
   // Temml throws on some mistakes even when asked not to.
   assert.equal(renderInline("$x^$"), `<span class="temml-error" style="color:#b22222">$x^$</span>`);
+});
+
+test("puts lines starting `>` in a quote, with the markers taken off", () => {
+  const blocks = parseBlocks("Before\n> First line\n>Second **line**\n>\n>> Nested\nAfter", "deck.md");
+  assert.deepEqual(blocks.map((block) => block.type), ["text", "quote", "text"]);
+  assert.deepEqual(blocks[1], { type: "quote", source: "First line\nSecond **line**\n\n> Nested" });
+  assert.deepEqual(parseBlocks("> Nested", "deck.md")[0], { type: "quote", source: "Nested" });
+  // Escaped, or indented as code, it stays text.
+  assert.equal(parseBlocks("\\> Not a quote", "deck.md")[0].type, "text");
+  assert.equal(parseBlocks("    > Not a quote", "deck.md")[0].type, "text");
+});
+
+test("reads code and media inside a quote", () => {
+  const source = "> ```js\n> let x = 1;\n> ```\n> ![](a.mp3)";
+  const inner = parseBlocks(source, "deck.md")[0];
+  if (inner.type !== "quote") throw new Error("not a quote");
+  assert.deepEqual(parseBlocks(inner.source, "deck.md").map((block) => block.type), ["code", "sounds"]);
+  assert.deepEqual(soundSources(source, "deck.md"), ["amgi://collection/a.mp3"]);
+});
+
+test("leaves out quote markers on one line", () => {
+  assert.equal(oneLine("> Quoted\n>> twice"), "Quoted twice");
 });

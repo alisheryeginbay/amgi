@@ -18,3 +18,7 @@ Meaning: cheese
 
 Q: How do you say "good morning"?
 A: Buenos días
+
+Q: What does this proverb mean?
+> Poco a poco se va lejos.
+A: Little by little, one goes far.
