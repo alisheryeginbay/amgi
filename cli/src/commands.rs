@@ -5,7 +5,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::process::ExitCode;
 
-use amgi_core::settings;
+use amgi_core::{scheduler, settings};
 use amgi_core::search::Query;
 use amgi_core::{CardSummary, CardCollection, CardInfo, CardKind, Rating, Retention, StudyScope, format_interval};
 use serde_json::json;
@@ -897,7 +897,11 @@ pub fn diff(c: &CardCollection, out: Output, revs: &[String], staged: bool, chec
 }
 
 pub fn optimize(c: &CardCollection, out: Output, dry_run: bool) -> Result {
-    let in_use = if settings::Settings::load(&c.root())?.study.parameters.is_some() { "In use" } else { "Default" };
+    let in_use = match settings::Settings::load(&c.root())?.study.parameters() {
+        None => "Default",
+        Some(p) if p.len() == scheduler::FSRS6_PARAMETERS => "FSRS-6",
+        Some(_) => "In use",
+    };
     let waiting = !out.json && std::io::stderr().is_terminal();
     if waiting {
         eprint!("{}", dim("Fitting to your reviews…"));
@@ -916,14 +920,14 @@ pub fn optimize(c: &CardCollection, out: Output, dry_run: bool) -> Result {
     let better = fit.after.log_loss < fit.before.log_loss;
     let save = better && !dry_run;
     if save {
-        c.save_parameters(fit.parameters)?;
+        c.save_parameters(fit.parameters.clone())?;
     }
     if out.json {
         return print_json(&json!({
             "reviews": fit.reviews,
             "cards": fit.cards,
             // As written to `amgi.toml`, not widened from f32.
-            "parameters": fit.parameters.map(|p| p.to_string().parse::<f64>().unwrap_or(f64::NAN)),
+            "parameters": fit.parameters.iter().map(|p| p.to_string().parse::<f64>().unwrap_or(f64::NAN)).collect::<Vec<_>>(),
             "before": fit.before,
             "after": fit.after,
             "better": better,

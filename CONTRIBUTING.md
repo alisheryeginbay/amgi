@@ -2,7 +2,7 @@
 
 ## Layout
 
-- `core/`: Rust library containing the parser, FSRS-6 scheduler, SQLite store and the
+- `core/`: Rust library containing the parser, FSRS-7 scheduler, SQLite store and the
   `CardCollection` API, exported through [UniFFI](https://mozilla.github.io/uniffi-rs/)
 - `cli/`: the `amgi` command, built on the core
 - `app/`: SwiftUI macOS app (Swift package): the window, its header, menus and settings

@@ -26,7 +26,7 @@ pub use parser::CardKind;
 pub use scheduler::{Rating, ReviewState};
 pub use scripts::Scripts;
 use parser::ParsedCard;
-use scheduler::{Memory, Parameters, PastReview, PlannedCard, RatingHabits, Scheduler};
+use scheduler::{Elapsed, Memory, Parameters, PastReview, PlannedCard, RatingHabits, Scheduler};
 use search::Query;
 use store::{CardState, CardTime, LogEntry, LoggedReview, Store};
 
@@ -239,8 +239,9 @@ pub struct CardInfo {
     pub difficulty: Option<f64>,
     /// Probability of recalling it now; `None` for a new card.
     pub retrievability: Option<f64>,
-    /// The forgetting curve's decay, for drawing it with `recall_probability`.
-    pub decay: f64,
+    /// The memory model's parameters, for drawing the forgetting curve with
+    /// `recall_probabilities`.
+    pub parameters: Vec<f32>,
     /// Oldest first.
     pub reviews: Vec<CardReview>,
 }
@@ -253,8 +254,11 @@ pub struct CardReview {
     pub rating: Rating,
     /// Study days since the review before; 0 for the first.
     pub elapsed_days: f64,
+    /// Days until recall falls to 90%, from this review.
     pub stability: f64,
     pub difficulty: f64,
+    /// The memory state the review left, for `recall_probabilities`.
+    pub memory: Memory,
     /// Seconds until the card was due again.
     pub interval_secs: i64,
     pub was_new: bool,
@@ -800,9 +804,9 @@ impl CardCollection {
             .histories()?
             .into_iter()
             .filter(|(_, h)| h[0].first)
-            .map(|(_, h)| h.iter().map(|r| PastReview { rating: r.rating, elapsed_days: r.elapsed_days }).collect())
+            .map(|(_, h)| h.iter().map(|r| PastReview { rating: r.rating, elapsed: r.elapsed }).collect())
             .collect();
-        let current = *inner.scheduler.parameters();
+        let current = inner.scheduler.parameters().clone();
         drop(inner);
         Ok(scheduler::fit(&histories, &current)?)
     }
@@ -983,7 +987,7 @@ impl Inner {
         self.warnings.clear();
         self.scripts = Scripts::default();
         self.load_note_types(&sources.note_types);
-        let parameters = *self.scheduler.parameters();
+        let parameters = self.scheduler.parameters().clone();
         self.load_settings_file(sources.settings.as_deref());
         self.follow_parameters(parameters != *self.scheduler.parameters())?;
         self.warn_about_stray_decks(&sources.strays);
@@ -1136,7 +1140,7 @@ impl Inner {
         let (config, parameters) = match text.map(settings::Settings::parse).transpose() {
             Ok(config) => {
                 let config = config.unwrap_or_default();
-                let parameters = config.study.parameters().unwrap_or(fsrs::DEFAULT_PARAMETERS);
+                let parameters = config.study.parameters().unwrap_or_else(scheduler::default_parameters);
                 (config, parameters)
             }
             Err(message) => {
@@ -1145,7 +1149,7 @@ impl Inner {
                 // undone once it's fixed.
                 let parameters = text
                     .and_then(settings::parameters_despite_errors)
-                    .unwrap_or(*self.scheduler.parameters());
+                    .unwrap_or_else(|| self.scheduler.parameters().clone());
                 (settings::Settings::default(), parameters)
             }
         };
@@ -1184,7 +1188,8 @@ impl Inner {
     /// that. Answers to undo are let go then, as they'd put back the old states.
     fn follow_parameters(&mut self, changed: bool) -> Result<()> {
         let key = parameters_key(self.scheduler.parameters());
-        let found_with = self.store.setting(MEMORY_PARAMETERS_KEY)?.unwrap_or(parameters_key(&fsrs::DEFAULT_PARAMETERS));
+        // Before the key was kept, memories were worked out with FSRS-6's defaults.
+        let found_with = self.store.setting(MEMORY_PARAMETERS_KEY)?.unwrap_or(parameters_key(&fsrs::FSRS6_DEFAULT_PARAMETERS));
         if found_with != key {
             self.recalculate_memories()?;
             self.store.set_setting(MEMORY_PARAMETERS_KEY, key)?;
@@ -1201,7 +1206,7 @@ impl Inner {
     fn recalculate_memories(&mut self) -> Result<()> {
         let (mut rows, mut cards) = (Vec::new(), Vec::new());
         for (id, history) in self.store.histories()? {
-            let reviews: Vec<PastReview> = history.iter().map(|r| PastReview { rating: r.rating, elapsed_days: r.elapsed_days }).collect();
+            let reviews: Vec<PastReview> = history.iter().map(|r| PastReview { rating: r.rating, elapsed: r.elapsed }).collect();
             let memories = self.scheduler.memories(&reviews)?;
             rows.extend(history.iter().map(|r| r.id).zip(memories.iter().copied()));
             if let Some(&last) = memories.last() {
@@ -1545,14 +1550,14 @@ impl Inner {
         Ok(candidates.first().copied())
     }
 
-    /// Memory state and whole study days since the last review (0 on the same day).
-    fn elapsed(&self, state: Option<&CardState>, now: i64) -> (Option<Memory>, u32) {
+    /// Memory state and the time since the last review.
+    fn elapsed(&self, state: Option<&CardState>, now: i64) -> (Option<Memory>, Elapsed) {
         match state {
             Some(s) => {
                 let days = (self.day_start(now) - self.day_start(s.last_review)) / DAY_SECS;
-                (Some(s.memory), days.max(0) as u32)
+                (Some(s.memory), Elapsed { days: days.max(0) as u32, secs: now - s.last_review })
             }
-            None => (None, 0),
+            None => (None, Elapsed::default()),
         }
     }
 
@@ -1600,21 +1605,22 @@ impl Inner {
             last_review: state.map(|s| s.last_review),
             reps: state.map_or(0, |s| s.reps),
             lapses: state.map_or(0, |s| s.lapses),
-            stability: state.map(|s| s.memory.stability),
+            stability: state.map(|s| self.scheduler.days_to_90(s.memory)),
             difficulty: state.map(|s| s.memory.difficulty),
             retrievability: state.map(|s| {
                 let days = (now - s.last_review) as f64 / DAY_SECS as f64;
                 self.scheduler.retrievability(s.memory, days)
             }),
-            decay: self.scheduler.decay(),
+            parameters: self.scheduler.parameters().clone(),
             reviews: reviews
                 .into_iter()
                 .map(|r| CardReview {
                     reviewed_at: r.reviewed_at,
                     rating: r.rating,
                     elapsed_days: r.elapsed_days,
-                    stability: r.memory.stability,
+                    stability: self.scheduler.days_to_90(r.memory),
                     difficulty: r.memory.difficulty,
+                    memory: r.memory,
                     interval_secs: r.interval_secs,
                     was_new: r.was_new,
                     taken_ms: r.taken_ms,
@@ -1635,12 +1641,12 @@ impl Inner {
             None => ReviewState::New,
             Some(_) => ReviewState::after(
                 self.store.last_review_state(card_id)?.unwrap_or(ReviewState::Review),
-                elapsed,
+                elapsed.days,
             ),
         };
         let (state, review_id) = self
             .store
-            .record_review(card_id, now, rating, elapsed.into(), review_state, cap_taken(taken_ms), prev, outcome)?;
+            .record_review(card_id, now, rating, elapsed.days.into(), review_state, cap_taken(taken_ms), prev, outcome)?;
         self.states.insert(card_id.to_string(), state);
         self.answered.push(Answered { card_id: card_id.to_string(), review_id, prev, suspended: false });
         let lapsed = state.lapses > prev.map_or(0, |p| p.lapses);
@@ -2047,7 +2053,7 @@ impl Inner {
                         (Some(ReviewState::New | ReviewState::Learning), None) => ReviewState::New,
                         (Some(stage), _) => stage,
                         (None, None) => ReviewState::Review,
-                        (None, Some(_)) => ReviewState::after(last_review_state, elapsed),
+                        (None, Some(_)) => ReviewState::after(last_review_state, elapsed.days),
                     };
                     last_review_state = review_state;
                     let outcome = self.scheduler.schedule(memory, elapsed, rating)?;
@@ -2055,7 +2061,7 @@ impl Inner {
                     entries.push(LogEntry::Review(LoggedReview {
                         reviewed_at: time,
                         rating,
-                        elapsed_days: elapsed.into(),
+                        elapsed_days: elapsed.days.into(),
                         memory: outcome.memory,
                         interval_secs,
                         was_new: state.is_none(),
@@ -2116,8 +2122,8 @@ impl Inner {
 }
 
 /// Parameters as a number the `setting` table can keep, to tell them apart.
-fn parameters_key(parameters: &Parameters) -> f64 {
-    let bits = parameters.map(|p| p.to_bits().to_string()).join(",");
+fn parameters_key(parameters: &[f32]) -> f64 {
+    let bits = parameters.iter().map(|p| p.to_bits().to_string()).collect::<Vec<_>>().join(",");
     // 52 bits, exact as an f64.
     (parser::stable_hash(&[&bits]) >> 12) as f64
 }
@@ -2139,14 +2145,16 @@ fn time_left(time: CardTime, new: u32, due: u32, learning: u32) -> Option<u32> {
     Some((ms / 1000.0).round() as u32)
 }
 
-/// Short human-readable interval for answer buttons: `10m`, `3d`, `1.5mo`, `2.1y`.
-/// Probability of recalling a card with this stability (in days) `elapsed_days` after
-/// its last review, on the curve with `CardInfo::decay`, for drawing it.
+/// Probability of recalling a card with `memory` each of `elapsed_days` after the
+/// review that left it, on the curve of `CardInfo::parameters`, for drawing it; empty
+/// if the parameters can't be used.
 #[uniffi::export]
-pub fn recall_probability(stability: f64, elapsed_days: f64, decay: f64) -> f64 {
-    scheduler::retrievability(stability, elapsed_days, decay)
+pub fn recall_probabilities(parameters: Vec<f32>, memory: Memory, elapsed_days: Vec<f64>) -> Vec<f64> {
+    let Ok(scheduler) = Scheduler::new(parameters, 0.9) else { return Vec::new() };
+    elapsed_days.into_iter().map(|days| scheduler.retrievability(memory, days)).collect()
 }
 
+/// Short human-readable interval for answer buttons: `10m`, `3d`, `1.5mo`, `2.1y`.
 #[uniffi::export]
 pub fn format_interval(seconds: i64) -> String {
     let s = seconds.max(0) as f64;
@@ -2282,8 +2290,9 @@ mod tests {
         assert_eq!(again.id, card2.id);
         assert_eq!(again.stage, StudyStage::Learning);
 
-        // Two days later the first card is due; the failed one is still being learned.
-        let decks = inner.decks(T0 + 2 * DAY_SECS).unwrap();
+        // Once Good's interval is up the first card is due; the failed one is still
+        // being learned.
+        let decks = inner.decks(T0 + card.intervals[2]).unwrap();
         assert_eq!((decks[0].due, decks[0].learning, decks[0].new), (1, 1, 0));
         let today = inner.today(&StudyScope::All, T0).unwrap();
         assert_eq!((today.new_studied, today.new_available), (2, 2));
@@ -2313,7 +2322,7 @@ mod tests {
         // UTC, so today's study day starts at 4 am.
         let today = inner.day_start(T0);
         let state = |due, interval_secs| CardState {
-            memory: Memory { stability: 5.0, difficulty: 5.0 },
+            memory: Memory::new(5.0, 5.0),
             due,
             last_review: due - interval_secs,
             reps: 1,
@@ -2452,7 +2461,7 @@ mod tests {
         // A review due at the next day's start, only hours after it was studied, is
         // still a review: it doesn't jump ahead of one due days earlier.
         let state = |due, last_review, interval_secs| CardState {
-            memory: Memory { stability: 1.0, difficulty: 5.0 },
+            memory: Memory::new(1.0, 5.0),
             due,
             last_review,
             reps: 1,
@@ -2532,7 +2541,7 @@ mod tests {
         assert_eq!(info.reviews.iter().map(|r| r.rating).collect::<Vec<_>>(), [Rating::Good, Rating::Again]);
         assert!(info.reviews[0].was_new && info.reviews[1].elapsed_days == 3.0);
         assert_eq!(info.due, Some(T0 + 3 * DAY_SECS + scheduler::AGAIN_DELAY_SECS));
-        assert!((info.retrievability.unwrap() - 1.0).abs() < 1e-6);
+        assert!((info.retrievability.unwrap() - 1.0).abs() < 1e-4);
         let later = inner.card_info(&id, T0 + 10 * DAY_SECS).unwrap().unwrap();
         assert!(later.retrievability.unwrap() < 1.0);
 
@@ -2667,7 +2676,7 @@ mod tests {
         let ids: Vec<String> = inner.cards.iter().map(|c| c.parsed.id.clone()).collect();
         // Study on three consecutive days, ending yesterday.
         inner.answer(&ids[0], Rating::Good, None, T0 - 2 * DAY_SECS).unwrap();
-        inner.answer(&ids[1], Rating::Easy, None, T0 - DAY_SECS).unwrap();
+        inner.answer(&ids[1], Rating::Good, None, T0 - DAY_SECS).unwrap();
         inner.answer(&ids[0], Rating::Again, None, T0 - DAY_SECS + 60).unwrap();
 
         let d = inner.stats(&StudyScope::All, 5, T0).unwrap();
@@ -2676,7 +2685,7 @@ mod tests {
         assert_eq!(d.streak, 2);
         assert_eq!((d.new_cards, d.young_cards, d.mature_cards), (1, 2, 0));
         assert_eq!(d.forecast.len(), FORECAST_DAYS);
-        // The failed card is due today; the Easy one later.
+        // The failed card is due today; the other one later.
         assert_eq!(d.forecast[0], 1);
         assert_eq!(d.forecast.iter().sum::<u32>(), 2);
         // The Again came a day after the first review, which scheduled the card days ahead.
@@ -2741,7 +2750,7 @@ mod tests {
         let mut inner = c.lock();
         let id = inner.cards[0].parsed.id.clone();
         // Young until a review schedules the card 21 days or more ahead.
-        inner.answer(&id, Rating::Easy, None, T0 - 300 * DAY_SECS).unwrap();
+        inner.answer(&id, Rating::Good, None, T0 - 300 * DAY_SECS).unwrap();
         inner.answer(&id, Rating::Easy, None, T0 - 200 * DAY_SECS).unwrap();
         inner.answer(&id, Rating::Easy, None, T0 - 20 * DAY_SECS).unwrap();
         inner.answer(&id, Rating::Again, None, T0 - 3 * DAY_SECS).unwrap();
@@ -2853,11 +2862,26 @@ mod tests {
         inner.states = inner.store.states().unwrap();
         let (again, _) = memory(&inner);
         assert!((again.stability - before.stability).abs() < 1e-3 && (again.difficulty - before.difficulty).abs() < 1e-3, "{again:?} != {before:?}");
+        assert!((again.stability_fast - before.stability_fast).abs() < 1e-3, "{again:?} != {before:?}");
+
+        // A collection last worked out with FSRS-6's defaults, from before the key was
+        // kept, moves to FSRS-7's when it's loaded.
+        let fsrs6 = Scheduler::new(fsrs::FSRS6_DEFAULT_PARAMETERS.to_vec(), 0.9).unwrap();
+        let current = std::mem::replace(&mut inner.scheduler, fsrs6);
+        inner.recalculate_memories().unwrap();
+        inner.scheduler = current;
+        inner.store.remove_setting(MEMORY_PARAMETERS_KEY).unwrap();
+        inner.states = inner.store.states().unwrap();
+        assert_eq!(memory(&inner).0.stability_fast, memory(&inner).0.stability);
+        inner.follow_parameters(false).unwrap();
+        let (moved, logged) = memory(&inner);
+        assert!((moved.stability - before.stability).abs() < 1e-3, "{moved:?} != {before:?}");
+        assert_eq!(moved, logged);
         drop(inner);
 
-        let mut fitted = fsrs::DEFAULT_PARAMETERS;
+        let mut fitted = scheduler::default_parameters();
         fitted[2] *= 2.0;
-        c.save_parameters(fitted).unwrap();
+        c.save_parameters(fitted.clone()).unwrap();
         let inner = c.lock();
         let (after, logged) = memory(&inner);
         assert!(after.stability > before.stability + 0.5, "{after:?} vs {before:?}");
@@ -2872,9 +2896,9 @@ mod tests {
         assert!(c.warnings().iter().any(|w| w.message.contains("unknown field")));
         let kept = |c: &CardCollection| {
             let inner = c.lock();
-            (memory(&inner).0, *inner.scheduler.parameters())
+            (memory(&inner).0, inner.scheduler.parameters().clone())
         };
-        assert_eq!(kept(&c), (after, fitted));
+        assert_eq!(kept(&c), (after, fitted.clone()));
         write_settings(&dir, &c, &format!("{text}\n[review\n"));
         assert_eq!(kept(&c), (after, fitted));
 
@@ -2883,7 +2907,15 @@ mod tests {
         let (restored, _) = memory(&c.lock());
         assert!((restored.stability - before.stability).abs() < 1e-3);
         write_settings(&dir, &c, "[study]\nparameters = [1, 2]\n");
-        assert!(c.warnings().iter().any(|w| w.message.contains("21 numbers")));
+        assert!(c.warnings().iter().any(|w| w.message.contains("34 numbers (FSRS-7) or 21 (FSRS-6), not 2")));
+
+        // FSRS-6's parameters still work, with memories of one stability.
+        let fsrs6 = fsrs::FSRS6_DEFAULT_PARAMETERS.map(|p| p.to_string()).join(", ");
+        write_settings(&dir, &c, &format!("[study]\nparameters = [{fsrs6}]\n"));
+        assert!(c.warnings().is_empty(), "{:?}", c.warnings());
+        let (fsrs6, _) = memory(&c.lock());
+        assert_eq!(fsrs6.stability_fast, fsrs6.stability);
+        assert_ne!(fsrs6, restored);
         fs::remove_dir_all(dir).unwrap();
     }
 

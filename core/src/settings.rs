@@ -5,7 +5,7 @@
 //! [study]
 //! retention = 0.9           # how likely to remember a card when it comes due, 0.7–0.99
 //! day-starts-at = 4         # the hour a study day starts, 0–23
-//! parameters = [0.212, …]   # the memory model's 21, from `amgi optimize`
+//! parameters = [0.1104, …]  # the memory model's 34, from `amgi optimize`
 //!
 //! [new]
 //! per-day = 20              # new cards a day in all; 0 to only review
@@ -33,7 +33,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::lint;
-use crate::scheduler::{Parameters, Scheduler};
+use crate::scheduler::{FSRS6_PARAMETERS, FSRS7_PARAMETERS, Parameters, Scheduler, default_parameters};
 
 /// The settings file, at the collection root.
 pub const FILE: &str = "amgi.toml";
@@ -64,7 +64,7 @@ pub struct Study {
 impl Study {
     /// The parameters, once `check` has passed.
     pub fn parameters(&self) -> Option<Parameters> {
-        self.parameters.as_ref().and_then(|p| p.get_ref().as_slice().try_into().ok())
+        self.parameters.as_ref().map(|p| p.get_ref().clone())
     }
 }
 
@@ -126,8 +126,12 @@ impl Settings {
         }
         if let Some(p) = &self.study.parameters {
             let n = p.get_ref().len();
-            let parameters = self.study.parameters().ok_or(format!("study.parameters must be 21 numbers, not {n}"))?;
-            if Scheduler::new(parameters, 0.9).is_err() {
+            if n != FSRS7_PARAMETERS && n != FSRS6_PARAMETERS {
+                return Err(format!(
+                    "study.parameters must be {FSRS7_PARAMETERS} numbers (FSRS-7) or {FSRS6_PARAMETERS} (FSRS-6), not {n}"
+                ));
+            }
+            if Scheduler::new(p.get_ref().clone(), 0.9).is_err() {
                 return Err("study.parameters aren't ones the memory model can use; run `amgi optimize` to fit new ones".into());
             }
         }
@@ -166,16 +170,15 @@ pub(crate) fn parameters_despite_errors(text: &str) -> Option<Parameters> {
         parameters: Option<Vec<f32>>,
     }
     let Some(parameters) = toml::from_str::<File>(text).ok()?.study.parameters else {
-        return Some(fsrs::DEFAULT_PARAMETERS);
+        return Some(default_parameters());
     };
-    let parameters = parameters.as_slice().try_into().ok()?;
-    Scheduler::new(parameters, 0.9).ok().map(|_| parameters)
+    Scheduler::new(parameters.clone(), 0.9).ok().map(|_| parameters)
 }
 
 /// `text` with `study.parameters` set to `parameters`: in place of those it has, or
 /// added. `text` must be valid settings.
 pub(crate) fn set_parameters(text: &str, parameters: &Parameters) -> String {
-    let value = format!("[{}]", parameters.map(|p| p.to_string()).join(", "));
+    let value = format!("[{}]", parameters.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", "));
     match Settings::parse(text).ok().and_then(|s| s.study.parameters) {
         Some(old) => format!("{}{value}{}", &text[..old.span().start], &text[old.span().end..]),
         None => set(text, "study", "parameters", &value),
@@ -243,27 +246,29 @@ mod tests {
         assert!(err("[study]\nday-starts-at = 24\n").contains("from 0 to 23"));
         assert!(err("[leech]\nlapses = 0\n").contains("at least 1"));
         assert!(err("[review]\nper-dya = 1\n").contains("unknown field"));
-        assert!(err("[study]\nparameters = [1, 2]\n").contains("21 numbers, not 2"));
+        assert!(err("[study]\nparameters = [1, 2]\n").contains("34 numbers (FSRS-7) or 21 (FSRS-6), not 2"));
     }
 
     #[test]
     fn parameters_in_a_file_with_errors() {
-        let p = fsrs::DEFAULT_PARAMETERS;
-        let mut q = p;
+        let p = default_parameters();
+        let mut q = p.clone();
         q[0] = 0.5;
         let given = set_parameters("", &q);
         assert_eq!(parameters_despite_errors(&format!("{given}retention = 5\n")), Some(q));
         assert_eq!(parameters_despite_errors("[leech]\nlapses = 0\n"), Some(p));
         assert_eq!(parameters_despite_errors("[study]\nparameters = [1, 2]\n"), None);
+        let fsrs6 = set_parameters("", &fsrs::FSRS6_DEFAULT_PARAMETERS.to_vec());
+        assert_eq!(parameters_despite_errors(&fsrs6), Some(fsrs::FSRS6_DEFAULT_PARAMETERS.to_vec()));
         assert_eq!(parameters_despite_errors(&format!("{given}[study\n")), None);
     }
 
     #[test]
     fn parameters_are_replaced_in_place() {
-        let p = fsrs::DEFAULT_PARAMETERS;
+        let p = default_parameters();
         let text = set_parameters("# mine\n[study]\nretention = 0.85\n", &p);
-        assert_eq!(Settings::parse(&text).unwrap().study.parameters(), Some(p));
-        assert!(text.starts_with("# mine\n[study]\nretention = 0.85\nparameters = [0.212, 1.2931, "), "{text}");
+        assert_eq!(Settings::parse(&text).unwrap().study.parameters(), Some(p.clone()));
+        assert!(text.starts_with("# mine\n[study]\nretention = 0.85\nparameters = [0.1104, 2.2395, "), "{text}");
         let mut q = p;
         q[0] = 0.5;
         let spread = text.replace(", ", ",\n  ") + "\n[new]\nper-day = 5\n";

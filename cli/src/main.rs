@@ -145,9 +145,10 @@ enum Command {
 }
 
 const OPTIMIZE: &str = "\
-The parameters go in `amgi.toml` as `study.parameters`. Fitting them again every month
-or so, as reviews add up, keeps them current; delete them to go back to the defaults,
-which come from many people's reviews. A card's memory follows whichever are in the file.";
+The model is FSRS-7, and the parameters go in `amgi.toml` as `study.parameters`. Fitting
+them again every month or so, as reviews add up, keeps them current; delete them to go
+back to the defaults, which come from many people's reviews. A card's memory follows
+whichever are in the file. FSRS-6's 21 parameters keep working until FSRS-7's replace them.";
 
 /// `amgi search --help`, after the options.
 const SETTINGS: &str = "\
@@ -157,7 +158,7 @@ value shown, except the new-card rules and review limit, which there are none of
   [study]
   retention = 0.9            # how likely to remember a card when it comes due, 0.7-0.99
   day-starts-at = 4          # the hour a study day starts; before it counts as the day before
-  parameters = [0.212, ...]  # the memory model's 21, fitted to your reviews by `amgi optimize`
+  parameters = [0.1104, ...] # the memory model's 34, fitted to your reviews by `amgi optimize`
 
   [new]
   per-day = 20               # new cards a day in all; 0 to only review
